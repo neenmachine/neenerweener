@@ -14,9 +14,9 @@ Everything else: the site, backend, frontend, styling, deployment, demos, toolin
 
 ## Layout
 
-- `posts/` - Henry's posts as Markdown. File name: `YYYY-MM-DD-slug.md`. The first `# ` line is the title. Rendering: CommonMark plus tables and strikethrough, raw HTML allowed, code blocks highlighted by Pygments on the server, ` ```mermaid ` blocks drawn in the browser.
+- `posts/` - Henry's posts as Markdown in `<slug>.md` files. Each file starts with YAML frontmatter, for example `title: ...`, `date: 2026-03-28`, and optional `excerpt: ...`. Rendering: CommonMark plus tables and strikethrough, raw HTML allowed, code blocks highlighted by Pygments on the server, ` ```mermaid ` blocks drawn in the browser.
 - `posts/images/` - post images, served at `/images/<file>`. Write them as `![alt](/images/<file>)`.
-- `drafts/` - local-only draft posts, shown when `SHOW_DRAFTS=1`.
+- `drafts/` - local-only draft posts in `<slug>.md` files; YAML frontmatter is optional. Drafts are shown when `SHOW_DRAFTS=1`.
 - `backend/` - FastAPI app (`uv`). Serves posts at `/api/posts` and `/api/posts/{slug}`.
 - `frontend/` - React + Vite (`pnpm`). The dev server proxies `/api` to the backend on port 8000.
 

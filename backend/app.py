@@ -1,7 +1,11 @@
+import logging
 import os
 import re
+from datetime import date, datetime
 from html import escape
 from pathlib import Path
+
+import yaml
 
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
@@ -13,8 +17,8 @@ from pygments.util import ClassNotFound
 
 POSTS_DIR = Path(os.environ.get("POSTS_DIR", Path(__file__).parent.parent / "posts"))
 DRAFTS_DIR = Path(os.environ.get("DRAFTS_DIR", Path(__file__).parent.parent / "drafts"))
-FILENAME = re.compile(r"^(\d{4}-\d{2}-\d{2})-([a-z0-9-]+)\.md$")
-DRAFT_FILENAME = re.compile(r"^(?:(\d{4}-\d{2}-\d{2})-)?([a-z0-9-]+)\.md$")
+FILENAME = re.compile(r"^([a-z0-9-]+)\.md$")
+logger = logging.getLogger(__name__)
 
 
 def highlight(code: str, lang: str, _attrs) -> str:
@@ -34,17 +38,57 @@ app = FastAPI()
 
 
 def load(path: Path, draft: bool = False) -> dict | None:
-    m = (DRAFT_FILENAME if draft else FILENAME).match(path.name)
+    m = FILENAME.match(path.name)
     if not m:
         return None
+    slug = m[1]
     text = path.read_text()
-    first, _, rest = text.partition("\n")
-    slug = m[2]
-    if first.startswith("# "):
-        title, body = first[2:].strip(), rest
-    else:
-        title, body = slug, text
-    return {"slug": slug, "date": m[1], "title": title, "body": body, "draft": draft}
+    metadata: dict = {}
+    body = text
+    if text.startswith("---\n"):
+        raw, separator, body = text[4:].partition("\n---\n")
+        if not separator:
+            if not draft:
+                logger.warning("invalid frontmatter in %s", path.name)
+                return None
+            body = text
+        else:
+            try:
+                metadata = yaml.safe_load(raw) or {}
+            except yaml.YAMLError:
+                logger.warning("invalid frontmatter in %s", path.name)
+                return None
+            if not isinstance(metadata, dict):
+                logger.warning("invalid frontmatter in %s", path.name)
+                return None
+    elif not draft:
+        logger.warning("invalid frontmatter in %s", path.name)
+        return None
+
+    title = metadata.get("title", slug)
+    if not isinstance(title, str) or not title.strip():
+        logger.warning("invalid post metadata in %s", path.name)
+        return None
+    raw_date = metadata.get("date")
+    parsed_date = None
+    if raw_date is not None:
+        if isinstance(raw_date, date):
+            parsed_date = raw_date.isoformat()
+        elif isinstance(raw_date, str):
+            try:
+                parsed_date = datetime.strptime(raw_date, "%Y-%m-%d").date().isoformat()
+            except ValueError:
+                try:
+                    parsed_date = datetime.strptime(raw_date, "%m/%d/%Y").date().isoformat()
+                except ValueError:
+                    parsed_date = None
+    if not draft and parsed_date is None:
+        logger.warning("invalid post metadata in %s", path.name)
+        return None
+    excerpt = metadata.get("excerpt")
+    if excerpt is not None and not isinstance(excerpt, str):
+        excerpt = None
+    return {"slug": slug, "date": parsed_date, "title": title.strip(), "excerpt": excerpt, "body": body, "draft": draft}
 
 
 def all_posts() -> list[dict]:
@@ -61,7 +105,7 @@ def all_posts() -> list[dict]:
 
 @app.get("/api/posts")
 def list_posts():
-    return [{k: p[k] for k in ("slug", "date", "title", "draft")} for p in all_posts()]
+    return [{k: p[k] for k in ("slug", "date", "title", "excerpt", "draft")} for p in all_posts()]
 
 
 @app.get("/api/posts/{slug}")

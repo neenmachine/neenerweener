@@ -57,6 +57,14 @@ time,
   padding: 0.25rem 0;
 }
 
+.post-info {
+  flex: 1;
+}
+
+.excerpt {
+  font-size: 0.9em;
+}
+
 h1 {
   font-size: 1.75rem;
   line-height: 1.25;

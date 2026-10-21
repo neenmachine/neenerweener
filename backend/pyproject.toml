@@ -6,6 +6,7 @@ dependencies = [
     "fastapi[standard]>=0.158.2",
     "markdown-it-py>=4.2.0",
     "pygments>=2.21.0",
+    "pyyaml>=6.0.3",
 ]
 
 [dependency-groups]

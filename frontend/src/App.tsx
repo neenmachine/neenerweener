@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-type Summary = { slug: string; date: string | null; title: string; draft: boolean };
+type Summary = { slug: string; date: string | null; title: string; excerpt: string | null; draft: boolean };
 type Post = Summary & { html: string };
 
 // shortcut: plain links and pathname matching, no router. Add react-router when there are more pages.
@@ -38,7 +38,10 @@ function PostList() {
       {data.map((p) => (
         <li key={p.slug}>
           {p.date && <time>{p.date}</time>}
-          <a href={`/posts/${p.slug}`}>{p.title}</a>
+          <div className="post-info">
+            <a href={`/posts/${p.slug}`}>{p.title}</a>
+            {p.excerpt && <div className="excerpt muted">{p.excerpt}</div>}
+          </div>
           {p.draft && <span className="draft muted">draft</span>}
         </li>
       ))}

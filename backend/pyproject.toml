@@ -1,0 +1,14 @@
+[project]
+name = "ween-backend"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi[standard]>=0.158.2",
+    "markdown-it-py>=4.2.0",
+    "pygments>=2.21.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]

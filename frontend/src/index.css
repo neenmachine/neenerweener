@@ -1,0 +1,140 @@
+@import "@fontsource-variable/jetbrains-mono/wght.css";
+@import "@fontsource-variable/jetbrains-mono/wght-italic.css";
+
+:root {
+  color-scheme: light;
+  --fg: #1a1a1a;
+  --muted: #777;
+  --bg: #fdfdfc;
+  font: 15px/1.7 "JetBrains Mono Variable", ui-monospace, Menlo, monospace;
+  color: var(--fg);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  margin: 0;
+}
+
+main {
+  max-width: 38rem;
+  margin: 0 auto;
+  padding: 3rem 1.25rem 6rem;
+}
+
+header {
+  margin-bottom: 3rem;
+}
+
+header a {
+  font-weight: 600;
+  text-decoration: none;
+}
+
+a {
+  color: inherit;
+  text-underline-offset: 0.2em;
+}
+
+time,
+.muted {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.posts {
+  list-style: none;
+  padding: 0;
+}
+
+.posts li {
+  display: flex;
+  gap: 1.5rem;
+  padding: 0.25rem 0;
+}
+
+h1 {
+  font-size: 1.75rem;
+  line-height: 1.25;
+  margin: 0 0 0.25rem;
+  text-wrap: balance;
+}
+
+article time {
+  display: block;
+  margin-bottom: 2rem;
+}
+
+article img {
+  max-width: 100%;
+}
+
+pre {
+  overflow-x: auto;
+  padding: 1rem;
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+  border-radius: 6px;
+}
+
+pre,
+code {
+  font-family: inherit;
+}
+
+code {
+  font-size: 0.9em;
+}
+
+/* Syntax colors for Pygments token classes (c=comment, k=keyword, s=string, m=number). */
+pre code [class^="c"] {
+  color: #8a8a86;
+  font-style: italic;
+}
+pre code [class^="k"] {
+  color: #8a3ffc;
+}
+pre code [class^="s"] {
+  color: #1f7a4d;
+}
+pre code [class^="m"] {
+  color: #b4540a;
+}
+pre code :is(.nf, .fm, .nc) {
+  color: #1d5fbf;
+}
+
+/* Hide the raw diagram source until Mermaid replaces it. */
+pre.mermaid {
+  background: none;
+  text-align: center;
+}
+pre.mermaid:not([data-processed]) {
+  visibility: hidden;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  display: block;
+  overflow-x: auto;
+  font-size: 0.9em;
+}
+th,
+td {
+  text-align: left;
+  padding: 0.4rem 0.75rem 0.4rem 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--fg) 12%, transparent);
+}
+
+blockquote {
+  margin: 1.5rem 0;
+  padding-left: 1rem;
+  border-left: 2px solid color-mix(in srgb, var(--fg) 20%, transparent);
+  color: var(--muted);
+}
+
+hr {
+  border: none;
+  border-top: 1px solid color-mix(in srgb, var(--fg) 12%, transparent);
+  margin: 2.5rem 0;
+}

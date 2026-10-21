@@ -1,0 +1,76 @@
+import { useEffect, useRef, useState } from "react";
+
+type Summary = { slug: string; date: string; title: string };
+type Post = Summary & { html: string };
+
+// shortcut: plain links and pathname matching, no router. Add react-router when there are more pages.
+const slug = location.pathname.match(/^\/posts\/([a-z0-9-]+)\/?$/)?.[1];
+
+export default function App() {
+  return (
+    <main>
+      <header>
+        <a href="/">neenerweener</a>
+      </header>
+      {slug ? <PostPage slug={slug} /> : <PostList />}
+    </main>
+  );
+}
+
+function useApi<T>(url: string) {
+  const [data, setData] = useState<T>();
+  const [error, setError] = useState(false);
+  useEffect(() => {
+    fetch(url)
+      .then((r) => (r.ok ? r.json() : Promise.reject()))
+      .then(setData, () => setError(true));
+  }, [url]);
+  return { data, error };
+}
+
+function PostList() {
+  const { data, error } = useApi<Summary[]>("/api/posts");
+  if (error) return <p className="muted">could not load posts</p>;
+  if (!data) return null;
+  if (!data.length) return <p className="muted">no posts yet</p>;
+  return (
+    <ul className="posts">
+      {data.map((p) => (
+        <li key={p.slug}>
+          <time>{p.date}</time>
+          <a href={`/posts/${p.slug}`}>{p.title}</a>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function PostPage({ slug }: { slug: string }) {
+  const { data, error } = useApi<Post>(`/api/posts/${slug}`);
+  const body = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!data) return;
+    document.title = data.title;
+    const diagrams = body.current?.querySelectorAll<HTMLElement>("pre.mermaid");
+    if (!diagrams?.length) return;
+    // Mermaid is large, so only posts with diagrams load it.
+    import("mermaid").then(({ default: mermaid }) => {
+      mermaid.initialize({
+        startOnLoad: false,
+        theme: "neutral",
+        fontFamily: "JetBrains Mono Variable, monospace",
+      });
+      mermaid.run({ nodes: diagrams });
+    });
+  }, [data]);
+  if (error) return <p className="muted">post not found</p>;
+  if (!data) return null;
+  return (
+    <article>
+      <h1>{data.title}</h1>
+      <time>{data.date}</time>
+      {/* Posts are Henry's own files, rendered server side. */}
+      <div ref={body} dangerouslySetInnerHTML={{ __html: data.html }} />
+    </article>
+  );
+}

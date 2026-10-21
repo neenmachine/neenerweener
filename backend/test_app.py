@@ -21,6 +21,18 @@ def test_posts(tmp_path, monkeypatch):
     assert c.get("/api/posts/missing").status_code == 404
 
 
+def test_math():
+    html = app.md.render(
+        "inline $x^2$ and\n\n$$a<b$$\n\n"
+        "costs $5 and $10\n\n`$x$`\n\n```text\n$x$\n```\n"
+    )
+    assert '<span class="math inline">x^2</span>' in html
+    assert '<div class="math block">\na&lt;b\n</div>' in html
+    assert "costs $5 and $10" in html
+    assert '<code>$x$</code>' in html
+    assert '<pre><code class="language-text">$x$\n</code></pre>' in html
+
+
 @pytest.mark.parametrize("show_drafts", [None, "0", "true"])
 def test_drafts_hidden_by_default(tmp_path, monkeypatch, show_drafts):
     posts = tmp_path / "posts"

@@ -5,6 +5,7 @@ requires-python = ">=3.13"
 dependencies = [
     "fastapi[standard]>=0.158.2",
     "markdown-it-py>=4.2.0",
+    "mdit-py-plugins>=0.5.0",
     "pygments>=2.21.0",
 ]
 

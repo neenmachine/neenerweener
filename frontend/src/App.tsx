@@ -52,16 +52,31 @@ function PostPage({ slug }: { slug: string }) {
     if (!data) return;
     document.title = data.title;
     const diagrams = body.current?.querySelectorAll<HTMLElement>("pre.mermaid");
-    if (!diagrams?.length) return;
-    // Mermaid is large, so only posts with diagrams load it.
-    import("mermaid").then(({ default: mermaid }) => {
-      mermaid.initialize({
-        startOnLoad: false,
-        theme: "neutral",
-        fontFamily: "JetBrains Mono Variable, monospace",
+    if (diagrams?.length) {
+      // Mermaid is large, so only posts with diagrams load it.
+      import("mermaid").then(({ default: mermaid }) => {
+        mermaid.initialize({
+          startOnLoad: false,
+          theme: "neutral",
+          fontFamily: "JetBrains Mono Variable, monospace",
+        });
+        mermaid.run({ nodes: diagrams });
       });
-      mermaid.run({ nodes: diagrams });
-    });
+    }
+    const math = body.current?.querySelectorAll<HTMLElement>(".math");
+    if (math?.length) {
+      // KaTeX is large, so only posts with math load it and its CSS.
+      Promise.all([import("katex"), import("katex/dist/katex.min.css")]).then(
+        ([{ default: katex }]) => {
+          math.forEach((el) =>
+            katex.render(el.textContent ?? "", el, {
+              displayMode: el.classList.contains("block"),
+              throwOnError: false,
+            }),
+          );
+        },
+      );
+    }
   }, [data]);
   if (error) return <p className="muted">post not found</p>;
   if (!data) return null;

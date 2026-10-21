@@ -6,6 +6,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from markdown_it import MarkdownIt
+from mdit_py_plugins.dollarmath import dollarmath_plugin
 from pygments import highlight as pygments_highlight
 from pygments.formatters import HtmlFormatter
 from pygments.lexers import get_lexer_by_name
@@ -27,6 +28,7 @@ def highlight(code: str, lang: str, _attrs) -> str:
 
 # CommonMark + GitHub tables and strikethrough. Raw HTML is on: posts are Henry's own trusted files.
 md = MarkdownIt("commonmark", {"highlight": highlight}).enable(["table", "strikethrough"])
+dollarmath_plugin(md, allow_digits=False)
 
 app = FastAPI()
 

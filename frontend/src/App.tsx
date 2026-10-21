@@ -9,10 +9,21 @@ const slug = location.pathname.match(/^\/posts\/([a-z0-9-]+)\/?$/)?.[1];
 export default function App() {
   return (
     <main>
-      <header>
-        <a href="/">neenerweener</a>
-      </header>
-      {slug ? <PostPage slug={slug} /> : <PostList />}
+      {slug ? (
+        <>
+          <a className="back" href="/">
+            ← back
+          </a>
+          <PostPage slug={slug} />
+        </>
+      ) : (
+        <>
+          <header>
+            <a href="/">neenerweener</a>
+          </header>
+          <PostList />
+        </>
+      )}
     </main>
   );
 }

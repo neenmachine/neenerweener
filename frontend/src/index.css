@@ -31,6 +31,17 @@ header a {
   text-decoration: none;
 }
 
+.back {
+  display: inline-block;
+  margin-bottom: 2rem;
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.back:hover {
+  color: var(--fg);
+}
+
 a {
   color: inherit;
   text-underline-offset: 0.2em;

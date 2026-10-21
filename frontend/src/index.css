@@ -31,11 +31,26 @@ header a {
   text-decoration: none;
 }
 
+/* The back arrow hangs in the left margin so the title stays aligned with the text. */
+.has-back {
+  position: relative;
+}
+
 .back {
-  display: inline-block;
-  margin-bottom: 2rem;
+  position: absolute;
+  right: 100%;
+  margin-right: 0.6em;
   color: var(--muted);
+  font-weight: normal;
   text-decoration: none;
+}
+
+/* No margin to hang into on narrow screens: put the arrow inline. */
+@media (max-width: 760px) {
+  .back {
+    position: static;
+    margin-right: 0.5em;
+  }
 }
 
 .back:hover {

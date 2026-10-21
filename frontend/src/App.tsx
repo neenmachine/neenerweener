@@ -10,12 +10,7 @@ export default function App() {
   return (
     <main>
       {slug ? (
-        <>
-          <a className="back" href="/">
-            ← back
-          </a>
-          <PostPage slug={slug} />
-        </>
+        <PostPage slug={slug} />
       ) : (
         <>
           <header>
@@ -93,11 +88,24 @@ function PostPage({ slug }: { slug: string }) {
       );
     }
   }, [data]);
-  if (error) return <p className="muted">post not found</p>;
+  const back = (
+    <a className="back" href="/" aria-label="back">
+      ←
+    </a>
+  );
+  if (error)
+    return (
+      <p className="muted has-back">
+        {back}post not found
+      </p>
+    );
   if (!data) return null;
   return (
     <article>
-      <h1>{data.title} {data.draft && <span className="draft muted">draft</span>}</h1>
+      <h1 className="has-back">
+        {back}
+        {data.title} {data.draft && <span className="draft muted">draft</span>}
+      </h1>
       {data.date && <time>{data.date}</time>}
       {/* Posts are Henry's own files, rendered server side. */}
       <div ref={body} dangerouslySetInnerHTML={{ __html: data.html }} />

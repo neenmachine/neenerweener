@@ -1,3 +1,4 @@
+import pytest
 from fastapi.testclient import TestClient
 
 import app
@@ -20,12 +21,19 @@ def test_posts(tmp_path, monkeypatch):
     assert c.get("/api/posts/missing").status_code == 404
 
 
-def test_drafts_hidden_by_default(tmp_path, monkeypatch):
+@pytest.mark.parametrize("show_drafts", [None, "0", "true"])
+def test_drafts_hidden_by_default(tmp_path, monkeypatch, show_drafts):
+    posts = tmp_path / "posts"
     drafts = tmp_path / "drafts"
+    posts.mkdir()
     drafts.mkdir()
     (drafts / "idea.md").write_text("# Idea\nnotes")
+    monkeypatch.setattr(app, "POSTS_DIR", posts)
     monkeypatch.setattr(app, "DRAFTS_DIR", drafts)
-    monkeypatch.delenv("SHOW_DRAFTS", raising=False)
+    if show_drafts is None:
+        monkeypatch.delenv("SHOW_DRAFTS", raising=False)
+    else:
+        monkeypatch.setenv("SHOW_DRAFTS", show_drafts)
 
     c = TestClient(app.app)
     assert c.get("/api/posts").json() == []

@@ -42,6 +42,10 @@ time,
   font-variant-numeric: tabular-nums;
 }
 
+.draft {
+  font-size: 0.8em;
+}
+
 .posts {
   list-style: none;
   padding: 0;

@@ -72,7 +72,7 @@ def load(path: Path, draft: bool = False) -> dict | None:
     raw_date = metadata.get("date")
     parsed_date = None
     if raw_date is not None:
-        if isinstance(raw_date, date):
+        if isinstance(raw_date, date) and not isinstance(raw_date, datetime):
             parsed_date = raw_date.isoformat()
         elif isinstance(raw_date, str):
             try:

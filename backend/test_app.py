@@ -1,3 +1,4 @@
+import pytest
 from fastapi.testclient import TestClient
 
 import app
@@ -11,13 +12,58 @@ def test_posts(tmp_path, monkeypatch):
     c = TestClient(app.app)
 
     assert c.get("/api/posts").json() == [
-        {"slug": "new", "date": "2024-02-01", "title": "new"},
-        {"slug": "old", "date": "2024-01-01", "title": "Old"},
+        {"slug": "new", "date": "2024-02-01", "title": "new", "draft": False},
+        {"slug": "old", "date": "2024-01-01", "title": "Old", "draft": False},
     ]
     assert c.get("/api/posts/old").json() == {
-        "slug": "old", "date": "2024-01-01", "title": "Old", "html": "<p>first</p>\n"
+        "slug": "old", "date": "2024-01-01", "title": "Old", "draft": False, "html": "<p>first</p>\n"
     }
     assert c.get("/api/posts/missing").status_code == 404
+
+
+@pytest.mark.parametrize("show_drafts", [None, "0", "true"])
+def test_drafts_hidden_by_default(tmp_path, monkeypatch, show_drafts):
+    posts = tmp_path / "posts"
+    drafts = tmp_path / "drafts"
+    posts.mkdir()
+    drafts.mkdir()
+    (drafts / "idea.md").write_text("# Idea\nnotes")
+    monkeypatch.setattr(app, "POSTS_DIR", posts)
+    monkeypatch.setattr(app, "DRAFTS_DIR", drafts)
+    if show_drafts is None:
+        monkeypatch.delenv("SHOW_DRAFTS", raising=False)
+    else:
+        monkeypatch.setenv("SHOW_DRAFTS", show_drafts)
+
+    c = TestClient(app.app)
+    assert c.get("/api/posts").json() == []
+    assert c.get("/api/posts/idea").status_code == 404
+
+
+def test_drafts_shown_with_flag(tmp_path, monkeypatch):
+    posts = tmp_path / "posts"
+    drafts = tmp_path / "drafts"
+    posts.mkdir()
+    drafts.mkdir()
+    (posts / "2024-01-01-published.md").write_text("# Published\npost")
+    (posts / "2024-01-02-same.md").write_text("# Published same\npost")
+    (drafts / "idea.md").write_text("# Idea\ndraft")
+    (drafts / "2024-02-01-planned.md").write_text("# Planned\ndraft")
+    (drafts / "2024-03-01-same.md").write_text("# Draft same\ndraft")
+    monkeypatch.setattr(app, "POSTS_DIR", posts)
+    monkeypatch.setattr(app, "DRAFTS_DIR", drafts)
+    monkeypatch.setenv("SHOW_DRAFTS", "1")
+
+    c = TestClient(app.app)
+    assert c.get("/api/posts").json() == [
+        {"slug": "idea", "date": None, "title": "Idea", "draft": True},
+        {"slug": "planned", "date": "2024-02-01", "title": "Planned", "draft": True},
+        {"slug": "same", "date": "2024-01-02", "title": "Published same", "draft": False},
+        {"slug": "published", "date": "2024-01-01", "title": "Published", "draft": False},
+    ]
+    assert c.get("/api/posts/idea").json() == {
+        "slug": "idea", "date": None, "title": "Idea", "draft": True, "html": "<p>draft</p>\n"
+    }
 
 
 def test_render():

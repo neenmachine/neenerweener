@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-type Summary = { slug: string; date: string; title: string };
+type Summary = { slug: string; date: string | null; title: string; draft: boolean };
 type Post = Summary & { html: string };
 
 // shortcut: plain links and pathname matching, no router. Add react-router when there are more pages.
@@ -37,8 +37,9 @@ function PostList() {
     <ul className="posts">
       {data.map((p) => (
         <li key={p.slug}>
-          <time>{p.date}</time>
+          {p.date && <time>{p.date}</time>}
           <a href={`/posts/${p.slug}`}>{p.title}</a>
+          {p.draft && <span className="draft muted">draft</span>}
         </li>
       ))}
     </ul>
@@ -67,8 +68,8 @@ function PostPage({ slug }: { slug: string }) {
   if (!data) return null;
   return (
     <article>
-      <h1>{data.title}</h1>
-      <time>{data.date}</time>
+      <h1>{data.title} {data.draft && <span className="draft muted">draft</span>}</h1>
+      {data.date && <time>{data.date}</time>}
       {/* Posts are Henry's own files, rendered server side. */}
       <div ref={body} dangerouslySetInnerHTML={{ __html: data.html }} />
     </article>

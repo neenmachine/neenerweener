@@ -10,6 +10,7 @@ import yaml
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from markdown_it import MarkdownIt
+from mdit_py_plugins.dollarmath import dollarmath_plugin
 from pygments import highlight as pygments_highlight
 from pygments.formatters import HtmlFormatter
 from pygments.lexers import get_lexer_by_name
@@ -33,8 +34,36 @@ def highlight(code: str, lang: str, _attrs) -> str:
 
 # CommonMark + GitHub tables and strikethrough. Raw HTML is on: posts are Henry's own trusted files.
 md = MarkdownIt("commonmark", {"highlight": highlight}).enable(["table", "strikethrough"])
+dollarmath_plugin(md, allow_digits=False)
 
 app = FastAPI()
+
+
+def split_frontmatter(text: str) -> tuple[dict | None, str]:
+    match = re.match(r"^---\r?\n(.*?)(?:\r?\n)---(?:\r?\n|$)", text, re.S)
+    if not match:
+        if text.startswith(("---\n", "---\r\n")):
+            raise ValueError("missing frontmatter delimiter")
+        return None, text
+    try:
+        metadata = yaml.safe_load(match[1]) or {}
+    except Exception as exc:
+        raise ValueError("invalid frontmatter") from exc
+    if not isinstance(metadata, dict):
+        raise ValueError("invalid frontmatter")
+    return metadata, text[match.end():]
+
+
+def parse_date(value) -> str | None:
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, str):
+        for format in ("%Y-%m-%d", "%m/%d/%Y"):
+            try:
+                return datetime.strptime(value, format).date().isoformat()
+            except ValueError:
+                pass
+    return None
 
 
 def load(path: Path, draft: bool = False) -> dict | None:
@@ -42,53 +71,42 @@ def load(path: Path, draft: bool = False) -> dict | None:
     if not m:
         return None
     slug = m[1]
-    text = path.read_text()
-    metadata: dict = {}
-    body = text
-    if text.startswith("---\n"):
-        raw, separator, body = text[4:].partition("\n---\n")
-        if not separator:
-            if not draft:
-                logger.warning("invalid frontmatter in %s", path.name)
-                return None
-            body = text
-        else:
-            try:
-                metadata = yaml.safe_load(raw) or {}
-            except yaml.YAMLError:
-                logger.warning("invalid frontmatter in %s", path.name)
-                return None
-            if not isinstance(metadata, dict):
-                logger.warning("invalid frontmatter in %s", path.name)
-                return None
-    elif not draft:
+    try:
+        metadata, body = split_frontmatter(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
         logger.warning("invalid frontmatter in %s", path.name)
         return None
+    if metadata is None:
+        if not draft:
+            logger.warning("invalid frontmatter in %s", path.name)
+            return None
+        metadata = {}
 
-    title = metadata.get("title", slug)
-    if not isinstance(title, str) or not title.strip():
+    if "title" in metadata:
+        title = metadata["title"]
+        if title is None or isinstance(title, (list, dict)):
+            logger.warning("invalid post metadata in %s", path.name)
+            return None
+        title = str(title).strip()
+    else:
+        title = slug if draft else ""
+    if not title:
         logger.warning("invalid post metadata in %s", path.name)
         return None
-    raw_date = metadata.get("date")
-    parsed_date = None
-    if raw_date is not None:
-        if isinstance(raw_date, date) and not isinstance(raw_date, datetime):
-            parsed_date = raw_date.isoformat()
-        elif isinstance(raw_date, str):
-            try:
-                parsed_date = datetime.strptime(raw_date, "%Y-%m-%d").date().isoformat()
-            except ValueError:
-                try:
-                    parsed_date = datetime.strptime(raw_date, "%m/%d/%Y").date().isoformat()
-                except ValueError:
-                    parsed_date = None
+
+    parsed_date = parse_date(metadata.get("date"))
     if not draft and parsed_date is None:
         logger.warning("invalid post metadata in %s", path.name)
         return None
-    excerpt = metadata.get("excerpt")
-    if excerpt is not None and not isinstance(excerpt, str):
+    if "excerpt" in metadata:
+        excerpt = metadata["excerpt"]
+        if excerpt is None or isinstance(excerpt, (list, dict)):
+            logger.warning("invalid post metadata in %s", path.name)
+            return None
+        excerpt = str(excerpt)
+    else:
         excerpt = None
-    return {"slug": slug, "date": parsed_date, "title": title.strip(), "excerpt": excerpt, "body": body, "draft": draft}
+    return {"slug": slug, "date": parsed_date, "title": title, "excerpt": excerpt, "body": body, "draft": draft}
 
 
 def all_posts() -> list[dict]:

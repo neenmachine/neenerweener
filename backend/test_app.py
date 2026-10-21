@@ -24,6 +24,46 @@ def test_frontmatter_fields(tmp_path, monkeypatch):
     }
 
 
+def test_published_requires_title(tmp_path, monkeypatch, caplog):
+    (tmp_path / "untitled.md").write_text("---\ndate: 2026-01-01\n---\nbody")
+    monkeypatch.setattr(app, "POSTS_DIR", tmp_path)
+
+    with caplog.at_level(logging.WARNING):
+        assert TestClient(app.app).get("/api/posts").json() == []
+    assert "invalid post metadata in untitled.md" in caplog.messages
+
+
+def test_impossible_date_skipped(tmp_path, monkeypatch, caplog):
+    (tmp_path / "impossible.md").write_text("---\ntitle: Impossible\ndate: 2026-02-30\n---\nbody")
+    (tmp_path / "valid.md").write_text("---\ntitle: Valid\ndate: 2026-01-01\n---\nbody")
+    monkeypatch.setattr(app, "POSTS_DIR", tmp_path)
+
+    with caplog.at_level(logging.WARNING):
+        result = TestClient(app.app).get("/api/posts").json()
+    assert [post["slug"] for post in result] == ["valid"]
+    assert "invalid frontmatter in impossible.md" in caplog.messages
+
+
+def test_scalar_metadata_coerced(tmp_path, monkeypatch, caplog):
+    (tmp_path / "scalar.md").write_text("---\ntitle: 2026\ndate: 2026-01-01\nexcerpt: 3.5\n---\nbody")
+    (tmp_path / "list.md").write_text("---\ntitle: [bad]\ndate: 2026-01-01\n---\nbody")
+    monkeypatch.setattr(app, "POSTS_DIR", tmp_path)
+
+    with caplog.at_level(logging.WARNING):
+        result = TestClient(app.app).get("/api/posts").json()
+    assert result == [{"slug": "scalar", "date": "2026-01-01", "title": "2026", "excerpt": "3.5", "draft": False}]
+    assert "invalid post metadata in list.md" in caplog.messages
+
+
+def test_frontmatter_bom_crlf_eof(tmp_path, monkeypatch):
+    (tmp_path / "bom.md").write_text("\ufeff---\r\ntitle: Bom\r\ndate: 03/28/2026\r\n---", encoding="utf-8")
+    monkeypatch.setattr(app, "POSTS_DIR", tmp_path)
+
+    assert TestClient(app.app).get("/api/posts").json() == [
+        {"slug": "bom", "date": "2026-03-28", "title": "Bom", "excerpt": None, "draft": False}
+    ]
+
+
 def test_invalid_posts_skipped(tmp_path, monkeypatch, caplog):
     (tmp_path / "missing.md").write_text("body")
     (tmp_path / "bad-yaml.md").write_text("---\ntitle: [\n---\nbody")
@@ -58,6 +98,18 @@ def test_draft_frontmatter_optional(tmp_path, monkeypatch):
         {"slug": "idea", "date": None, "title": "idea", "excerpt": None, "draft": True},
         {"slug": "planned", "date": "2026-04-01", "title": "Planned", "excerpt": None, "draft": True},
     ]
+
+
+def test_math():
+    html = app.md.render(
+        "inline $x^2$ and\n\n$$a<b$$\n\n"
+        "costs $5 and $10\n\n`$x$`\n\n```text\n$x$\n```\n"
+    )
+    assert '<span class="math inline">x^2</span>' in html
+    assert '<div class="math block">\na&lt;b\n</div>' in html
+    assert "costs $5 and $10" in html
+    assert '<code>$x$</code>' in html
+    assert '<pre><code class="language-text">$x$\n</code></pre>' in html
 
 
 @pytest.mark.parametrize("show_drafts", [None, "0", "true"])

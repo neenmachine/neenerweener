@@ -124,6 +124,10 @@ pre.mermaid:not([data-processed]) {
   visibility: hidden;
 }
 
+.math.block {
+  overflow-x: auto;
+}
+
 table {
   border-collapse: collapse;
   width: 100%;

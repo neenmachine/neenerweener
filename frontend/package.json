@@ -1,6 +1,7 @@
 {
   "name": "ween-frontend",
   "private": true,
+  "packageManager": "pnpm@11.26.0",
   "type": "module",
   "scripts": {
     "dev": "vite",

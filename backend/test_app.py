@@ -22,6 +22,33 @@ def test_spa_fallback(tmp_path, monkeypatch):
     assert c.get("/api/posts").status_code == 200
 
 
+def test_spa_index_symlink_blocked(tmp_path, monkeypatch):
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    outside = tmp_path / "secret.txt"
+    outside.write_text("secret")
+    (dist / "index.html").symlink_to(outside)
+    monkeypatch.setattr(app, "FRONTEND_DIST", dist)
+
+    c = TestClient(app.app)
+    assert c.get("/").status_code == 404
+    assert c.get("/posts/foo").status_code == 404
+
+
+def test_spa_head(tmp_path, monkeypatch):
+    dist = tmp_path / "dist"
+    (dist / "assets").mkdir(parents=True)
+    (dist / "index.html").write_text("<html>app</html>")
+    (dist / "assets" / "x.js").write_text("console.log('x')")
+    monkeypatch.setattr(app, "FRONTEND_DIST", dist)
+
+    c = TestClient(app.app)
+    assert c.head("/").status_code == 200
+    assert c.head("/assets/x.js").status_code == 200
+    assert c.head("/api/nope").status_code == 404
+    assert c.post("/").status_code == 405
+
+
 def test_frontmatter_fields(tmp_path, monkeypatch):
     (tmp_path / "iso.md").write_text(
         "---\ntitle: ISO\ndate: 2026-03-28\nexcerpt: short\nkind: demo\n---\nbody"

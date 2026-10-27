@@ -141,21 +141,26 @@ def get_post(slug: str):
 app.mount("/images", StaticFiles(directory=POSTS_DIR / "images", check_dir=False), name="images")
 
 
-@app.get("/{path:path}")
+def frontend_file(root: Path, path: str) -> Path | None:
+    requested = (root / path).resolve()
+    try:
+        requested.relative_to(root)
+    except ValueError:
+        return None
+    return requested if requested.is_file() else None
+
+
+@app.api_route("/{path:path}", methods=["GET", "HEAD"])
 def frontend(path: str):
     if path == "api" or path.startswith("api/"):
         raise HTTPException(404, "not found")
     root = FRONTEND_DIST.resolve()
     if not root.is_dir():
         raise HTTPException(404, "not found")
-    requested = (root / path).resolve()
-    try:
-        requested.relative_to(root)
-    except ValueError:
-        raise HTTPException(404, "not found")
-    if requested.is_file():
+    requested = frontend_file(root, path)
+    if requested:
         return FileResponse(requested)
-    index = root / "index.html"
-    if index.is_file():
+    index = frontend_file(root, "index.html")
+    if index:
         return FileResponse(index)
     raise HTTPException(404, "not found")

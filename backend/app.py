@@ -8,6 +8,7 @@ from pathlib import Path
 import yaml
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from markdown_it import MarkdownIt
 from mdit_py_plugins.dollarmath import dollarmath_plugin
@@ -18,6 +19,7 @@ from pygments.util import ClassNotFound
 
 POSTS_DIR = Path(os.environ.get("POSTS_DIR", Path(__file__).parent.parent / "posts"))
 DRAFTS_DIR = Path(os.environ.get("DRAFTS_DIR", Path(__file__).parent.parent / "drafts"))
+FRONTEND_DIST = Path(os.environ.get("FRONTEND_DIST", Path(__file__).parent.parent / "frontend" / "dist"))
 FILENAME = re.compile(r"^([a-z0-9-]+)\.md$")
 logger = logging.getLogger(__name__)
 
@@ -137,3 +139,28 @@ def get_post(slug: str):
 
 # check_dir=False: the app still starts when POSTS_DIR has no images folder.
 app.mount("/images", StaticFiles(directory=POSTS_DIR / "images", check_dir=False), name="images")
+
+
+def frontend_file(root: Path, path: str) -> Path | None:
+    requested = (root / path).resolve()
+    try:
+        requested.relative_to(root)
+    except ValueError:
+        return None
+    return requested if requested.is_file() else None
+
+
+@app.api_route("/{path:path}", methods=["GET", "HEAD"])
+def frontend(path: str):
+    if path == "api" or path.startswith("api/"):
+        raise HTTPException(404, "not found")
+    root = FRONTEND_DIST.resolve()
+    if not root.is_dir():
+        raise HTTPException(404, "not found")
+    requested = frontend_file(root, path)
+    if requested:
+        return FileResponse(requested)
+    index = frontend_file(root, "index.html")
+    if index:
+        return FileResponse(index)
+    raise HTTPException(404, "not found")

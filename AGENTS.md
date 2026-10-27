@@ -29,3 +29,7 @@ Everything else: the site, backend, frontend, styling, deployment, demos, toolin
 - Frontend: `cd frontend && pnpm dev`
 - Frontend build and type check: `cd frontend && pnpm build`
 - Ween has no CI: run `make test` before opening a PR.
+
+## Deploy
+
+Railway builds the root `Dockerfile` on push to `main`. Production has no drafts; `drafts/` is excluded from the image and `SHOW_DRAFTS` is not set.

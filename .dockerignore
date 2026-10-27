@@ -1,0 +1,7 @@
+drafts/
+**/node_modules
+**/.venv
+frontend/dist
+.git
+.worktrees
+__pycache__

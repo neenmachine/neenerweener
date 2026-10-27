@@ -6,6 +6,22 @@ from fastapi.testclient import TestClient
 import app
 
 
+def test_spa_fallback(tmp_path, monkeypatch):
+    dist = tmp_path / "dist"
+    (dist / "assets").mkdir(parents=True)
+    (dist / "index.html").write_text("<html>app</html>")
+    (dist / "assets" / "x.js").write_text("console.log('x')")
+    monkeypatch.setattr(app, "FRONTEND_DIST", dist)
+
+    c = TestClient(app.app)
+    assert c.get("/").text == "<html>app</html>"
+    assert c.get("/posts/foo").text == "<html>app</html>"
+    assert c.get("/assets/x.js").text == "console.log('x')"
+    assert c.get("/api/nope").status_code == 404
+    assert c.get("/api/nope").json() == {"detail": "not found"}
+    assert c.get("/api/posts").status_code == 200
+
+
 def test_frontmatter_fields(tmp_path, monkeypatch):
     (tmp_path / "iso.md").write_text(
         "---\ntitle: ISO\ndate: 2026-03-28\nexcerpt: short\nkind: demo\n---\nbody"

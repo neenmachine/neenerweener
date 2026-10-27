@@ -123,9 +123,27 @@ pre code {
   font-size: 0.9em;
 }
 
+/* Lists: a smaller indent per level, a gap between items, and tighter lines inside a wrapped item. */
+article :is(ul, ol) {
+  padding-left: 1.5em;
+}
+
+article li {
+  margin: 0.35em 0;
+  line-height: 1.55;
+}
+
+article li > :is(ul, ol) {
+  margin: 0.35em 0;
+}
+
+article li::marker {
+  color: var(--muted);
+}
+
 /* Everything is monospace, so inline code needs a background to stand out. */
 :not(pre) > code {
-  padding: 0.1em 0.35em;
+  padding: 0.05em 0.3em;
   border-radius: 4px;
   background: color-mix(in srgb, var(--fg) 7%, transparent);
 }

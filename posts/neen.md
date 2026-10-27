@@ -1,6 +1,6 @@
 ---
 title: neenerweener
-date: 10/21/2026
+date: 10/20/2026
 ---
 
 i recently bought the domain `neenerweener.ca`. not entirely sure what i want to do with it yet, but i think its a nice escape from being scared to actually iterate on my "official" personal website.

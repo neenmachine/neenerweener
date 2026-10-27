@@ -3,6 +3,8 @@ title: neenerweener
 date: 10/20/2026
 ---
 
+`neenerweener` is a dumb spam account name that i came up with in high school. i really do like the alias though.
+
 i recently bought the domain `neenerweener.ca`. not entirely sure what i want to do with it yet, but i think its a nice escape from being scared to actually iterate on my "official" personal website.
 
 software is an interesting field to work in. during my adolescence, i was drawn to programming because it was something fun, something that occupied a lot of time and actually forced me to think. however, at some point, my interest in software engineering became an interest in finding a job.

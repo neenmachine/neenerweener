@@ -1,5 +1,6 @@
 import logging
 import os
+import posixpath
 import re
 from datetime import date, datetime
 from html import escape
@@ -14,13 +15,15 @@ from markdown_it import MarkdownIt
 from mdit_py_plugins.dollarmath import dollarmath_plugin
 from pygments import highlight as pygments_highlight
 from pygments.formatters import HtmlFormatter
-from pygments.lexers import get_lexer_by_name
+from pygments.lexers import TextLexer, get_lexer_by_name, get_lexer_for_filename
 from pygments.util import ClassNotFound
 
 POSTS_DIR = Path(os.environ.get("POSTS_DIR", Path(__file__).parent.parent / "posts"))
 DRAFTS_DIR = Path(os.environ.get("DRAFTS_DIR", Path(__file__).parent.parent / "drafts"))
+CODE_DIR = Path(os.environ.get("CODE_DIR", Path(__file__).parent.parent / "code"))
 FRONTEND_DIST = Path(os.environ.get("FRONTEND_DIST", Path(__file__).parent.parent / "frontend" / "dist"))
 FILENAME = re.compile(r"^([a-z0-9-]+)\.md$")
+PROJECT = re.compile(r"[a-z0-9-]+")
 logger = logging.getLogger(__name__)
 
 
@@ -141,13 +144,98 @@ def get_post(slug: str):
 app.mount("/images", StaticFiles(directory=POSTS_DIR / "images", check_dir=False), name="images")
 
 
-def frontend_file(root: Path, path: str) -> Path | None:
+def contained_file(root: Path, path: str) -> Path | None:
+    """The file at root/path, or None if it is missing or resolves (via .., an absolute path, or a symlink) outside root."""
+    root = root.resolve()
     requested = (root / path).resolve()
     try:
         requested.relative_to(root)
     except ValueError:
         return None
     return requested if requested.is_file() else None
+
+
+def project_root(project: str) -> Path:
+    root = CODE_DIR / project
+    if not PROJECT.fullmatch(project) or not root.is_dir():
+        raise HTTPException(404, "project not found")
+    return root.resolve()
+
+
+def project_file(project: str, path: str) -> Path:
+    file = contained_file(project_root(project), path)
+    if not file:
+        raise HTTPException(404, "file not found")
+    return file
+
+
+def rewrite_readme_link(project: str, url: str, prefix: str) -> str | None:
+    target = posixpath.normpath(posixpath.join(".", url))
+    if posixpath.isabs(target) or target == ".." or target.startswith("../"):
+        return None
+    return f"{prefix}/{project}/{target}"
+
+
+def readme_html(project: str, root: Path) -> str | None:
+    readme = contained_file(root, "README.md")
+    if not readme:
+        return None
+    tokens = md.parse(readme.read_text(encoding="utf-8-sig"))
+    # Relative README links point into the snapshot: images load raw bytes, links open the code view.
+    for token in tokens:
+        for child in token.children or []:
+            attr = "src" if child.type == "image" else "href" if child.type == "link_open" else None
+            url = child.attrGet(attr) if attr else None
+            if url and not re.match(r"^([a-z][a-z0-9+.-]*:|/|#)", url, re.I):
+                prefix = "/code-raw" if attr == "src" else "/code"
+                rewritten = rewrite_readme_link(project, url, prefix)
+                if rewritten:
+                    child.attrSet(attr, rewritten)
+                else:
+                    child.attrs.pop(attr, None)
+    return md.renderer.render(tokens, md.options, {})
+
+
+@app.get("/api/code")
+def list_projects():
+    if not CODE_DIR.is_dir():
+        return []
+    return sorted(p.name for p in CODE_DIR.iterdir() if p.is_dir() and PROJECT.fullmatch(p.name))
+
+
+@app.get("/api/code/{project}")
+def get_project(project: str):
+    root = project_root(project)
+    files = sorted(
+        rel for p in root.rglob("*")
+        if contained_file(root, rel := p.relative_to(root).as_posix())
+    )
+    return {"name": project, "files": files, "readme_html": readme_html(project, root)}
+
+
+@app.get("/api/code/{project}/file/{path:path}")
+def get_code_file(project: str, path: str):
+    file = project_file(project, path)
+    data = file.read_bytes()
+    try:
+        code = data.decode("utf-8")
+    except UnicodeDecodeError:
+        code = None
+    if code is None or "\0" in code:  # NUL: git's binary check, catches ASCII-only data files
+        return {"path": path, "binary": True}
+    try:
+        lexer = get_lexer_for_filename(file.name, code)
+    except ClassNotFound:
+        lexer = TextLexer()
+    # Pygments closes its spans at each line end, so every line can be wrapped for CSS line numbers.
+    lines = pygments_highlight(code, lexer, HtmlFormatter(nowrap=True)).splitlines()
+    return {"path": path, "html": "".join(f'<span class="line">{line}</span>\n' for line in lines)}
+
+
+@app.api_route("/code-raw/{project}/{path:path}", methods=["GET", "HEAD"])
+def get_code_raw(project: str, path: str):
+    # sandbox: a raw SVG or HTML file opened directly cannot run scripts on the site origin.
+    return FileResponse(project_file(project, path), headers={"Content-Security-Policy": "sandbox"})
 
 
 @app.api_route("/{path:path}", methods=["GET", "HEAD"])
@@ -157,10 +245,10 @@ def frontend(path: str):
     root = FRONTEND_DIST.resolve()
     if not root.is_dir():
         raise HTTPException(404, "not found")
-    requested = frontend_file(root, path)
+    requested = contained_file(root, path)
     if requested:
         return FileResponse(requested)
-    index = frontend_file(root, "index.html")
+    index = contained_file(root, "index.html")
     if index:
         return FileResponse(index)
     raise HTTPException(404, "not found")

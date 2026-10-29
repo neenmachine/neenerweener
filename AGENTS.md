@@ -17,8 +17,10 @@ Everything else: the site, backend, frontend, styling, deployment, demos, toolin
 - `posts/` - Henry's posts as Markdown in `<slug>.md` files. Each file starts with YAML frontmatter, for example `title: ...`, `date: 2026-03-28`, and optional `excerpt: ...`. Rendering: CommonMark plus tables and strikethrough, `$...$` / `$$...$$` math, raw HTML allowed, code blocks highlighted by Pygments on the server, ` ```mermaid ` blocks drawn in the browser.
 - `posts/images/` - post images, served at `/images/<file>`. Write them as `![alt](/images/<file>)`.
 - `drafts/` - local-only draft posts in `<slug>.md` files; YAML frontmatter is optional. Drafts are shown when `SHOW_DRAFTS=1`.
-- `backend/` - FastAPI app (`uv`). Serves posts at `/api/posts` and `/api/posts/{slug}`.
-- `frontend/` - React + Vite (`pnpm`). The dev server proxies `/api` to the backend on port 8000.
+- `code/<project>/` - snapshots from `make code-sync`; never edit by hand; contents are Henry's. Shown at `/code`.
+- `scripts/code_sync.py` - the snapshot script behind `make code-sync`.
+- `backend/` - FastAPI app (`uv`). Serves posts at `/api/posts` and `/api/posts/{slug}`, code at `/api/code` and raw code files at `/code-raw/<project>/<path>`.
+- `frontend/` - React + Vite (`pnpm`). The dev server proxies `/api`, `/images`, and `/code-raw` to the backend on port 8000.
 
 ## Commands
 
@@ -28,6 +30,7 @@ Everything else: the site, backend, frontend, styling, deployment, demos, toolin
 - Backend tests: `cd backend && uv run pytest`
 - Frontend: `cd frontend && pnpm dev`
 - Frontend build and type check: `cd frontend && pnpm build`
+- Snapshot a project's committed files: `make code-sync PROJECT=~/path/to/repo [NAME=name]` (skips files over 1 MB, warns on personal info, refuses secret-looking lines; uncommitted changes are not included)
 - Ween has no CI: run `make test` before opening a PR.
 
 ## Deploy

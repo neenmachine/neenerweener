@@ -31,6 +31,16 @@ header a {
   text-decoration: none;
 }
 
+header .nav {
+  margin-left: 1.5rem;
+  font-weight: normal;
+  color: var(--muted);
+}
+
+header .nav:hover {
+  color: var(--fg);
+}
+
 /* The back arrow hangs in the left margin so the title stays aligned with the text. */
 .has-back {
   position: relative;
@@ -105,6 +115,38 @@ article time {
 
 article img {
   max-width: 100%;
+}
+
+/* Code browser: a file tree indented by depth, and CSS line numbers on Pygments lines. */
+.tree {
+  list-style: none;
+  padding: 0;
+  margin: 1.5rem 0 3rem;
+}
+
+.code-path {
+  overflow-wrap: anywhere;
+  margin-bottom: 2rem;
+}
+
+.code-image {
+  max-width: 100%;
+}
+
+.code-file code {
+  counter-reset: line;
+}
+
+.code-file .line::before {
+  counter-increment: line;
+  content: counter(line);
+  display: inline-block;
+  width: 3ch;
+  margin-right: 2ch;
+  text-align: right;
+  color: var(--muted);
+  font-style: normal;
+  user-select: none;
 }
 
 pre {

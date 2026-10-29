@@ -203,3 +203,154 @@ def test_render():
     assert '<code class="language-python"><span class="n">x</span>' in html
     assert '<pre class="mermaid">A[&quot;x&lt;br/&gt;y&quot;] --&gt; B\n</pre>' in html
     assert "&lt;b&gt;" in html
+
+
+PNG = b"\x89PNG\r\n\x1a\n\x00\x00\x00\x00"
+
+
+@pytest.fixture
+def code_dir(tmp_path, monkeypatch):
+    code = tmp_path / "code"
+    project = code / "demo"
+    (project / "src").mkdir(parents=True)
+    (project / "README.md").write_text(
+        "# demo\n\n![plot](src/plot.png) [main](./main.py) [web](https://example.com) [top](/x)\n"
+    )
+    (project / "main.py").write_text("def f():\n    return '''a\nb'''\n")
+    (project / "notes.md").write_text("# not rendered\n")
+    (project / "src" / "plot.png").write_bytes(PNG)
+    (project / "data.bin").write_bytes(b"\xff\xfe\x00")
+    (project / "labels.idx").write_bytes(b"\x00\x00\x08\x01")
+    (code / ".sync-tmp").mkdir()
+    monkeypatch.setattr(app, "CODE_DIR", code)
+    return code
+
+
+def test_code_api(code_dir):
+    c = TestClient(app.app)
+    assert c.get("/api/code").json() == ["demo"]
+
+    project = c.get("/api/code/demo").json()
+    assert project["name"] == "demo"
+    assert project["files"] == ["README.md", "data.bin", "labels.idx", "main.py", "notes.md", "src/plot.png"]
+    readme = project["readme_html"]
+    assert "<h1>demo</h1>" in readme
+    assert '<img src="/code-raw/demo/src/plot.png" alt="plot"' in readme
+    assert 'href="/code/demo/main.py"' in readme
+    assert 'href="https://example.com"' in readme and 'href="/x"' in readme
+
+    file = c.get("/api/code/demo/file/main.py").json()
+    assert file["path"] == "main.py"
+    assert '<span class="line"><span class="k">def</span><span class="w"> </span><span class="nf">f</span>' in file["html"]
+    assert file["html"].count('<span class="line">') == 3  # the multi-line string is split per line
+    assert "<h1>" not in c.get("/api/code/demo/file/notes.md").json()["html"]
+    assert c.get("/api/code/demo/file/data.bin").json() == {"path": "data.bin", "binary": True}
+    assert c.get("/api/code/demo/file/labels.idx").json() == {"path": "labels.idx", "binary": True}
+
+    raw = c.get("/code-raw/demo/src/plot.png")
+    assert raw.content == PNG and raw.headers["content-type"] == "image/png"
+    assert c.get("/api/code/nope").status_code == 404
+    assert c.get("/api/code/nope").json() == {"detail": "project not found"}
+    assert c.get("/api/code/demo/file/missing.py").status_code == 404
+
+
+def test_code_raw_head(code_dir):
+    c = TestClient(app.app)
+    for path in ("src/plot.png", "main.py"):
+        get = c.get(f"/code-raw/demo/{path}")
+        head = c.head(f"/code-raw/demo/{path}")
+        assert head.status_code == 200
+        assert head.headers["content-type"] == get.headers["content-type"]
+        assert head.headers["content-security-policy"] == "sandbox"
+
+
+def test_readme_parent_links_blocked(code_dir):
+    (code_dir / "demo" / "README.md").write_text(
+        "[parent](../other/x.py) [far](../../etc) [main](main.py)"
+    )
+    readme = TestClient(app.app).get("/api/code/demo").json()["readme_html"]
+    assert 'href="/code/demo/../other/x.py"' not in readme
+    assert 'href="/code/demo/../../etc"' not in readme
+    assert 'href="/code/demo/main.py"' in readme
+
+
+def test_code_no_readme(code_dir):
+    (code_dir / "demo" / "README.md").unlink()
+    assert TestClient(app.app).get("/api/code/demo").json()["readme_html"] is None
+
+
+def test_code_containment(code_dir):
+    (code_dir / "secret.txt").write_text("outside secret")
+    (code_dir / "demo" / "link.txt").symlink_to(code_dir / "secret.txt")
+    (code_dir / "demo" / "linkdir").symlink_to(code_dir)
+    (code_dir / "Bad").mkdir()
+    (code_dir / "Bad" / "x.py").write_text("x")
+    c = TestClient(app.app)
+
+    assert "link.txt" not in c.get("/api/code/demo").json()["files"]
+    assert c.get("/api/code").json() == ["demo"]
+    for path in [
+        "/api/code/demo/file/../secret.txt",
+        "/api/code/demo/file/%2e%2e/secret.txt",
+        "/api/code/demo/file/%2e%2e%2fsecret.txt",
+        f"/api/code/demo/file/{code_dir / 'secret.txt'}",
+        "/api/code/demo/file/link.txt",
+        "/api/code/demo/file/linkdir/secret.txt",
+        "/code-raw/demo/%2e%2e/secret.txt",
+        f"/code-raw/demo/{code_dir / 'secret.txt'}",
+        "/code-raw/demo/link.txt",
+        "/api/code/Bad",
+        "/api/code/Bad/file/x.py",
+        "/api/code/%2e%2e",
+        "/code-raw/%2e%2e/secret.txt",
+    ]:
+        r = c.get(path)
+        assert r.status_code == 404, path
+        assert "outside secret" not in r.text, path
+
+
+def run_sync(tmp_path, repo, *args):
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    script = Path(__file__).resolve().parent.parent / "scripts" / "code_sync.py"
+    env = {**__import__("os").environ, "CODE_DIR": str(tmp_path / "code")}
+    return subprocess.run([sys.executable, script, repo, *args], env=env, capture_output=True, text=True)
+
+
+def make_repo(path, files):
+    import subprocess
+
+    path.mkdir()
+    for name, content in files.items():
+        (path / name).write_bytes(content)
+    for cmd in (["init", "-q"], ["add", "."], ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "x"]):
+        subprocess.run(["git", "-C", path, *cmd], check=True)
+    return path
+
+
+def test_code_sync(tmp_path):
+    repo = make_repo(tmp_path / "tiny", {
+        "a.py": b"x = 1\n",
+        "big.bin": b"0" * (1024 * 1024 + 1),
+        "who.txt": b"by someone@example.com\n",
+    })
+    (repo / "a.py").write_text("x = 2\n")
+    (repo / "new.py").write_text("new\n")
+
+    r = run_sync(tmp_path, repo)
+    assert r.returncode == 0, r.stderr
+    out = tmp_path / "code" / "tiny"
+    assert (out / "a.py").read_text() == "x = 1\n"
+    assert not (out / "new.py").exists() and not (out / "big.bin").exists() and not (out / ".git").exists()
+    assert "uncommitted changes" in r.stdout and "new.py" in r.stdout
+    assert "skipped: big.bin" in r.stdout
+    assert "warning: personal info: who.txt:1" in r.stdout
+    assert [p.name for p in (tmp_path / "code").iterdir()] == ["tiny"]  # no temp dir left
+
+    leaky = make_repo(tmp_path / "leaky", {"k.py": b'api_key = "abcdefghijklmnop"\n'})
+    r = run_sync(tmp_path, leaky)
+    assert r.returncode == 1 and "k.py:1" in r.stderr
+    assert not (tmp_path / "code" / "leaky").exists()
+    assert run_sync(tmp_path, leaky, "--name", "Bad_Name").returncode == 2

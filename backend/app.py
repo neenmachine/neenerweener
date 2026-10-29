@@ -169,6 +169,13 @@ def project_file(project: str, path: str) -> Path:
     return file
 
 
+def rewrite_readme_link(project: str, url: str, prefix: str) -> str | None:
+    target = posixpath.normpath(posixpath.join(".", url))
+    if posixpath.isabs(target) or target == ".." or target.startswith("../"):
+        return None
+    return f"{prefix}/{project}/{target}"
+
+
 def readme_html(project: str, root: Path) -> str | None:
     readme = contained_file(root, "README.md")
     if not readme:
@@ -181,7 +188,11 @@ def readme_html(project: str, root: Path) -> str | None:
             url = child.attrGet(attr) if attr else None
             if url and not re.match(r"^([a-z][a-z0-9+.-]*:|/|#)", url, re.I):
                 prefix = "/code-raw" if attr == "src" else "/code"
-                child.attrSet(attr, f"{prefix}/{project}/{posixpath.normpath(url)}")
+                rewritten = rewrite_readme_link(project, url, prefix)
+                if rewritten:
+                    child.attrSet(attr, rewritten)
+                else:
+                    child.attrs.pop(attr, None)
     return md.renderer.render(tokens, md.options, {})
 
 
@@ -221,7 +232,7 @@ def get_code_file(project: str, path: str):
     return {"path": path, "html": "".join(f'<span class="line">{line}</span>\n' for line in lines)}
 
 
-@app.get("/code-raw/{project}/{path:path}")
+@app.api_route("/code-raw/{project}/{path:path}", methods=["GET", "HEAD"])
 def get_code_raw(project: str, path: str):
     # sandbox: a raw SVG or HTML file opened directly cannot run scripts on the site origin.
     return FileResponse(project_file(project, path), headers={"Content-Security-Policy": "sandbox"})

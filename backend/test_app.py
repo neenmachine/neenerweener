@@ -254,6 +254,26 @@ def test_code_api(code_dir):
     assert c.get("/api/code/demo/file/missing.py").status_code == 404
 
 
+def test_code_raw_head(code_dir):
+    c = TestClient(app.app)
+    for path in ("src/plot.png", "main.py"):
+        get = c.get(f"/code-raw/demo/{path}")
+        head = c.head(f"/code-raw/demo/{path}")
+        assert head.status_code == 200
+        assert head.headers["content-type"] == get.headers["content-type"]
+        assert head.headers["content-security-policy"] == "sandbox"
+
+
+def test_readme_parent_links_blocked(code_dir):
+    (code_dir / "demo" / "README.md").write_text(
+        "[parent](../other/x.py) [far](../../etc) [main](main.py)"
+    )
+    readme = TestClient(app.app).get("/api/code/demo").json()["readme_html"]
+    assert 'href="/code/demo/../other/x.py"' not in readme
+    assert 'href="/code/demo/../../etc"' not in readme
+    assert 'href="/code/demo/main.py"' in readme
+
+
 def test_code_no_readme(code_dir):
     (code_dir / "demo" / "README.md").unlink()
     assert TestClient(app.app).get("/api/code/demo").json()["readme_html"] is None

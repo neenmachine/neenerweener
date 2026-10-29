@@ -205,9 +205,12 @@ def get_project(project: str):
 @app.get("/api/code/{project}/file/{path:path}")
 def get_code_file(project: str, path: str):
     file = project_file(project, path)
+    data = file.read_bytes()
     try:
-        code = file.read_bytes().decode("utf-8")
+        code = data.decode("utf-8")
     except UnicodeDecodeError:
+        code = None
+    if code is None or "\0" in code:  # NUL: git's binary check, catches ASCII-only data files
         return {"path": path, "binary": True}
     try:
         lexer = get_lexer_for_filename(file.name, code)

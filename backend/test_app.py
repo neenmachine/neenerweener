@@ -220,6 +220,7 @@ def code_dir(tmp_path, monkeypatch):
     (project / "notes.md").write_text("# not rendered\n")
     (project / "src" / "plot.png").write_bytes(PNG)
     (project / "data.bin").write_bytes(b"\xff\xfe\x00")
+    (project / "labels.idx").write_bytes(b"\x00\x00\x08\x01")
     (code / ".sync-tmp").mkdir()
     monkeypatch.setattr(app, "CODE_DIR", code)
     return code
@@ -231,7 +232,7 @@ def test_code_api(code_dir):
 
     project = c.get("/api/code/demo").json()
     assert project["name"] == "demo"
-    assert project["files"] == ["README.md", "data.bin", "main.py", "notes.md", "src/plot.png"]
+    assert project["files"] == ["README.md", "data.bin", "labels.idx", "main.py", "notes.md", "src/plot.png"]
     readme = project["readme_html"]
     assert "<h1>demo</h1>" in readme
     assert '<img src="/code-raw/demo/src/plot.png" alt="plot"' in readme
@@ -244,6 +245,7 @@ def test_code_api(code_dir):
     assert file["html"].count('<span class="line">') == 3  # the multi-line string is split per line
     assert "<h1>" not in c.get("/api/code/demo/file/notes.md").json()["html"]
     assert c.get("/api/code/demo/file/data.bin").json() == {"path": "data.bin", "binary": True}
+    assert c.get("/api/code/demo/file/labels.idx").json() == {"path": "labels.idx", "binary": True}
 
     raw = c.get("/code-raw/demo/src/plot.png")
     assert raw.content == PNG and raw.headers["content-type"] == "image/png"

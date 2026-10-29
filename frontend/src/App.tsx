@@ -7,23 +7,23 @@ type CodeFile = { path: string; html?: string; binary?: true };
 
 // shortcut: plain links and pathname matching, no router. Add react-router when there are more pages.
 const slug = location.pathname.match(/^\/posts\/([a-z0-9-]+)\/?$/)?.[1];
-// /code, /code/<project>, /code/<project>/<path>; the path stays URL-encoded.
+// /code, /code/<project>, /code/<project>/<path>, where the path is a folder or a file.
 const code = location.pathname.match(/^\/code(?:\/([a-z0-9-]+)(?:\/(.+?))?)?\/?$/);
 const IMAGE = /\.(png|jpe?g|webp|gif|svg)$/i;
 
 export default function App() {
-  return <main>{page()}</main>;
+  // Project pages are wider, like a repo browser, so long code lines fit.
+  return <main className={code?.[1] ? "wide" : undefined}>{page()}</main>;
 }
 
 function page() {
   if (slug) return <PostPage slug={slug} />;
-  if (code?.[2]) return <CodeFilePage project={code[1]} path={code[2]} />;
-  if (code?.[1]) return <ProjectPage name={code[1]} />;
+  if (code?.[1]) return <ProjectPage name={code[1]} path={code[2] ? decodeURIComponent(code[2]) : ""} />;
   return (
     <>
       <header>
         <a href="/">neenerweener</a>
-        <a className="nav" href="/code">
+        <a className="nav" href="/code" aria-current={code ? "page" : undefined}>
           code
         </a>
       </header>
@@ -128,111 +128,207 @@ function PostPage({ slug }: { slug: string }) {
 
 function ProjectList() {
   const { data, error } = useApi<string[]>("/api/code");
+  useEffect(() => {
+    document.title = "code";
+  }, []);
   if (error) return <p className="muted">could not load projects</p>;
   if (!data) return null;
   if (!data.length) return <p className="muted">no projects yet</p>;
   return (
-    <ul className="posts">
+    <ul className="box listing">
       {data.map((name) => (
         <li key={name}>
-          <a href={`/code/${name}`}>{name}</a>
+          <a href={`/code/${name}`}>
+            <Icon dir />
+            {name}
+          </a>
         </li>
       ))}
     </ul>
   );
 }
 
-function ProjectPage({ name }: { name: string }) {
-  const { data, error } = useApi<Project>(`/api/code/${name}`);
-  useEffect(() => {
-    document.title = name;
-  }, [name]);
-  const back = <Back href="/code" />;
-  if (error)
-    return (
-      <p className="muted has-back">
-        {back}project not found
-      </p>
-    );
-  if (!data) return null;
+const href = (project: string, path: string) =>
+  `/code/${project}${path && "/" + path.split("/").map(encodeURIComponent).join("/")}`;
+
+// code / project / dir / file, every segment but the last a link.
+function Crumbs({ project, path }: { project: string; path: string }) {
+  const parts = path ? path.split("/") : [];
   return (
-    <article>
-      <h1 className="has-back">
-        {back}
-        {data.name}
-      </h1>
-      <FileTree project={data.name} files={data.files} />
-      {/* The README is Henry's own file, rendered server side. */}
-      {data.readme_html && <div dangerouslySetInnerHTML={{ __html: data.readme_html }} />}
-    </article>
+    <h1 className="crumbs">
+      <a href="/code">code</a>
+      <span className="sep">/</span>
+      {parts.length ? <a href={href(project, "")}>{project}</a> : project}
+      {parts.map((part, i) => (
+        <span key={i}>
+          <span className="sep">/</span>
+          {i < parts.length - 1 ? <a href={href(project, parts.slice(0, i + 1).join("/"))}>{part}</a> : part}
+        </span>
+      ))}
+    </h1>
   );
 }
 
-type Tree = Map<string, Tree | null>;
-
-// Indented by depth, directories before files.
-function FileTree({ project, files }: { project: string; files: string[] }) {
-  const root: Tree = new Map();
-  for (const file of files) {
-    const parts = file.split("/");
-    let node = root;
-    for (const dir of parts.slice(0, -1)) {
-      if (!node.has(dir)) node.set(dir, new Map());
-      node = node.get(dir)!;
-    }
-    node.set(parts[parts.length - 1], null);
-  }
-  const rows: ReactNode[] = [];
-  const walk = (node: Tree, prefix: string, depth: number) => {
-    const entries = [...node].sort(([, a], [, b]) => Number(!a) - Number(!b));
-    for (const [name, child] of entries) {
-      const path = prefix + name;
-      rows.push(
-        <li key={path} style={{ paddingLeft: `${depth * 2}ch` }}>
-          {child ? (
-            <span className="muted">{name}/</span>
-          ) : (
-            <a href={`/code/${project}/${path.split("/").map(encodeURIComponent).join("/")}`}>{name}</a>
-          )}
-        </li>,
-      );
-      if (child) walk(child, path + "/", depth + 1);
-    }
-  };
-  walk(root, "", 0);
-  return <ul className="tree">{rows}</ul>;
-}
-
-function CodeFilePage({ project, path }: { project: string; path: string }) {
-  const { data, error } = useApi<CodeFile>(`/api/code/${project}/file/${path}`);
-  const title = decodeURIComponent(path);
+// The API lists every file in the project; folders are derived from those paths.
+function ProjectPage({ name, path }: { name: string; path: string }) {
+  const { data, error } = useApi<Project>(`/api/code/${name}`);
   useEffect(() => {
-    document.title = title;
-  }, [title]);
-  const back = <Back href={`/code/${project}`} />;
+    document.title = path || name;
+  }, [name, path]);
+  const crumbs = <Crumbs project={name} path={path} />;
   if (error)
     return (
-      <p className="muted has-back">
-        {back}file not found
-      </p>
+      <>
+        {crumbs}
+        <p className="muted">project not found</p>
+      </>
     );
-  if (!data) return null;
+  if (!data) return crumbs;
+  if (data.files.includes(path)) return <FileView project={name} path={path} crumbs={crumbs} />;
+  const prefix = path && path + "/";
+  const dirs = new Set<string>();
+  const files: string[] = [];
+  for (const file of data.files) {
+    if (!file.startsWith(prefix)) continue;
+    const [first, ...rest] = file.slice(prefix.length).split("/");
+    if (rest.length) dirs.add(first);
+    else files.push(first);
+  }
+  if (!dirs.size && !files.length)
+    return (
+      <>
+        {crumbs}
+        <p className="muted">file not found</p>
+      </>
+    );
   return (
-    <article>
-      <h1 className="has-back code-path">
-        {back}
-        {title}
-      </h1>
-      {IMAGE.test(title) ? (
-        <img className="code-image" src={`/code-raw/${project}/${path}`} alt={title} />
-      ) : data.html === undefined ? (
-        <p className="muted">binary file</p>
-      ) : (
-        <pre className="code-file">
-          {/* Highlighted server side by Pygments, which escapes the source. */}
-          <code dangerouslySetInnerHTML={{ __html: data.html }} />
-        </pre>
+    <>
+      {crumbs}
+      <ul className="box listing">
+        {path && (
+          <li>
+            <a href={href(name, path.split("/").slice(0, -1).join("/"))} aria-label="parent folder">
+              <Icon dir />
+              ..
+            </a>
+          </li>
+        )}
+        {[...dirs].map((d) => (
+          <li key={d}>
+            <a href={href(name, prefix + d)}>
+              <Icon dir />
+              {d}
+            </a>
+          </li>
+        ))}
+        {files.map((f) => (
+          <li key={f}>
+            <a href={href(name, prefix + f)}>
+              <Icon />
+              {f}
+            </a>
+          </li>
+        ))}
+      </ul>
+      {/* The README is Henry's own file, rendered server side. */}
+      {!path && data.readme_html && (
+        <section className="box readme">
+          <div className="box-head">README.md</div>
+          <article className="readme-body" dangerouslySetInnerHTML={{ __html: data.readme_html }} />
+        </section>
       )}
-    </article>
+    </>
+  );
+}
+
+function Icon({ dir }: { dir?: boolean }) {
+  return (
+    <svg className={dir ? "icon dir" : "icon"} viewBox="0 0 16 16" aria-hidden="true">
+      {dir ? (
+        <path d="M1.5 3.5a1 1 0 0 1 1-1h3.6l1.5 1.5h5.9a1 1 0 0 1 1 1v7.5a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1z" />
+      ) : (
+        <path d="M3.5 1.5h6l3 3v10h-9zM9.5 1.5v3h3" />
+      )}
+    </svg>
+  );
+}
+
+// "#L12" selects line 12, like a repo browser.
+function useHash() {
+  const [hash, setHash] = useState(location.hash);
+  useEffect(() => {
+    const update = () => setHash(location.hash);
+    addEventListener("hashchange", update);
+    return () => removeEventListener("hashchange", update);
+  }, []);
+  return hash;
+}
+
+function FileView({ project, path, crumbs }: { project: string; path: string; crumbs: ReactNode }) {
+  const encoded = path.split("/").map(encodeURIComponent).join("/");
+  const { data, error } = useApi<CodeFile>(`/api/code/${project}/file/${encoded}`);
+  const hash = useHash();
+  const [copied, setCopied] = useState(false);
+  const table = useRef<HTMLTableElement>(null);
+  // Pygments wraps each line in a span, one per text line.
+  const lines = data?.html?.split("\n").slice(0, -1);
+  useEffect(() => {
+    // The rows render after the page loads, so the browser cannot jump to the anchor itself.
+    if (lines) document.getElementById(location.hash.slice(1))?.scrollIntoView();
+  }, [data]);
+  if (error)
+    return (
+      <>
+        {crumbs}
+        <p className="muted">file not found</p>
+      </>
+    );
+  if (!data) return crumbs;
+  const raw = `/code-raw/${project}/${encoded}`;
+  const copy = () => {
+    const text = [...(table.current?.querySelectorAll(".line") ?? [])].map((l) => l.textContent).join("\n");
+    navigator.clipboard.writeText(text + "\n").then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  };
+  return (
+    <>
+      {crumbs}
+      <section className="box file">
+        <div className="box-head">
+          <span className="muted">{lines ? `${lines.length} lines` : path.split("/").pop()}</span>
+          <span className="actions">
+            {lines && (
+              <button type="button" onClick={copy}>
+                {copied ? "copied" : "copy"}
+              </button>
+            )}
+            <a href={raw}>raw</a>
+          </span>
+        </div>
+        {IMAGE.test(path) ? (
+          <img className="code-image" src={raw} alt={path} />
+        ) : !lines ? (
+          <p className="muted binary">binary file</p>
+        ) : (
+          <div className="scroll">
+            <table className="code" ref={table}>
+              <tbody>
+                {lines.map((line, i) => (
+                  <tr key={i} id={`L${i + 1}`} className={hash === `#L${i + 1}` ? "hl" : undefined}>
+                    <td>
+                      <a href={`#L${i + 1}`}>{i + 1}</a>
+                    </td>
+                    {/* Highlighted server side by Pygments, which escapes the source. */}
+                    <td dangerouslySetInnerHTML={{ __html: line }} />
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+    </>
   );
 }

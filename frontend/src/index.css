@@ -117,38 +117,6 @@ article img {
   max-width: 100%;
 }
 
-/* Code browser: a file tree indented by depth, and CSS line numbers on Pygments lines. */
-.tree {
-  list-style: none;
-  padding: 0;
-  margin: 1.5rem 0 3rem;
-}
-
-.code-path {
-  overflow-wrap: anywhere;
-  margin-bottom: 2rem;
-}
-
-.code-image {
-  max-width: 100%;
-}
-
-.code-file code {
-  counter-reset: line;
-}
-
-.code-file .line::before {
-  counter-increment: line;
-  content: counter(line);
-  display: inline-block;
-  width: 3ch;
-  margin-right: 2ch;
-  text-align: right;
-  color: var(--muted);
-  font-style: normal;
-  user-select: none;
-}
-
 pre {
   overflow-x: auto;
   padding: 1rem;
@@ -191,20 +159,20 @@ article li::marker {
 }
 
 /* Syntax colors for Pygments token classes (c=comment, k=keyword, s=string, m=number). */
-pre code [class^="c"] {
+:is(pre code, .code) [class^="c"] {
   color: #8a8a86;
   font-style: italic;
 }
-pre code [class^="k"] {
+:is(pre code, .code) [class^="k"] {
   color: #8a3ffc;
 }
-pre code [class^="s"] {
+:is(pre code, .code) [class^="s"] {
   color: #1f7a4d;
 }
-pre code [class^="m"] {
+:is(pre code, .code) [class^="m"] {
   color: #b4540a;
 }
-pre code :is(.nf, .fm, .nc) {
+:is(pre code, .code) :is(.nf, .fm, .nc) {
   color: #1d5fbf;
 }
 
@@ -246,4 +214,215 @@ hr {
   border: none;
   border-top: 1px solid color-mix(in srgb, var(--fg) 12%, transparent);
   margin: 2.5rem 0;
+}
+
+/* Code browser: bordered boxes like a repo browser, in the site's own type and colors. */
+header .nav[aria-current] {
+  color: var(--fg);
+}
+
+main.wide {
+  max-width: 64rem;
+}
+
+.crumbs {
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin: 0 0 1.25rem;
+  overflow-wrap: anywhere;
+}
+
+.crumbs a {
+  font-weight: normal;
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.crumbs a:hover {
+  color: var(--fg);
+  text-decoration: underline;
+}
+
+.crumbs .sep {
+  margin: 0 0.5ch;
+  color: var(--line);
+  font-weight: normal;
+}
+
+.box {
+  --line: color-mix(in srgb, var(--fg) 14%, transparent);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  margin: 0 0 1.5rem;
+  padding: 0;
+  overflow: hidden;
+}
+
+.crumbs {
+  --line: color-mix(in srgb, var(--fg) 30%, transparent);
+}
+
+.box-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--fg) 3%, var(--bg));
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.listing {
+  list-style: none;
+}
+
+.listing li + li {
+  border-top: 1px solid var(--line);
+}
+
+.listing a {
+  display: flex;
+  align-items: center;
+  gap: 1.25ch;
+  padding: 0.4rem 1rem;
+  text-decoration: none;
+}
+
+.listing a:hover {
+  background: color-mix(in srgb, var(--fg) 4%, var(--bg));
+}
+
+.listing a:hover,
+.listing a:focus-visible {
+  text-decoration: underline;
+}
+
+.icon {
+  flex: none;
+  width: 1em;
+  height: 1em;
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 1.2;
+  stroke-linejoin: round;
+}
+
+.icon.dir {
+  fill: #8aa4c8;
+  stroke: none;
+}
+
+.readme-body {
+  max-width: 46rem;
+  padding: 0.5rem 2rem 1.5rem;
+}
+
+.readme-body > :first-child {
+  margin-top: 1.25rem;
+}
+
+.actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.actions :is(a, button) {
+  padding: 0.1rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-weight: normal;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.actions :is(a, button):hover {
+  background: color-mix(in srgb, var(--fg) 5%, var(--bg));
+}
+
+.actions button:active {
+  scale: 0.96;
+}
+
+:is(.box, .crumbs) :focus-visible {
+  outline: 2px solid #2448c2;
+  outline-offset: -2px;
+}
+
+.code-image {
+  display: block;
+  max-width: 100%;
+  margin: 1rem auto;
+}
+
+.binary {
+  margin: 0;
+  padding: 1rem;
+}
+
+/* Only the box scrolls sideways; line numbers stay put. */
+.scroll {
+  overflow-x: auto;
+  padding: 0.5rem 0;
+}
+
+.code {
+  display: table;
+  min-width: 100%;
+  width: auto;
+  margin: 0;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+  line-height: 1.6;
+  white-space: pre;
+}
+
+.code td {
+  padding: 0 1rem;
+  border: none;
+}
+
+.code td:first-child {
+  position: sticky;
+  left: 0;
+  width: 1%;
+  padding: 0 1rem 0 1.25rem;
+  text-align: right;
+  background: var(--bg);
+  user-select: none;
+}
+
+.code td:first-child a {
+  color: color-mix(in srgb, var(--muted) 75%, transparent);
+  text-decoration: none;
+}
+
+.code td:first-child a:hover {
+  color: var(--fg);
+}
+
+.code tr {
+  scroll-margin-top: 30vh;
+}
+
+.code tr.hl td {
+  background: color-mix(in srgb, #e8b500 16%, var(--bg));
+}
+
+@media (max-width: 480px) {
+  .box-head {
+    padding: 0.5rem 0.75rem;
+  }
+
+  .readme-body {
+    padding: 0.25rem 1rem 1rem;
+  }
+
+  .code td:first-child {
+    padding: 0 0.75rem;
+  }
 }

@@ -1,25 +1,42 @@
-import { useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 
 type Summary = { slug: string; date: string | null; title: string; excerpt: string | null; draft: boolean };
 type Post = Summary & { html: string };
+type Project = { name: string; files: string[]; readme_html: string | null };
+type CodeFile = { path: string; html?: string; binary?: true };
 
 // shortcut: plain links and pathname matching, no router. Add react-router when there are more pages.
 const slug = location.pathname.match(/^\/posts\/([a-z0-9-]+)\/?$/)?.[1];
+// /code, /code/<project>, /code/<project>/<path>; the path stays URL-encoded.
+const code = location.pathname.match(/^\/code(?:\/([a-z0-9-]+)(?:\/(.+?))?)?\/?$/);
+const IMAGE = /\.(png|jpe?g|webp|gif|svg)$/i;
 
 export default function App() {
+  return <main>{page()}</main>;
+}
+
+function page() {
+  if (slug) return <PostPage slug={slug} />;
+  if (code?.[2]) return <CodeFilePage project={code[1]} path={code[2]} />;
+  if (code?.[1]) return <ProjectPage name={code[1]} />;
   return (
-    <main>
-      {slug ? (
-        <PostPage slug={slug} />
-      ) : (
-        <>
-          <header>
-            <a href="/">neenerweener</a>
-          </header>
-          <PostList />
-        </>
-      )}
-    </main>
+    <>
+      <header>
+        <a href="/">neenerweener</a>
+        <a className="nav" href="/code">
+          code
+        </a>
+      </header>
+      {code ? <ProjectList /> : <PostList />}
+    </>
+  );
+}
+
+function Back({ href }: { href: string }) {
+  return (
+    <a className="back" href={href} aria-label="back">
+      ←
+    </a>
   );
 }
 
@@ -88,11 +105,7 @@ function PostPage({ slug }: { slug: string }) {
       );
     }
   }, [data]);
-  const back = (
-    <a className="back" href="/" aria-label="back">
-      ←
-    </a>
-  );
+  const back = <Back href="/" />;
   if (error)
     return (
       <p className="muted has-back">
@@ -109,6 +122,117 @@ function PostPage({ slug }: { slug: string }) {
       {data.date && <time>{data.date}</time>}
       {/* Posts are Henry's own files, rendered server side. */}
       <div ref={body} dangerouslySetInnerHTML={{ __html: data.html }} />
+    </article>
+  );
+}
+
+function ProjectList() {
+  const { data, error } = useApi<string[]>("/api/code");
+  if (error) return <p className="muted">could not load projects</p>;
+  if (!data) return null;
+  if (!data.length) return <p className="muted">no projects yet</p>;
+  return (
+    <ul className="posts">
+      {data.map((name) => (
+        <li key={name}>
+          <a href={`/code/${name}`}>{name}</a>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function ProjectPage({ name }: { name: string }) {
+  const { data, error } = useApi<Project>(`/api/code/${name}`);
+  useEffect(() => {
+    document.title = name;
+  }, [name]);
+  const back = <Back href="/code" />;
+  if (error)
+    return (
+      <p className="muted has-back">
+        {back}project not found
+      </p>
+    );
+  if (!data) return null;
+  return (
+    <article>
+      <h1 className="has-back">
+        {back}
+        {data.name}
+      </h1>
+      <FileTree project={data.name} files={data.files} />
+      {/* The README is Henry's own file, rendered server side. */}
+      {data.readme_html && <div dangerouslySetInnerHTML={{ __html: data.readme_html }} />}
+    </article>
+  );
+}
+
+type Tree = Map<string, Tree | null>;
+
+// Indented by depth, directories before files.
+function FileTree({ project, files }: { project: string; files: string[] }) {
+  const root: Tree = new Map();
+  for (const file of files) {
+    const parts = file.split("/");
+    let node = root;
+    for (const dir of parts.slice(0, -1)) {
+      if (!node.has(dir)) node.set(dir, new Map());
+      node = node.get(dir)!;
+    }
+    node.set(parts[parts.length - 1], null);
+  }
+  const rows: ReactNode[] = [];
+  const walk = (node: Tree, prefix: string, depth: number) => {
+    const entries = [...node].sort(([, a], [, b]) => Number(!a) - Number(!b));
+    for (const [name, child] of entries) {
+      const path = prefix + name;
+      rows.push(
+        <li key={path} style={{ paddingLeft: `${depth * 2}ch` }}>
+          {child ? (
+            <span className="muted">{name}/</span>
+          ) : (
+            <a href={`/code/${project}/${path.split("/").map(encodeURIComponent).join("/")}`}>{name}</a>
+          )}
+        </li>,
+      );
+      if (child) walk(child, path + "/", depth + 1);
+    }
+  };
+  walk(root, "", 0);
+  return <ul className="tree">{rows}</ul>;
+}
+
+function CodeFilePage({ project, path }: { project: string; path: string }) {
+  const { data, error } = useApi<CodeFile>(`/api/code/${project}/file/${path}`);
+  const title = decodeURIComponent(path);
+  useEffect(() => {
+    document.title = title;
+  }, [title]);
+  const back = <Back href={`/code/${project}`} />;
+  if (error)
+    return (
+      <p className="muted has-back">
+        {back}file not found
+      </p>
+    );
+  if (!data) return null;
+  return (
+    <article>
+      <h1 className="has-back code-path">
+        {back}
+        {title}
+      </h1>
+      {IMAGE.test(title) ? (
+        <img className="code-image" src={`/code-raw/${project}/${path}`} alt={title} />
+      ) : data.html === undefined ? (
+        <p className="muted">binary file</p>
+      ) : (
+        <pre className="code-file">
+          {/* Highlighted server side by Pygments, which escapes the source. */}
+          <code dangerouslySetInnerHTML={{ __html: data.html }} />
+        </pre>
+      )}
     </article>
   );
 }

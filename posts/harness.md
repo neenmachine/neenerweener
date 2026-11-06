@@ -129,4 +129,4 @@ when i wake up, i get a couple of messages:
 * thing Y happened overnight
 * person Z emailed you, heres a drafted response
 
-there is so much more to come. i need to find a better way to organize these blogs specifically about harness engineering.
+there is so much more to come. 

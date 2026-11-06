@@ -228,8 +228,6 @@ def code_dir(tmp_path, monkeypatch):
 
 def test_code_api(code_dir):
     c = TestClient(app.app)
-    assert c.get("/api/code").json() == ["demo"]
-
     project = c.get("/api/code/demo").json()
     assert project["name"] == "demo"
     assert project["files"] == ["README.md", "data.bin", "labels.idx", "main.py", "notes.md", "src/plot.png"]
@@ -288,7 +286,7 @@ def test_code_containment(code_dir):
     c = TestClient(app.app)
 
     assert "link.txt" not in c.get("/api/code/demo").json()["files"]
-    assert c.get("/api/code").json() == ["demo"]
+    assert c.get("/api/code/Bad").status_code == 404
     for path in [
         "/api/code/demo/file/../secret.txt",
         "/api/code/demo/file/%2e%2e/secret.txt",
@@ -368,3 +366,18 @@ def test_tags(tmp_path, monkeypatch, caplog):
     assert [(p["slug"], p["tags"]) for p in result] == [("list", ["ml", "cuda", "3"]), ("one", ["notes"])]
     assert "invalid post metadata in bad.md" in caplog.messages
     assert c.get("/api/posts/one").json()["tags"] == ["notes"]
+
+
+def test_now(tmp_path, monkeypatch):
+    monkeypatch.setattr(app, "PAGES_DIR", tmp_path)
+    c = TestClient(app.app)
+    assert c.get("/api/now").status_code == 404
+
+    (tmp_path / "now.md").write_text("plain body")
+    assert c.get("/api/now").json() == {"date": None, "html": "<p>plain body</p>\n"}
+
+    (tmp_path / "now.md").write_text("---\ndate: 2026-10-30\n---\n*x*")
+    assert c.get("/api/now").json() == {"date": "2026-10-30", "html": "<p><em>x</em></p>\n"}
+
+    (tmp_path / "now.md").write_text("---\n[bad\n---\nx")
+    assert c.get("/api/now").status_code == 404

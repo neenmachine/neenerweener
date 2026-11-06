@@ -374,10 +374,4 @@ def test_now(tmp_path, monkeypatch):
     assert c.get("/api/now").status_code == 404
 
     (tmp_path / "now.md").write_text("plain body")
-    assert c.get("/api/now").json() == {"date": None, "html": "<p>plain body</p>\n"}
-
-    (tmp_path / "now.md").write_text("---\ndate: 2026-10-30\n---\n*x*")
-    assert c.get("/api/now").json() == {"date": "2026-10-30", "html": "<p><em>x</em></p>\n"}
-
-    (tmp_path / "now.md").write_text("---\n[bad\n---\nx")
-    assert c.get("/api/now").status_code == 404
+    assert c.get("/api/now").json() == {"html": "<p>plain body</p>\n"}

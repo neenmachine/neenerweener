@@ -16,7 +16,7 @@ Everything else: the site, backend, frontend, styling, deployment, demos, toolin
 
 - `posts/` - Henry's posts as Markdown in `<slug>.md` files. Each file starts with YAML frontmatter, for example `title: ...`, `date: 2026-03-28`, and optional `excerpt: ...` and `tags: [a, b]` (lowercased; the home page filters by `/?tag=<tag>`). Rendering: CommonMark plus tables and strikethrough, `$...$` / `$$...$$` math, raw HTML allowed, code blocks highlighted by Pygments on the server, ` ```mermaid ` blocks drawn in the browser.
 - `posts/images/` - post images, served at `/images/<file>`. Write them as `![alt](/images/<file>)`.
-- `pages/now.md` - Henry's /now page; optional frontmatter `date:` (last updated). The header shows a `now` link only when this file exists.
+- `pages/now.md` - Henry's /now page; plain Markdown, no frontmatter. The header shows a `now` link only when this file exists.
 - `drafts/` - local-only draft posts in `<slug>.md` files; YAML frontmatter is optional. Drafts are shown when `SHOW_DRAFTS=1`.
 - `code/<project>/` - snapshots from `make code-sync`; never edit by hand; contents are Henry's. Shown at `/code/<project>/<path>` for linking from posts; there is no project index or nav link.
 - `scripts/code_sync.py` - the snapshot script behind `make code-sync`.

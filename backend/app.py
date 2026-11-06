@@ -160,15 +160,12 @@ def get_post(slug: str):
 
 @app.get("/api/now")
 def get_now():
-    """pages/now.md: frontmatter is optional; `date:` is when Henry last updated it."""
+    """pages/now.md: plain Markdown, no frontmatter."""
     try:
-        metadata, body = split_frontmatter((PAGES_DIR / "now.md").read_text(encoding="utf-8-sig"))
-    except FileNotFoundError:
+        text = (PAGES_DIR / "now.md").read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeDecodeError):
         raise HTTPException(404, "not found")
-    except (OSError, ValueError):
-        logger.warning("invalid frontmatter in now.md")
-        raise HTTPException(404, "not found")
-    return {"date": parse_date((metadata or {}).get("date")), "html": md.render(body)}
+    return {"html": md.render(text)}
 
 
 # check_dir=False: the app still starts when POSTS_DIR has no images folder.

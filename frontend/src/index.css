@@ -115,11 +115,6 @@ article .meta {
   margin-bottom: 2rem;
 }
 
-.updated {
-  display: block;
-  margin-bottom: 2rem;
-}
-
 /* Tags: plain muted links, no chips. */
 .tags {
   display: flex;

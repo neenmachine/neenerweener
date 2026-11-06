@@ -2,7 +2,7 @@ import { type ReactNode, useEffect, useRef, useState } from "react";
 
 type Summary = { slug: string; date: string | null; title: string; excerpt: string | null; tags: string[]; draft: boolean };
 type Post = Summary & { html: string };
-type Now = { date: string | null; html: string };
+type Now = { html: string };
 type Project = { name: string; files: string[]; readme_html: string | null };
 type CodeFile = { path: string; html?: string; binary?: true };
 
@@ -56,7 +56,6 @@ function NowPage() {
   if (!data) return null;
   return (
     <article>
-      {data.date && <time className="updated">updated {data.date}</time>}
       {/* Henry's own file, rendered server side. */}
       <div dangerouslySetInnerHTML={{ __html: data.html }} />
     </article>

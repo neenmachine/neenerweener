@@ -16,34 +16,40 @@ const now = /^\/now\/?$/.test(location.pathname);
 const tag = new URLSearchParams(location.search).get("tag");
 const IMAGE = /\.(png|jpe?g|webp|gif|svg)$/i;
 
+// API responses the server put into the page (backend `preload`), so the first render needs no fetch.
+// null means the server answered 404.
+const preloaded: Record<string, unknown> = JSON.parse(document.getElementById("preload")?.textContent || "{}");
+
 export default function App() {
   // Project pages are wider, like a repo browser, so long code lines fit.
-  return <main className={code ? "wide" : undefined}>{page()}</main>;
-}
-
-function page() {
-  if (slug) return <PostPage slug={slug} />;
-  if (code) return <ProjectPage name={code[1]} path={code[2] ? decodeURIComponent(code[2]) : ""} />;
+  if (code)
+    return (
+      <main className="wide">
+        <ProjectPage name={code[1]} path={code[2] ? decodeURIComponent(code[2]) : ""} />
+      </main>
+    );
   return (
-    <>
-      <Header />
-      {now ? <NowPage /> : <PostList />}
-    </>
+    <main>
+      {slug ? <PostPage slug={slug} /> : now ? <NowPage /> : <PostList />}
+      <Footer />
+    </main>
   );
 }
 
 // The "now" link shows only once Henry has written pages/now.md.
-function Header() {
+function Footer() {
   const { data } = useApi<Now>("/api/now");
   return (
-    <header>
-      <a href="/">neenerweener</a>
+    <footer>
+      <a href="/" aria-current={!slug && !now && !tag ? "page" : undefined}>
+        neenerweener
+      </a>
       {(data || now) && (
-        <a className="nav" href="/now" aria-current={now ? "page" : undefined}>
+        <a href="/now" aria-current={now ? "page" : undefined}>
           now
         </a>
       )}
-    </header>
+    </footer>
   );
 }
 
@@ -71,9 +77,11 @@ function Back({ href }: { href: string }) {
 }
 
 function useApi<T>(url: string) {
-  const [data, setData] = useState<T>();
-  const [error, setError] = useState(false);
+  const known = url in preloaded;
+  const [data, setData] = useState<T | undefined>(() => (preloaded[url] ?? undefined) as T | undefined);
+  const [error, setError] = useState(() => known && preloaded[url] === null);
   useEffect(() => {
+    if (known) return;
     fetch(url)
       .then((r) => (r.ok ? r.json() : Promise.reject()))
       .then(setData, () => setError(true));
@@ -146,12 +154,13 @@ function PostPage({ slug }: { slug: string }) {
       import("mermaid").then(({ default: mermaid }) => {
         mermaid.initialize({
           startOnLoad: false,
-          theme: "neutral",
+          theme: matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "neutral",
           fontFamily: "-apple-system, BlinkMacSystemFont, sans-serif",
         });
         mermaid.run({ nodes: diagrams });
       });
     }
+    body.current?.querySelectorAll("pre:not(.mermaid)").forEach(addCopyButton);
     const math = body.current?.querySelectorAll<HTMLElement>(".math");
     if (math?.length) {
       // KaTeX is large, so only posts with math load it and its CSS.
@@ -188,6 +197,25 @@ function PostPage({ slug }: { slug: string }) {
       <div ref={body} dangerouslySetInnerHTML={{ __html: data.html }} />
     </article>
   );
+}
+
+// Wraps a post code block so a "copy" button can sit in its corner.
+function addCopyButton(pre: Element) {
+  if (pre.parentElement?.classList.contains("pre-wrap")) return;
+  const wrap = document.createElement("div");
+  wrap.className = "pre-wrap";
+  pre.replaceWith(wrap);
+  wrap.append(pre);
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "copy";
+  button.textContent = "copy";
+  button.onclick = () =>
+    navigator.clipboard.writeText(pre.textContent ?? "").then(() => {
+      button.textContent = "copied";
+      setTimeout(() => (button.textContent = "copy"), 1500);
+    });
+  wrap.append(button);
 }
 
 const href = (project: string, path: string) =>

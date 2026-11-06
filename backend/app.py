@@ -1,15 +1,17 @@
+import json
 import logging
 import os
 import posixpath
 import re
 from datetime import date, datetime
-from html import escape
+from html import escape, unescape
+from urllib.parse import quote
 from pathlib import Path
 
 import yaml
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from markdown_it import MarkdownIt
 from mdit_py_plugins.dollarmath import dollarmath_plugin
@@ -144,6 +146,14 @@ def all_posts() -> list[dict]:
     return sorted(posts, key=lambda p: (p["date"] is None, p["date"] or ""), reverse=True)
 
 
+# A paragraph holding only an image with a title, ![alt](src "caption"), becomes a figure with that caption.
+CAPTIONED = re.compile(r'<p>(<img [^>]*?title="([^"]*)"[^>]*>)</p>')
+
+
+def render_post(body: str) -> str:
+    return CAPTIONED.sub(r"<figure>\1<figcaption>\2</figcaption></figure>", md.render(body))
+
+
 @app.get("/api/posts")
 def list_posts():
     return [{k: p[k] for k in ("slug", "date", "title", "excerpt", "tags", "draft")} for p in all_posts()]
@@ -154,7 +164,7 @@ def get_post(slug: str):
     for p in all_posts():
         if p["slug"] == slug:
             body = p.pop("body")
-            return {**p, "html": md.render(body)}
+            return {**p, "html": render_post(body)}
     raise HTTPException(404, "post not found")
 
 
@@ -270,6 +280,69 @@ def frontend(path: str):
     if requested:
         return FileResponse(requested)
     index = contained_file(root, "index.html")
-    if index:
+    if not index:
+        raise HTTPException(404, "not found")
+    page = page_data(path)
+    if page is None:
         return FileResponse(index)
-    raise HTTPException(404, "not found")
+    return HTMLResponse(fill_index(index.read_text(encoding="utf-8"), *page))
+
+
+def page_data(path: str) -> tuple[dict, dict, str] | None:
+    """For the home, /now and post pages: the API responses the page needs (null for a 404),
+    its <head> tags, and markup shown before the scripts run. None for other pages."""
+    path = path.strip("/")
+    preload: dict = {}
+    head = {"title": "neenerweener"}
+    markup = ""
+    try:
+        preload["/api/now"] = get_now()
+    except HTTPException:
+        preload["/api/now"] = None
+    if path == "":
+        preload["/api/posts"] = list_posts()
+    elif (m := re.fullmatch(r"posts/([a-z0-9-]+)", path)):
+        url = f"/api/posts/{m[1]}"
+        try:
+            post = get_post(m[1])
+        except HTTPException:
+            preload[url] = None
+        else:
+            preload[url] = post
+            head = {"title": post["title"], "description": post["excerpt"] or summary(post["html"])}
+            markup = post_markup(post)
+    elif path != "now":
+        return None
+    return preload, head, markup
+
+
+def summary(html: str, limit: int = 200) -> str:
+    """The start of the first paragraph as plain text, for link previews."""
+    first = re.search(r"<p>(.*?)</p>", html, re.S)
+    text = re.sub(r"<[^>]+>", "", first[1]) if first else ""
+    text = " ".join(unescape(text).split())
+    return text if len(text) <= limit else text[: limit - 1].rsplit(" ", 1)[0] + "…"
+
+
+def post_markup(post: dict) -> str:
+    # Mirrors PostPage in App.tsx so the swap to the React page is not visible.
+    tags = "".join(f'<a href="/?tag={quote(t)}">#{escape(t)}</a>' for t in post["tags"])
+    return (
+        '<main><article><h1 class="has-back"><a class="back" href="/" aria-label="back">←</a>'
+        f'{escape(post["title"])}</h1><div class="meta"><span class="tags">{tags}</span></div>'
+        f'<div>{post["html"]}</div></article></main>'
+    )
+
+
+def fill_index(index: str, preload: dict, head: dict, markup: str) -> str:
+    tags = [f"<title>{escape(head['title'])}</title>", f'<meta property="og:title" content="{escape(head["title"])}" />',
+            '<meta property="og:site_name" content="neenerweener" />']
+    if head.get("description"):
+        tags += [f'<meta name="description" content="{escape(head["description"])}" />',
+                 f'<meta property="og:description" content="{escape(head["description"])}" />']
+    # "<" escaped so post text cannot close the script tag.
+    data = json.dumps(preload).replace("<", "\\u003c")
+    tags.append(f'<script id="preload" type="application/json">{data}</script>')
+    index = re.sub(r"<title>.*?</title>", "", index, count=1, flags=re.S)
+    index = index.replace("</head>", "\n".join(tags) + "\n</head>", 1)
+    return re.sub(r'<div id="root">\s*</div>', lambda _: f'<div id="root">{markup}</div>', index, count=1)

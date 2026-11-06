@@ -1,6 +1,7 @@
 ---
 title: things i've built with my harness
 date: 10/26/2026
+tags: [engineering, harnesses]
 ---
 
 one of the nicest things about having your own harness is the surface of application, especially in a world where every company is essentially building "harnesses for X/Y/Z"

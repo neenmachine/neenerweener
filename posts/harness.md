@@ -1,6 +1,7 @@
 ---
 title: harness
 date: 10/21/2026
+tags: [engineering, harnesses]
 ---
 
 i've been working on my own harness for a while. out of everything i've built, a 0 -> 1 harness has been the most rewarding project i've worked on, and also the most frustrating to get right. it took me a long time to get it to a point where i can use my own harness as a daily driver for everyday work. 

@@ -1,6 +1,7 @@
 ---
 title: neenerweener
 date: 10/20/2026
+tags: personal
 ---
 
 `neenerweener` is a dumb spam account name that i came up with in high school. i really do like the alias though.

@@ -74,10 +74,20 @@ main {
   padding: 3rem 1.25rem 6rem;
 }
 
+/* Pages with a footer fill the window, so a short page still has its footer at the bottom. */
+main:has(> footer) {
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh;
+  box-sizing: border-box;
+  padding-bottom: 2.5rem;
+}
+
 footer {
   display: flex;
   gap: 1.5rem;
-  margin-top: 5rem;
+  margin-top: auto;
+  padding-top: 5rem;
   font-size: 0.9em;
 }
 

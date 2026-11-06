@@ -1,94 +1,83 @@
 ---
-title: harness engineering
+title: agent harnesses
 date: 10/21/2026
 tags: engineering
 ---
 
-> preface: this is going to be a long running article about harness engineering. i will update this post continuously throughout the future
+originally, i was going to write multiple blog posts talking about aspects of agent harnesses, but it got too out of hand. 
 
-i've been working on my own harness for a while. out of everything i've built, a 0 -> 1 harness has been the most rewarding project i've worked on, and also the most frustrating to get right. it took me a long time to get it to a point where i can use my own harness as a daily driver for everyday work. 
-
-one of the greatest things about building your own harness is extensibility. you can build any tool, any micro-interaction can be fine tuned to your expectations, you can implement the most modern compaction mechanisms... yada yada yada.
-
-how do you know when to stop?
+this is going to be a long running post about agent harnesses, and what i've learnt as i continue to work on my own harness.
 
 ## my first agent "harness"
-a couple months before i built my new harness, i started getting more into the dangerous realm of the agentic side of twitter. i had a general idea of a workflow that i enjoyed, which eventually evolved to become something like an orchestrator -> subagent workflow. managing these workflows in claude code and codex separately was hard. claude loved subagents, but would kill my max plan in like ~20 minutes; codex hated subagents and refused to spawn any unless i specifically asked for them.
+a couple months before i started working on this harness, i started to experiment with custom workflows built around claude code and codex.
 
-so i built my own little thing. in the moment, i thought i was the greatest to ever do it. looking back now, i'm pretty sure i was in a state most people would identify as ai psychosis. 
+as a long time tmux user, i opted into just giving my agents tools to interact with each other using tmux commands. this is where i first started playing around with orchestrator/subagent workflows.
 
-it was a gui written in rust, which started an mcp server on launch with tools to do a very minimal set of things: spawning subagents, sending messages between agents, etc. it also happened to be like 80k lines of code...
+eventually i realized tmux windows were too difficult to navigate around, and i lacked customizability. so i spent a couple hours one evening building a simple GUI in rust... except it wasn't that simple. since i was still using native claude code & codex, the GUI would essentially have to spawn a headless claude code session, and then send instructions there.
 
-i used it as my daily driver for a good while. it worked, but not super well. every issue that i had was immediately resolved by forward fixes that introduced 10 more nits that i didn't like. scope creeps amirite.
+parsing was a whole other thing. my first approach to displaying agent runs in the rust GUI was to explicitly define UI components for every single type of event that i saw in claude's and codex's JSONL files. this was a pain in the ass. things like asking user questions were a nightmare to try and get around, and i really really tried.
 
-so, i scrapped it after 2 months, rethought what i really needed with a daily driver, and started working on my own new thing.
+within this GUI, i also had an MCP server launch with very a very minimal set of tools: spawning subagents, sending messages between agents, etc.
 
-## motivation
-at the time, i was heavily inspired by the engineering paradigms that motivated the creation of [pi](https://github.com/earendil-works/pi). i loved the idea that a harness with 4 simple tools could be extended to be a daily driver.
+this eventually grew as i kept maintaining it and forward fixing a bunch of issues that i found while daily driving the gui.
 
-i considered simply forking pi, adding some tools and extensions and calling it a day. ultimately, i decided against it primarily for the reason that i wanted to learn, and forking isn't learning. 
+so after 2 months of daily bug fixes, issues with "harnessing" claude code and codex, and constant crashes, i scrapped it.
 
-the current state of agent harnesses oddly has a lot of similarities to linux distributions: claude code & codex are ubuntu, pi is arch linux, the rest of them are.... somewhere in between the two.
+## a minimal harness
+at the time, i was heavily inspired by the engineering paradigms that inspired the creation of [pi](https://github.com/earendil-works/pi)
 
-looking back, i never learnt as much about computers, and programming, as i did when i spent hundreds of hours setting up and using arch linux as my daily driver. the lessons from that never really left me: i'm still a neovim fanatic, i love tmux till this day, and nearly 99% of my everyday work is done through terminal interfaces. 
+the current state of agent harnesses oddly has a lot of similarities to linux distributions: cc & codex are ubuntu, pi is arch linux, and the rest of them are... somewhere in between.
 
-## a harness in a haystack of harnesses
-after about 90k LOC, here is the current state of my harness. 
+i wanted my harness to contain the minimal set of tools required for my day to day workflows. kind of like tool golf.
 
-### standard tooling
+### tools
+after about ~70k LOC, here is the state of my harness:
+#### standard tooling
 * `bash`: execute bash commands
-* `edit`: edit a file
+* `edit`: edit file
 * `write`: write a new file
 * `read`: read a file
-* `load_skill`: load skills
-* `fetch`: fetch contents from url
+* `load_skill`: load a skill
+* `fetch`: fetch webpage source
 * `websearch`: natural language web search
-* `todo`: crud tool for agent managed todo lists
-* background tasks: `task_input`, `task_output`, `run_background`
-* mcp support
+* `todo`: simple CRUD tool for agent managed task lists
+* `tasks`: standard operations for tasks (`input`, `output`, `run_bg`)
+* `subagent`: `spawn`, `cancel`, `output`, `send`, `status`
+* MCP support
 
-### generic subagent tooling
-* `spawn`: spawn subagents
-* `cancel`: cancel subagent run
-* `output`: get subagent output
-* `send`: send message to active subagent
-* `status`: get the status of a subagent
+### subagent profiles
+something that ive added to my harness is subagent profiles, which define tool scope, handoff prompts, default models, etc. 
 
-subagents also have profiles, which specify tool scope (investigation subagents don't get write tools, etc), handoff prompt, default models, etc. this allows me to turn a workflow into something reusable overtime. 
+for example, i have an oncall profile that just polls every 10 minutes for any bugs/alerts and raises them to the orchestrator. the orchestrator can then choose whether or not to act on these issues.
 
 ### attention
-i like not being in the loop all the time. i prefer my agents to do a lot of work autonomously. i don't like having to answer obvious questions, and having to constantly worry about projects being blocked on user decisions.
+i like not being in the loop all the time. i prefer for agents to do a lot of work autonomously, and only ask questions that require a human decision.
 
-something that i've found extremely helpful is allowing agents to decide whether or not a question truly needs a human decision. if so, they can ask me questions through `request_attention` which i can then check with `/decisions`.
+to know when an agent needs my opinion, agents ask me blocking questions through an `request_attention` tool, which i can then check with `/decisions` in the TUI.
 
 ![decision example](/images/decisions.png)
 
-it's especially nice since agents can defer blocking decisions until i answer, and continue working on the unblocked paths. 
-
-if i need more context associated with a decision, its configured so that i can chat with a fork of the orchestrator run from the point where it asked me about the decision, so i don't have to interrupt the main orchestrator.
+if i need more context associated with a question, i can choose to chat with a fork of the main orchestrator run from a checkpoint, which is created when the orchestrator initially calls the `request_attention` tool
 
 ### projects
-as a natural consequence of the adoption of orchestrator workflows, it made sense to link each project to an active orchestrator run.
+something that i've also found useful is linking projects to active orchestrator runs.
 
-while this puts restrictions on having multiple simultaneous orchestrators for one project, i've found that this is a limitation that can be easily accepted, especially since i never need more than one orchestrator working on a project at a time.
+in my day to day workflows, its highly uncommon that i have 2 orchestrators working on the same project. 
 
-i've built most of my workflows around this known constraint, but it has opened a couple of important doors for me, most importantly: each project can have a unique system prompt associated with it, so that i can specify different workflows for different projects.
+this allows me to define a couple things:
+* a method of communication between different project orchestrators
+* project specific system prompts & subagent profiles
 
-the base system prompt never changes, but its short and simple: introducing tool use, speaking tone/structure, and identity. project specific system prompts are loaded on top of this base system prompt.
+#### p2p communication
+its incredibly nice to have orchestrators for different projects interact with each other. most of what i work on is somehow correlated to each other (a lot of it revolves around my harness).
 
-i'm aware the conventional way to do this is through an `AGENTS.md` file in the project directory, but working on a multi-contributor project makes it difficult to use `AGENTS.md` for **my** specific workflows. in my mental model, `AGENTS.md` is used for more project specific guidance, not for workflow specific instructions. 
+when building things like my messaging agent (will talk about this later) its useful to have my messaging orchestrator request features from my harness orchestrator, so it doesnt have to step outside of its own bounds.
 
-i've found that project specific system prompts have worked very well for me. i work through/experiment with dozens of different ideas a week, and an idea that i'm trying to one shot/prototype with **needs** vastly different instructions in comparison to a project that i'm heavily engaged in and constantly giving new ideas/inputs to.
+research tasks for any project are sent to a research worker. this orchestrator does pretty much all of my web searches and online research for me, and compiles them into a knowledge vault.
 
-furthermore, not all projects that i enjoy working on are engineering related. for example, i have a research project that formats research in a specific way that i can digest easily: videos, interactive HTML pages, etc. ultimately, its just easier for me to apply my different intrinsic workflows across different types of projects.
+ive found this structure to be really helpful in structuring work so that at one time, agents in a project are ONLY working on that project.
 
-as a natural extension of this, its nice to be able to have orchestrators for different projects talk to each other. i almost always have orchestrators running on my work laptop: one for work, one for research, and one for work on the harness. i've taught my agents to be pretty seamless at communicating with each other: research questions go to the research orchestrator, issues with my agent harness to the harness specific orchestrator, and it autonomously validates and patches the bug.
-
-## things i've built
-i've done so many things with my harness. i built my own messaging agent by extending it to give it tools to send messages using linq. now it sends me a daily digest in the morning before i go to work.
-
-i named the messaging agent `ween`, it runs on my old laptop at home, active 24/7. its especially nice to be able to text it to ask for progress updates on my other orchestrators when i'm outside dilly dallying, which it does through `ssh` and `tmux` (so useful right!?) 
-
+## `ween`: my messaging agent
 one of the nicest things about having your own harness is the surface of application, especially in a world where every company is essentially building "harnesses for X/Y/Z"
 
 while these companies are distributing and hardening these harnesses to be scaled to thousands (or even millions) of daily active users, rebuilding parts of their project i find interesting only has to serve me.
@@ -102,9 +91,6 @@ if i wanted to build a texting agent, i wouldn't have to care about scale, or co
 the great thing about this era of software engineering is that 99% of companies that i find very cool mostly revolve around building really really good harnesses for a specific task.
 
 whenever i have a free weekend, i try to spend a couple hours throwing together a similar product, on top of my own harness, and just have it live on my home lab.
-
-### messaging agents
-> ween: a personal messaging agent, built on top of my own harness.
 
 traditionally, i am not a big fan of messaging agents. it comes down to two things:
 1. theyre too chatty

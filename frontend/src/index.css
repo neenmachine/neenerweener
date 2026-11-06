@@ -1,12 +1,12 @@
-@import "@fontsource-variable/jetbrains-mono/wght.css";
-@import "@fontsource-variable/jetbrains-mono/wght-italic.css";
+@import "@fontsource-variable/geist-mono/wght.css";
+@import "@fontsource-variable/geist-mono/wght-italic.css";
 
 :root {
   color-scheme: light;
   --fg: #1a1a1a;
   --muted: #777;
   --bg: #fdfdfc;
-  font: 15px/1.7 "JetBrains Mono Variable", ui-monospace, Menlo, monospace;
+  font: 14px/1.7 "Geist Mono Variable", ui-monospace, Menlo, monospace;
   color: var(--fg);
   background: var(--bg);
   -webkit-font-smoothing: antialiased;
@@ -17,7 +17,7 @@ body {
 }
 
 main {
-  max-width: 44rem;
+  max-width: 52rem;
   margin: 0 auto;
   padding: 3rem 1.25rem 6rem;
 }
@@ -108,9 +108,43 @@ h1 {
   text-wrap: balance;
 }
 
-article time {
-  display: block;
+article .meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 1.5rem;
   margin-bottom: 2rem;
+}
+
+/* Tags: plain muted links, no chips. */
+.tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 1ch;
+  font-size: 0.9em;
+}
+
+.tags a,
+.tag-filter a {
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.tags a:hover,
+.tag-filter a:hover {
+  color: var(--fg);
+}
+
+.tag-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1.5ch;
+  margin: -1.5rem 0 1.5rem;
+  font-size: 0.9em;
+}
+
+.tag-filter a[aria-current] {
+  color: var(--fg);
+  text-decoration: underline;
 }
 
 article img {
@@ -222,7 +256,78 @@ header .nav[aria-current] {
 }
 
 main.wide {
-  max-width: 64rem;
+  max-width: 84rem;
+}
+
+/* Repo layout: a file tree on the left, the folder or file on the right. */
+.repo {
+  display: grid;
+  grid-template-columns: 15rem minmax(0, 1fr);
+  gap: 2rem;
+  align-items: start;
+}
+
+.tree {
+  position: sticky;
+  top: 1.5rem;
+  max-height: calc(100vh - 3rem);
+  overflow-y: auto;
+  font-size: 0.9em;
+}
+
+.tree ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.tree :is(a, button) {
+  display: block;
+  width: 100%;
+  padding: 0.15rem 0.75rem;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  text-align: left;
+  text-decoration: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.tree :is(a, button):hover {
+  color: var(--fg);
+  background: color-mix(in srgb, var(--fg) 4%, var(--bg));
+}
+
+.tree [aria-current] {
+  color: var(--fg);
+  background: color-mix(in srgb, var(--fg) 6%, var(--bg));
+}
+
+.tree .tree-root {
+  margin-bottom: 0.25rem;
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.tree :focus-visible {
+  outline: 2px solid #2448c2;
+  outline-offset: -2px;
+}
+
+/* No room for the tree on narrow screens; the folder listing still navigates. */
+@media (max-width: 760px) {
+  .repo {
+    display: block;
+  }
+
+  .tree {
+    display: none;
+  }
 }
 
 .crumbs {
@@ -283,9 +388,7 @@ main.wide {
 }
 
 .listing a {
-  display: flex;
-  align-items: center;
-  gap: 1.25ch;
+  display: block;
   padding: 0.4rem 1rem;
   text-decoration: none;
 }
@@ -297,21 +400,6 @@ main.wide {
 .listing a:hover,
 .listing a:focus-visible {
   text-decoration: underline;
-}
-
-.icon {
-  flex: none;
-  width: 1em;
-  height: 1em;
-  fill: none;
-  stroke: var(--muted);
-  stroke-width: 1.2;
-  stroke-linejoin: round;
-}
-
-.icon.dir {
-  fill: #8aa4c8;
-  stroke: none;
 }
 
 .readme-body {

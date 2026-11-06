@@ -1,6 +1,6 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
 
-type Summary = { slug: string; date: string | null; title: string; excerpt: string | null; draft: boolean };
+type Summary = { slug: string; date: string | null; title: string; excerpt: string | null; tags: string[]; draft: boolean };
 type Post = Summary & { html: string };
 type Project = { name: string; files: string[]; readme_html: string | null };
 type CodeFile = { path: string; html?: string; binary?: true };
@@ -9,6 +9,8 @@ type CodeFile = { path: string; html?: string; binary?: true };
 const slug = location.pathname.match(/^\/posts\/([a-z0-9-]+)\/?$/)?.[1];
 // /code, /code/<project>, /code/<project>/<path>, where the path is a folder or a file.
 const code = location.pathname.match(/^\/code(?:\/([a-z0-9-]+)(?:\/(.+?))?)?\/?$/);
+// /?tag=<tag> filters the post list.
+const tag = new URLSearchParams(location.search).get("tag");
 const IMAGE = /\.(png|jpe?g|webp|gif|svg)$/i;
 
 export default function App() {
@@ -51,24 +53,57 @@ function useApi<T>(url: string) {
   return { data, error };
 }
 
+function Tags({ tags }: { tags: string[] }) {
+  if (!tags.length) return null;
+  return (
+    <span className="tags">
+      {tags.map((t) => (
+        <a key={t} href={`/?tag=${encodeURIComponent(t)}`}>
+          #{t}
+        </a>
+      ))}
+    </span>
+  );
+}
+
 function PostList() {
   const { data, error } = useApi<Summary[]>("/api/posts");
   if (error) return <p className="muted">could not load posts</p>;
   if (!data) return null;
   if (!data.length) return <p className="muted">no posts yet</p>;
+  const counts = new Map<string, number>();
+  for (const p of data) for (const t of p.tags) counts.set(t, (counts.get(t) ?? 0) + 1);
+  const shown = tag ? data.filter((p) => p.tags.includes(tag)) : data;
   return (
-    <ul className="posts">
-      {data.map((p) => (
-        <li key={p.slug}>
-          {p.date && <time>{p.date}</time>}
-          <div className="post-info">
-            <a href={`/posts/${p.slug}`}>{p.title}</a>
-            {p.excerpt && <div className="excerpt muted">{p.excerpt}</div>}
-          </div>
-          {p.draft && <span className="draft muted">draft</span>}
-        </li>
-      ))}
-    </ul>
+    <>
+      {counts.size > 0 && (
+        <nav className="tag-filter" aria-label="tags">
+          <a href="/" aria-current={tag ? undefined : "page"}>
+            all
+          </a>
+          {[...counts].sort(([a], [b]) => a.localeCompare(b)).map(([t, n]) => (
+            <a key={t} href={`/?tag=${encodeURIComponent(t)}`} aria-current={t === tag ? "page" : undefined}>
+              #{t}
+              <span className="muted"> {n}</span>
+            </a>
+          ))}
+        </nav>
+      )}
+      {!shown.length && <p className="muted">no posts with this tag</p>}
+      <ul className="posts">
+        {shown.map((p) => (
+          <li key={p.slug}>
+            {p.date && <time>{p.date}</time>}
+            <div className="post-info">
+              <a href={`/posts/${p.slug}`}>{p.title}</a>
+              {p.excerpt && <div className="excerpt muted">{p.excerpt}</div>}
+              <Tags tags={p.tags} />
+            </div>
+            {p.draft && <span className="draft muted">draft</span>}
+          </li>
+        ))}
+      </ul>
+    </>
   );
 }
 
@@ -85,7 +120,7 @@ function PostPage({ slug }: { slug: string }) {
         mermaid.initialize({
           startOnLoad: false,
           theme: "neutral",
-          fontFamily: "JetBrains Mono Variable, monospace",
+          fontFamily: "Geist Mono Variable, monospace",
         });
         mermaid.run({ nodes: diagrams });
       });
@@ -119,7 +154,10 @@ function PostPage({ slug }: { slug: string }) {
         {back}
         {data.title} {data.draft && <span className="draft muted">draft</span>}
       </h1>
-      {data.date && <time>{data.date}</time>}
+      <div className="meta">
+        {data.date && <time>{data.date}</time>}
+        <Tags tags={data.tags} />
+      </div>
       {/* Posts are Henry's own files, rendered server side. */}
       <div ref={body} dangerouslySetInnerHTML={{ __html: data.html }} />
     </article>
@@ -138,10 +176,7 @@ function ProjectList() {
     <ul className="box listing">
       {data.map((name) => (
         <li key={name}>
-          <a href={`/code/${name}`}>
-            <Icon dir />
-            {name}
-          </a>
+          <a href={`/code/${name}`}>{name}</a>
         </li>
       ))}
     </ul>
@@ -169,7 +204,79 @@ function Crumbs({ project, path }: { project: string; path: string }) {
   );
 }
 
-// The API lists every file in the project; folders are derived from those paths.
+// Folders and files directly inside `dir`, folders first, both sorted. Folders are derived from file paths.
+function children(files: string[], dir: string) {
+  const prefix = dir && dir + "/";
+  const dirs = new Set<string>();
+  const leaves: string[] = [];
+  for (const file of files) {
+    if (!file.startsWith(prefix)) continue;
+    const [first, ...rest] = file.slice(prefix.length).split("/");
+    if (rest.length) dirs.add(first);
+    else leaves.push(first);
+  }
+  return { dirs: [...dirs].sort(), files: leaves.sort() };
+}
+
+// The left file tree, like a repo browser. Folders on the way to the open path start expanded.
+function Tree({ project, files, path }: { project: string; files: string[]; path: string }) {
+  const [open, setOpen] = useState(() => {
+    const parts = path.split("/");
+    return new Set(parts.map((_, i) => parts.slice(0, i + 1).join("/")));
+  });
+  const toggle = (dir: string) =>
+    setOpen((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(dir)) next.add(dir);
+      return next;
+    });
+  const level = (dir: string, depth: number): ReactNode => {
+    const { dirs, files: leaves } = children(files, dir);
+    const prefix = dir && dir + "/";
+    const indent = { paddingLeft: `${0.75 + depth * 1}rem` };
+    return (
+      <ul>
+        {dirs.map((d) => {
+          const full = prefix + d;
+          return (
+            <li key={d}>
+              <button
+                type="button"
+                style={indent}
+                aria-expanded={open.has(full)}
+                aria-current={full === path ? "page" : undefined}
+                onClick={() => toggle(full)}
+              >
+                {d}/
+              </button>
+              {open.has(full) && level(full, depth + 1)}
+            </li>
+          );
+        })}
+        {leaves.map((f) => (
+          <li key={f}>
+            <a
+              href={href(project, prefix + f)}
+              style={indent}
+              aria-current={prefix + f === path ? "page" : undefined}
+            >
+              {f}
+            </a>
+          </li>
+        ))}
+      </ul>
+    );
+  };
+  return (
+    <nav className="tree" aria-label="files">
+      <a className="tree-root" href={href(project, "")} aria-current={path ? undefined : "page"}>
+        {project}
+      </a>
+      {level("", 0)}
+    </nav>
+  );
+}
+
 function ProjectPage({ name, path }: { name: string; path: string }) {
   const { data, error } = useApi<Project>(`/api/code/${name}`);
   useEffect(() => {
@@ -184,72 +291,54 @@ function ProjectPage({ name, path }: { name: string; path: string }) {
       </>
     );
   if (!data) return crumbs;
-  if (data.files.includes(path)) return <FileView project={name} path={path} crumbs={crumbs} />;
-  const prefix = path && path + "/";
-  const dirs = new Set<string>();
-  const files: string[] = [];
-  for (const file of data.files) {
-    if (!file.startsWith(prefix)) continue;
-    const [first, ...rest] = file.slice(prefix.length).split("/");
-    if (rest.length) dirs.add(first);
-    else files.push(first);
-  }
-  if (!dirs.size && !files.length)
-    return (
-      <>
+  return (
+    <div className="repo">
+      <Tree project={name} files={data.files} path={path} />
+      <div className="repo-main">
         {crumbs}
-        <p className="muted">file not found</p>
-      </>
-    );
+        {data.files.includes(path) ? (
+          <FileView project={name} path={path} />
+        ) : (
+          <Folder project={data} path={path} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Folder({ project, path }: { project: Project; path: string }) {
+  const { dirs, files } = children(project.files, path);
+  if (!dirs.length && !files.length) return <p className="muted">file not found</p>;
+  const prefix = path && path + "/";
   return (
     <>
-      {crumbs}
       <ul className="box listing">
         {path && (
           <li>
-            <a href={href(name, path.split("/").slice(0, -1).join("/"))} aria-label="parent folder">
-              <Icon dir />
+            <a href={href(project.name, path.split("/").slice(0, -1).join("/"))} aria-label="parent folder">
               ..
             </a>
           </li>
         )}
-        {[...dirs].map((d) => (
+        {dirs.map((d) => (
           <li key={d}>
-            <a href={href(name, prefix + d)}>
-              <Icon dir />
-              {d}
-            </a>
+            <a href={href(project.name, prefix + d)}>{d}/</a>
           </li>
         ))}
         {files.map((f) => (
           <li key={f}>
-            <a href={href(name, prefix + f)}>
-              <Icon />
-              {f}
-            </a>
+            <a href={href(project.name, prefix + f)}>{f}</a>
           </li>
         ))}
       </ul>
       {/* The README is Henry's own file, rendered server side. */}
-      {!path && data.readme_html && (
+      {!path && project.readme_html && (
         <section className="box readme">
           <div className="box-head">README.md</div>
-          <article className="readme-body" dangerouslySetInnerHTML={{ __html: data.readme_html }} />
+          <article className="readme-body" dangerouslySetInnerHTML={{ __html: project.readme_html }} />
         </section>
       )}
     </>
-  );
-}
-
-function Icon({ dir }: { dir?: boolean }) {
-  return (
-    <svg className={dir ? "icon dir" : "icon"} viewBox="0 0 16 16" aria-hidden="true">
-      {dir ? (
-        <path d="M1.5 3.5a1 1 0 0 1 1-1h3.6l1.5 1.5h5.9a1 1 0 0 1 1 1v7.5a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1z" />
-      ) : (
-        <path d="M3.5 1.5h6l3 3v10h-9zM9.5 1.5v3h3" />
-      )}
-    </svg>
   );
 }
 
@@ -264,7 +353,7 @@ function useHash() {
   return hash;
 }
 
-function FileView({ project, path, crumbs }: { project: string; path: string; crumbs: ReactNode }) {
+function FileView({ project, path }: { project: string; path: string }) {
   const encoded = path.split("/").map(encodeURIComponent).join("/");
   const { data, error } = useApi<CodeFile>(`/api/code/${project}/file/${encoded}`);
   const hash = useHash();
@@ -277,13 +366,8 @@ function FileView({ project, path, crumbs }: { project: string; path: string; cr
     if (lines) document.getElementById(location.hash.slice(1))?.scrollIntoView();
   }, [data]);
   if (error)
-    return (
-      <>
-        {crumbs}
-        <p className="muted">file not found</p>
-      </>
-    );
-  if (!data) return crumbs;
+    return <p className="muted">file not found</p>;
+  if (!data) return null;
   const raw = `/code-raw/${project}/${encoded}`;
   const copy = () => {
     const text = [...(table.current?.querySelectorAll(".line") ?? [])].map((l) => l.textContent).join("\n");
@@ -293,42 +377,39 @@ function FileView({ project, path, crumbs }: { project: string; path: string; cr
     });
   };
   return (
-    <>
-      {crumbs}
-      <section className="box file">
-        <div className="box-head">
-          <span className="muted">{lines ? `${lines.length} lines` : path.split("/").pop()}</span>
-          <span className="actions">
-            {lines && (
-              <button type="button" onClick={copy}>
-                {copied ? "copied" : "copy"}
-              </button>
-            )}
-            <a href={raw}>raw</a>
-          </span>
+    <section className="box file">
+      <div className="box-head">
+        <span className="muted">{lines ? `${lines.length} lines` : path.split("/").pop()}</span>
+        <span className="actions">
+          {lines && (
+            <button type="button" onClick={copy}>
+              {copied ? "copied" : "copy"}
+            </button>
+          )}
+          <a href={raw}>raw</a>
+        </span>
+      </div>
+      {IMAGE.test(path) ? (
+        <img className="code-image" src={raw} alt={path} />
+      ) : !lines ? (
+        <p className="muted binary">binary file</p>
+      ) : (
+        <div className="scroll">
+          <table className="code" ref={table}>
+            <tbody>
+              {lines.map((line, i) => (
+                <tr key={i} id={`L${i + 1}`} className={hash === `#L${i + 1}` ? "hl" : undefined}>
+                  <td>
+                    <a href={`#L${i + 1}`}>{i + 1}</a>
+                  </td>
+                  {/* Highlighted server side by Pygments, which escapes the source. */}
+                  <td dangerouslySetInnerHTML={{ __html: line }} />
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
-        {IMAGE.test(path) ? (
-          <img className="code-image" src={raw} alt={path} />
-        ) : !lines ? (
-          <p className="muted binary">binary file</p>
-        ) : (
-          <div className="scroll">
-            <table className="code" ref={table}>
-              <tbody>
-                {lines.map((line, i) => (
-                  <tr key={i} id={`L${i + 1}`} className={hash === `#L${i + 1}` ? "hl" : undefined}>
-                    <td>
-                      <a href={`#L${i + 1}`}>{i + 1}</a>
-                    </td>
-                    {/* Highlighted server side by Pygments, which escapes the source. */}
-                    <td dangerouslySetInnerHTML={{ __html: line }} />
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
-    </>
+      )}
+    </section>
   );
 }

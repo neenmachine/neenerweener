@@ -71,6 +71,17 @@ def parse_date(value) -> str | None:
     return None
 
 
+def parse_tags(value) -> list[str] | None:
+    """`tags: [a, b]` or `tags: a`, lowercased and deduplicated; None if invalid."""
+    if value is None:
+        return []
+    items = value if isinstance(value, list) else [value]
+    if any(item is None or isinstance(item, (list, dict)) for item in items):
+        return None
+    tags = [t for item in items if (t := str(item).strip().lower())]
+    return list(dict.fromkeys(tags))
+
+
 def load(path: Path, draft: bool = False) -> dict | None:
     m = FILENAME.match(path.name)
     if not m:
@@ -111,7 +122,13 @@ def load(path: Path, draft: bool = False) -> dict | None:
         excerpt = str(excerpt)
     else:
         excerpt = None
-    return {"slug": slug, "date": parsed_date, "title": title, "excerpt": excerpt, "body": body, "draft": draft}
+    tags = parse_tags(metadata.get("tags"))
+    if tags is None:
+        logger.warning("invalid post metadata in %s", path.name)
+        return None
+    return {
+        "slug": slug, "date": parsed_date, "title": title, "excerpt": excerpt, "tags": tags, "body": body, "draft": draft,
+    }
 
 
 def all_posts() -> list[dict]:
@@ -128,7 +145,7 @@ def all_posts() -> list[dict]:
 
 @app.get("/api/posts")
 def list_posts():
-    return [{k: p[k] for k in ("slug", "date", "title", "excerpt", "draft")} for p in all_posts()]
+    return [{k: p[k] for k in ("slug", "date", "title", "excerpt", "tags", "draft")} for p in all_posts()]
 
 
 @app.get("/api/posts/{slug}")

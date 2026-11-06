@@ -3,7 +3,7 @@
   --fg: #1a1a1a;
   --muted: #777;
   --bg: #fdfdfc;
-  font: 15px/1.7 Futura, sans-serif;
+  font: 15px/1.7 -apple-system, BlinkMacSystemFont, sans-serif;
   color: var(--fg);
   background: var(--bg);
   -webkit-font-smoothing: antialiased;

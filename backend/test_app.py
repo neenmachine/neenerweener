@@ -14,8 +14,9 @@ def test_spa_fallback(tmp_path, monkeypatch):
     monkeypatch.setattr(app, "FRONTEND_DIST", dist)
 
     c = TestClient(app.app)
-    assert c.get("/").text == "<html>app</html>"
-    assert c.get("/posts/foo").text == "<html>app</html>"
+    assert c.get("/code/demo").text == "<html>app</html>"
+    assert c.get("/nope").text == "<html>app</html>"
+    assert "<html>app" in c.get("/").text
     assert c.get("/assets/x.js").text == "console.log('x')"
     assert c.get("/api/nope").status_code == 404
     assert c.get("/api/nope").json() == {"detail": "not found"}
@@ -375,3 +376,46 @@ def test_now(tmp_path, monkeypatch):
 
     (tmp_path / "now.md").write_text("plain body")
     assert c.get("/api/now").json() == {"html": "<p>plain body</p>\n"}
+
+
+INDEX = '<html><head><title>neenerweener</title></head><body><div id="root"> </div></body></html>'
+
+
+def test_server_rendered_pages(tmp_path, monkeypatch):
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text(INDEX)
+    posts = tmp_path / "posts"
+    posts.mkdir()
+    (posts / "hello.md").write_text(
+        "---\ntitle: Hi & <bye>\ndate: 2026-01-01\ntags: [a]\n---\nFirst *para* </script> here.\n\nsecond"
+    )
+    (posts / "brief.md").write_text("---\ntitle: Brief\ndate: 2026-01-02\nexcerpt: short one\n---\nbody")
+    monkeypatch.setattr(app, "FRONTEND_DIST", dist)
+    monkeypatch.setattr(app, "POSTS_DIR", posts)
+    monkeypatch.setattr(app, "PAGES_DIR", tmp_path / "pages")
+    c = TestClient(app.app)
+
+    page = c.get("/posts/hello").text
+    assert "<title>Hi &amp; &lt;bye&gt;</title>" in page
+    assert page.count("<title>") == 1
+    assert '<meta property="og:description" content="First para here." />' in page
+    assert '<div id="root"><main><article><h1 class="has-back">' in page
+    assert '<a href="/?tag=a">#a</a>' in page
+    preload = page.split('<script id="preload" type="application/json">')[1].split("</script>")[0]
+    assert "<" not in preload  # post text cannot close the script tag
+    data = __import__("json").loads(preload)
+    assert data["/api/posts/hello"]["title"] == "Hi & <bye>"
+    assert data["/api/now"] is None
+
+    assert '<meta name="description" content="short one" />' in c.get("/posts/brief").text
+    missing = c.get("/posts/nope").text
+    assert '"/api/posts/nope": null' in missing and "<title>neenerweener</title>" in missing
+    home = c.get("/?tag=a").text
+    assert '"/api/posts": [' in home and '<div id="root"></div>' in home
+
+
+def test_image_caption():
+    html = app.render_post('![a plot](/images/p.png "the caption")\n\n![no title](/images/q.png)')
+    assert '<figure><img src="/images/p.png" alt="a plot" title="the caption" /><figcaption>the caption</figcaption></figure>' in html
+    assert '<p><img src="/images/q.png" alt="no title" /></p>' in html

@@ -147,7 +147,7 @@ function PostPage({ slug }: { slug: string }) {
         mermaid.initialize({
           startOnLoad: false,
           theme: "neutral",
-          fontFamily: "Futura, sans-serif",
+          fontFamily: "-apple-system, BlinkMacSystemFont, sans-serif",
         });
         mermaid.run({ nodes: diagrams });
       });

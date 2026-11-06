@@ -58,11 +58,11 @@ def test_frontmatter_fields(tmp_path, monkeypatch):
 
     c = TestClient(app.app)
     assert c.get("/api/posts").json() == [
-        {"slug": "slash", "date": "2026-03-29", "title": "Slash", "excerpt": None, "draft": False},
-        {"slug": "iso", "date": "2026-03-28", "title": "ISO", "excerpt": "short", "draft": False},
+        {"slug": "slash", "date": "2026-03-29", "title": "Slash", "excerpt": None, "tags": [], "draft": False},
+        {"slug": "iso", "date": "2026-03-28", "title": "ISO", "excerpt": "short", "tags": [], "draft": False},
     ]
     assert c.get("/api/posts/iso").json() == {
-        "slug": "iso", "date": "2026-03-28", "title": "ISO", "excerpt": "short", "draft": False,
+        "slug": "iso", "date": "2026-03-28", "title": "ISO", "excerpt": "short", "tags": [], "draft": False,
         "html": "<p>body</p>\n",
     }
 
@@ -94,7 +94,7 @@ def test_scalar_metadata_coerced(tmp_path, monkeypatch, caplog):
 
     with caplog.at_level(logging.WARNING):
         result = TestClient(app.app).get("/api/posts").json()
-    assert result == [{"slug": "scalar", "date": "2026-01-01", "title": "2026", "excerpt": "3.5", "draft": False}]
+    assert result == [{"slug": "scalar", "date": "2026-01-01", "title": "2026", "excerpt": "3.5", "tags": [], "draft": False}]
     assert "invalid post metadata in list.md" in caplog.messages
 
 
@@ -103,7 +103,7 @@ def test_frontmatter_bom_crlf_eof(tmp_path, monkeypatch):
     monkeypatch.setattr(app, "POSTS_DIR", tmp_path)
 
     assert TestClient(app.app).get("/api/posts").json() == [
-        {"slug": "bom", "date": "2026-03-28", "title": "Bom", "excerpt": None, "draft": False}
+        {"slug": "bom", "date": "2026-03-28", "title": "Bom", "excerpt": None, "tags": [], "draft": False}
     ]
 
 
@@ -138,8 +138,8 @@ def test_draft_frontmatter_optional(tmp_path, monkeypatch):
     monkeypatch.setenv("SHOW_DRAFTS", "1")
 
     assert TestClient(app.app).get("/api/posts").json() == [
-        {"slug": "idea", "date": None, "title": "idea", "excerpt": None, "draft": True},
-        {"slug": "planned", "date": "2026-04-01", "title": "Planned", "excerpt": None, "draft": True},
+        {"slug": "idea", "date": None, "title": "idea", "excerpt": None, "tags": [], "draft": True},
+        {"slug": "planned", "date": "2026-04-01", "title": "Planned", "excerpt": None, "tags": [], "draft": True},
     ]
 
 
@@ -186,7 +186,7 @@ def test_published_wins_draft_collision(tmp_path, monkeypatch):
     monkeypatch.setenv("SHOW_DRAFTS", "1")
 
     assert TestClient(app.app).get("/api/posts").json() == [
-        {"slug": "same", "date": "2026-01-01", "title": "Published", "excerpt": None, "draft": False}
+        {"slug": "same", "date": "2026-01-01", "title": "Published", "excerpt": None, "tags": [], "draft": False}
     ]
 
 
@@ -354,3 +354,17 @@ def test_code_sync(tmp_path):
     assert r.returncode == 1 and "k.py:1" in r.stderr
     assert not (tmp_path / "code" / "leaky").exists()
     assert run_sync(tmp_path, leaky, "--name", "Bad_Name").returncode == 2
+
+
+def test_tags(tmp_path, monkeypatch, caplog):
+    (tmp_path / "list.md").write_text("---\ntitle: List\ndate: 2026-01-02\ntags: [ML, cuda, ml, 3]\n---\nbody")
+    (tmp_path / "one.md").write_text("---\ntitle: One\ndate: 2026-01-01\ntags: notes\n---\nbody")
+    (tmp_path / "bad.md").write_text("---\ntitle: Bad\ndate: 2026-01-01\ntags: [[x]]\n---\nbody")
+    monkeypatch.setattr(app, "POSTS_DIR", tmp_path)
+
+    c = TestClient(app.app)
+    with caplog.at_level(logging.WARNING):
+        result = c.get("/api/posts").json()
+    assert [(p["slug"], p["tags"]) for p in result] == [("list", ["ml", "cuda", "3"]), ("one", ["notes"])]
+    assert "invalid post metadata in bad.md" in caplog.messages
+    assert c.get("/api/posts/one").json()["tags"] == ["notes"]

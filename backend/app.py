@@ -19,6 +19,7 @@ from pygments.lexers import TextLexer, get_lexer_by_name, get_lexer_for_filename
 from pygments.util import ClassNotFound
 
 POSTS_DIR = Path(os.environ.get("POSTS_DIR", Path(__file__).parent.parent / "posts"))
+PAGES_DIR = Path(os.environ.get("PAGES_DIR", Path(__file__).parent.parent / "pages"))
 DRAFTS_DIR = Path(os.environ.get("DRAFTS_DIR", Path(__file__).parent.parent / "drafts"))
 CODE_DIR = Path(os.environ.get("CODE_DIR", Path(__file__).parent.parent / "code"))
 FRONTEND_DIST = Path(os.environ.get("FRONTEND_DIST", Path(__file__).parent.parent / "frontend" / "dist"))
@@ -157,6 +158,19 @@ def get_post(slug: str):
     raise HTTPException(404, "post not found")
 
 
+@app.get("/api/now")
+def get_now():
+    """pages/now.md: frontmatter is optional; `date:` is when Henry last updated it."""
+    try:
+        metadata, body = split_frontmatter((PAGES_DIR / "now.md").read_text(encoding="utf-8-sig"))
+    except FileNotFoundError:
+        raise HTTPException(404, "not found")
+    except (OSError, ValueError):
+        logger.warning("invalid frontmatter in now.md")
+        raise HTTPException(404, "not found")
+    return {"date": parse_date((metadata or {}).get("date")), "html": md.render(body)}
+
+
 # check_dir=False: the app still starts when POSTS_DIR has no images folder.
 app.mount("/images", StaticFiles(directory=POSTS_DIR / "images", check_dir=False), name="images")
 
@@ -211,13 +225,6 @@ def readme_html(project: str, root: Path) -> str | None:
                 else:
                     child.attrs.pop(attr, None)
     return md.renderer.render(tokens, md.options, {})
-
-
-@app.get("/api/code")
-def list_projects():
-    if not CODE_DIR.is_dir():
-        return []
-    return sorted(p.name for p in CODE_DIR.iterdir() if p.is_dir() and PROJECT.fullmatch(p.name))
 
 
 @app.get("/api/code/{project}")

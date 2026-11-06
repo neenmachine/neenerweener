@@ -2,35 +2,64 @@ import { type ReactNode, useEffect, useRef, useState } from "react";
 
 type Summary = { slug: string; date: string | null; title: string; excerpt: string | null; tags: string[]; draft: boolean };
 type Post = Summary & { html: string };
+type Now = { date: string | null; html: string };
 type Project = { name: string; files: string[]; readme_html: string | null };
 type CodeFile = { path: string; html?: string; binary?: true };
 
 // shortcut: plain links and pathname matching, no router. Add react-router when there are more pages.
 const slug = location.pathname.match(/^\/posts\/([a-z0-9-]+)\/?$/)?.[1];
-// /code, /code/<project>, /code/<project>/<path>, where the path is a folder or a file.
-const code = location.pathname.match(/^\/code(?:\/([a-z0-9-]+)(?:\/(.+?))?)?\/?$/);
+// /code/<project>, /code/<project>/<path>, where the path is a folder or a file.
+// There is no project index: Henry links to code from his posts.
+const code = location.pathname.match(/^\/code\/([a-z0-9-]+)(?:\/(.+?))?\/?$/);
+const now = /^\/now\/?$/.test(location.pathname);
 // /?tag=<tag> filters the post list.
 const tag = new URLSearchParams(location.search).get("tag");
 const IMAGE = /\.(png|jpe?g|webp|gif|svg)$/i;
 
 export default function App() {
   // Project pages are wider, like a repo browser, so long code lines fit.
-  return <main className={code?.[1] ? "wide" : undefined}>{page()}</main>;
+  return <main className={code ? "wide" : undefined}>{page()}</main>;
 }
 
 function page() {
   if (slug) return <PostPage slug={slug} />;
-  if (code?.[1]) return <ProjectPage name={code[1]} path={code[2] ? decodeURIComponent(code[2]) : ""} />;
+  if (code) return <ProjectPage name={code[1]} path={code[2] ? decodeURIComponent(code[2]) : ""} />;
   return (
     <>
-      <header>
-        <a href="/">neenerweener</a>
-        <a className="nav" href="/code" aria-current={code ? "page" : undefined}>
-          code
-        </a>
-      </header>
-      {code ? <ProjectList /> : <PostList />}
+      <Header />
+      {now ? <NowPage /> : <PostList />}
     </>
+  );
+}
+
+// The "now" link shows only once Henry has written pages/now.md.
+function Header() {
+  const { data } = useApi<Now>("/api/now");
+  return (
+    <header>
+      <a href="/">neenerweener</a>
+      {(data || now) && (
+        <a className="nav" href="/now" aria-current={now ? "page" : undefined}>
+          now
+        </a>
+      )}
+    </header>
+  );
+}
+
+function NowPage() {
+  const { data, error } = useApi<Now>("/api/now");
+  useEffect(() => {
+    document.title = "now";
+  }, []);
+  if (error) return <p className="muted">nothing here yet</p>;
+  if (!data) return null;
+  return (
+    <article>
+      {data.date && <time className="updated">updated {data.date}</time>}
+      {/* Henry's own file, rendered server side. */}
+      <div dangerouslySetInnerHTML={{ __html: data.html }} />
+    </article>
   );
 }
 
@@ -164,35 +193,14 @@ function PostPage({ slug }: { slug: string }) {
   );
 }
 
-function ProjectList() {
-  const { data, error } = useApi<string[]>("/api/code");
-  useEffect(() => {
-    document.title = "code";
-  }, []);
-  if (error) return <p className="muted">could not load projects</p>;
-  if (!data) return null;
-  if (!data.length) return <p className="muted">no projects yet</p>;
-  return (
-    <ul className="box listing">
-      {data.map((name) => (
-        <li key={name}>
-          <a href={`/code/${name}`}>{name}</a>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
 const href = (project: string, path: string) =>
   `/code/${project}${path && "/" + path.split("/").map(encodeURIComponent).join("/")}`;
 
-// code / project / dir / file, every segment but the last a link.
+// project / dir / file, every segment but the last a link.
 function Crumbs({ project, path }: { project: string; path: string }) {
   const parts = path ? path.split("/") : [];
   return (
     <h1 className="crumbs">
-      <a href="/code">code</a>
-      <span className="sep">/</span>
       {parts.length ? <a href={href(project, "")}>{project}</a> : project}
       {parts.map((part, i) => (
         <span key={i}>

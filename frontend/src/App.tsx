@@ -1,6 +1,6 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
 
-type Summary = { slug: string; date: string | null; title: string; excerpt: string | null; tags: string[]; draft: boolean };
+type Summary = { slug: string; title: string; excerpt: string | null; tags: string[]; draft: boolean };
 type Post = Summary & { html: string };
 type Now = { html: string };
 type Project = { name: string; files: string[]; readme_html: string | null };
@@ -121,7 +121,6 @@ function PostList() {
       <ul className="posts">
         {shown.map((p) => (
           <li key={p.slug}>
-            {p.date && <time>{p.date}</time>}
             <div className="post-info">
               <a href={`/posts/${p.slug}`}>{p.title}</a>
               {p.excerpt && <div className="excerpt muted">{p.excerpt}</div>}
@@ -183,7 +182,6 @@ function PostPage({ slug }: { slug: string }) {
         {data.title} {data.draft && <span className="draft muted">draft</span>}
       </h1>
       <div className="meta">
-        {data.date && <time>{data.date}</time>}
         <Tags tags={data.tags} />
       </div>
       {/* Posts are Henry's own files, rendered server side. */}

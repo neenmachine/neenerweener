@@ -72,7 +72,6 @@ a {
   text-underline-offset: 0.2em;
 }
 
-time,
 .muted {
   color: var(--muted);
   font-variant-numeric: tabular-nums;

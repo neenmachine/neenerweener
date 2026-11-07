@@ -304,7 +304,8 @@ def test_code_api(code_dir):
     assert project["name"] == "demo"
     assert project["files"] == ["README.md", "data.bin", "labels.idx", "main.py", "notes.md", "src/plot.png"]
     readme = project["readme_html"]
-    assert '<h1 aria-level="2">demo</h1>' in readme  # the page crumbs are the one h1
+    assert '<h2 class="readme-h1">demo</h2>' in readme  # the page crumbs are the one h1
+    assert "<h1" not in readme
     assert '<img src="/code-raw/demo/src/plot.png" alt="plot"' in readme
     assert 'href="/code/demo/main.py"' in readme
     assert 'href="https://example.com"' in readme and 'href="/x"' in readme
@@ -332,6 +333,16 @@ def test_code_raw_head(code_dir):
         assert head.status_code == 200
         assert head.headers["content-type"] == get.headers["content-type"]
         assert head.headers["content-security-policy"] == "sandbox"
+
+
+def test_readme_headings_are_demoted_for_markdown_and_raw_html(code_dir):
+    readme = code_dir / "demo" / "README.md"
+    readme.write_text('# markdown\n\n<h1>raw</h1><h3 class="custom">three</h3>')
+    html = TestClient(app.app).get("/api/code/demo").json()["readme_html"]
+    assert "<h1" not in html
+    assert '<h2 class="readme-h1">markdown</h2>' in html
+    assert '<h2 class="readme-h1">raw</h2>' in html
+    assert '<h4 class="custom readme-h3">three</h4>' in html
 
 
 def test_readme_parent_links_blocked(code_dir):
@@ -678,3 +689,42 @@ def test_home_ssr_has_one_h1(tmp_path, monkeypatch):
         page = c.get(url).text
         assert h1s(page) == ["neenerweener"]
         assert '<h1 class="sr-only">neenerweener</h1>' in page
+
+
+@pytest.mark.parametrize(
+    ("url", "expected_h1s"),
+    [
+        ("/", 1),
+        ("/?tag=a", 1),
+        ("/posts/hello", 1),
+        ("/timeline", 1),
+        ("/nope", 1),
+        ("/posts/missing", 1),
+        ("/code/missing", 1),
+        ("/code/demo/missing.py", 1),
+        ("/code/demo", 0),
+        ("/code/demo/hello.py", 0),
+        ("/admin", 0),
+    ],
+)
+def test_ssr_route_heading_table(tmp_path, monkeypatch, url, expected_h1s):
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text(INDEX)
+    posts = tmp_path / "posts"
+    posts.mkdir()
+    (posts / "hello.md").write_text("---\ntitle: Hi\ndate: 2026-01-01\ntags: [a]\n---\nbody")
+    code = tmp_path / "code" / "demo"
+    code.mkdir(parents=True)
+    (code / "hello.py").write_text("print('hello')")
+    monkeypatch.setattr(app, "FRONTEND_DIST", dist)
+    monkeypatch.setattr(app, "POSTS_DIR", posts)
+    monkeypatch.setattr(app, "CODE_DIR", tmp_path / "code")
+
+    class Store:
+        def list(self, before, limit):
+            return []
+
+    monkeypatch.setattr(app, "timeline_store", Store())
+    page = TestClient(app.app).get(url).text
+    assert len(h1s(page)) == expected_h1s

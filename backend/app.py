@@ -585,6 +585,22 @@ def rewrite_readme_link(project: str, url: str, prefix: str) -> str | None:
     return f"{prefix}/{project}/{target}"
 
 
+def _demote_readme_headings(html: str) -> str:
+    def replace(match):
+        tag = match[2]
+        level = min(int(tag[1]) + 1, 6)
+        if match[1]:
+            return f"</h{level}>"
+        attrs = match[3]
+        if re.search(r"\bclass\s*=", attrs):
+            attrs = re.sub(r'class\s*=\s*("[^"]*"|\'[^\']*\')', lambda cls: cls.group(0)[:-1] + f" readme-h{tag[1]}{cls.group(1)[-1]}", attrs, count=1)
+        else:
+            attrs += f' class="readme-h{tag[1]}"'
+        return f"<h{level}{attrs}>"
+
+    return re.sub(r"<(\/?)(h[1-6])([^>]*)>", replace, html, flags=re.I)
+
+
 def readme_html(project: str, root: Path) -> str | None:
     readme = contained_file(root, "README.md")
     if not readme:
@@ -593,8 +609,13 @@ def readme_html(project: str, root: Path) -> str | None:
     # Relative README links point into the snapshot: images load raw bytes, links open the code view.
     for token in tokens:
         # The project name in the page crumbs is the page's one h1, so README headings sit one level below it.
-        if token.type == "heading_open":
-            token.attrSet("aria-level", str(min(int(token.tag[1]) + 1, 6)))
+        if token.type in {"heading_open", "heading_close"}:
+            source = token.tag[1]
+            token.tag = f"h{min(int(source) + 1, 6)}"
+            if token.type == "heading_open":
+                token.attrSet("class", f"readme-h{source}")
+        elif token.type.startswith("html"):
+            token.content = _demote_readme_headings(token.content)
         for child in token.children or []:
             attr = "src" if child.type == "image" else "href" if child.type == "link_open" else None
             url = child.attrGet(attr) if attr else None

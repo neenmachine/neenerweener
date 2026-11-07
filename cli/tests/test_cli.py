@@ -96,11 +96,15 @@ class CliTests(unittest.TestCase):
         group_readable = Path(self.tmp.name) / "key-group-readable"
         group_readable.write_text("ssh-ed25519 AAAA test\\n")
         group_readable.chmod(0o640)
+        owner_unreadable = Path(self.tmp.name) / "key-owner-unreadable"
+        owner_unreadable.write_text("ssh-ed25519 AAAA test\\n")
+        owner_unreadable.chmod(0o000)
         cases = [
             Path(self.tmp.name) / "missing-key",
             directory,
             symlink,
             group_readable,
+            owner_unreadable,
         ]
         for key in cases:
             with self.subTest(key=key.name), patch.object(cli, "post") as post:

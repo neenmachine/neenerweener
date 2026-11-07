@@ -1,7 +1,8 @@
 // The one owner of browser admin auth: the session check, the in-memory CSRF token, requests and their
 // error text, and the empty-text check. Used by /admin and by the composer on /timeline; lazy loaded.
 
-export type Entry = { id: number; html: string; created_at: string; edited_at: string | null };
+import type { Entry } from "./timelineTypes";
+
 export type AdminEntry = Entry & { body_markdown: string };
 export type Session = { authenticated: false } | { authenticated: true; csrf_token: string };
 // message is "" for 401: the caller treats it as a signed-out session.

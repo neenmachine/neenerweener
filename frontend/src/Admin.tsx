@@ -2,7 +2,6 @@ import { type ReactNode, type Ref, type RefObject, useEffect, useRef, useState }
 import { AdminHead, compact, full } from "./App";
 import {
   type AdminEntry,
-  type Entry,
   type Result,
   checkSession,
   hasText,
@@ -12,6 +11,7 @@ import {
   logout as signOut,
   request,
 } from "./adminApi";
+import type { Entry } from "./timelineTypes";
 
 // The private /admin page: a password form, then compose, edit and delete for timeline entries.
 // It is lazy loaded, so public pages never download it, and nothing on the site links here.

@@ -7,6 +7,7 @@ import re
 import time
 import uuid
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from html import escape, unescape
 from pathlib import Path
@@ -20,7 +21,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.staticfiles import StaticFiles
 from markdown_it import MarkdownIt
 from mdit_py_plugins.dollarmath import dollarmath_plugin
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 from pygments import highlight as pygments_highlight
 from pygments.formatters import HtmlFormatter
 from pygments.lexers import TextLexer, get_lexer_by_name, get_lexer_for_filename
@@ -45,7 +46,23 @@ from auth import (
     valid_csrf,
     verify_password,
 )
-from timeline import TimelineStore, TimelineStoreProtocol, serialize_entry, validate_timeline_body
+from client_identity import railway_client_ip
+from machine_auth import (
+    MAX_REQUEST_BYTES,
+    NAMESPACE,
+    TOKEN_SECONDS,
+    InvalidProof,
+    MachineAuthConfig,
+    MachineAuthStore,
+    Principal,
+    Throttled,
+)
+from timeline import (
+    TimelineStore,
+    TimelineStoreProtocol,
+    serialize_entry,
+    validate_timeline_body,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -73,26 +90,40 @@ md = MarkdownIt("commonmark", {"highlight": highlight}).enable(["table", "strike
 dollarmath_plugin(md, allow_digits=False)
 md.core.ruler.after("inline", "heading_anchors", add_heading_anchors)
 
+def _load_machine_auth_state() -> tuple[bool, MachineAuthConfig]:
+    return os.environ.get("ADMIN_SSH_KEYS") is not None, MachineAuthConfig.from_env()
+
+
 @asynccontextmanager
 async def lifespan(_app):
+    configured, config = await asyncio.to_thread(_load_machine_auth_state)
+    _app.state.machine_auth_configured = configured
+    _app.state.machine_auth_config = config
     yield
     if timeline_store is not None:
         await asyncio.to_thread(timeline_store.close)
     if auth_store is not None:
         await asyncio.to_thread(auth_store.close)
+    if machine_auth_store is not None:
+        await asyncio.to_thread(machine_auth_store.close)
 
 
 app = FastAPI(lifespan=lifespan)
+app.state.machine_auth_configured = False
+app.state.machine_auth_config = MachineAuthConfig({}, None, None, False)
 configure_logging()
 timeline_store: TimelineStoreProtocol | None = (
     TimelineStore(os.environ["DATABASE_URL"]) if os.environ.get("DATABASE_URL") else None
 )
 auth_store: AuthStore | None = AuthStore(os.environ["DATABASE_URL"]) if os.environ.get("DATABASE_URL") else None
+machine_auth_store: MachineAuthStore | None = (
+    MachineAuthStore(os.environ["DATABASE_URL"]) if os.environ.get("DATABASE_URL") else None
+)
 
 
 @app.exception_handler(RequestValidationError)
 async def admin_validation_error(request: Request, exc: RequestValidationError):
-    if request.url.path.startswith("/api/admin/"):
+    if request.url.path.startswith(("/api/admin/", "/api/cli/auth/")):
         return JSONResponse({"detail": "invalid request"}, status_code=422, headers={"Cache-Control": "no-store"})
     return await request_validation_exception_handler(request, exc)
 
@@ -128,7 +159,7 @@ async def operational_middleware(request: Request, call_next):
 @app.middleware("http")
 async def security_middleware(request: Request, call_next):
     response = await call_next(request)
-    if request.url.path.startswith("/api/admin/"):
+    if request.url.path.startswith(("/api/admin/", "/api/cli/auth/")):
         response.headers["Cache-Control"] = "no-store"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
@@ -182,6 +213,21 @@ class TimelineMutation(BaseModel):
     body_markdown: str
 
 
+class ChallengeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    key_fingerprint: str
+
+
+class TokenRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    challenge_id: uuid.UUID
+    signature: str
+
+
+def trusted_client_ip(request: Request) -> str | None:
+    return railway_client_ip(request)
+
+
 def _admin_config() -> AdminConfig:
     return AdminConfig.from_env()
 
@@ -199,6 +245,10 @@ def _clear_session_cookie(response: Response, config: AdminConfig) -> None:
         httponly=True,
         samesite="strict",
     )
+
+
+def _machine_config(request: Request) -> MachineAuthConfig:
+    return request.app.state.machine_auth_config
 
 
 def _load_session(request: Request) -> tuple[str, Session, AdminConfig]:
@@ -220,16 +270,50 @@ def _load_session(request: Request) -> tuple[str, Session, AdminConfig]:
     return token, session, config
 
 
-def require_admin(request: Request) -> tuple[str, Session, AdminConfig]:
-    return _load_session(request)
+@dataclass(frozen=True)
+class Access:
+    principal: Principal
+    session: tuple[str, Session, AdminConfig] | None = None
 
 
-def require_mutation_admin(request: Request) -> tuple[str, Session, AdminConfig]:
-    token, session, config = _load_session(request)
-    _check_origin(request, config)
-    if not valid_csrf(session, request.headers.get(CSRF_HEADER)):
-        raise HTTPException(403, "csrf validation failed")
-    return token, session, config
+def _load_bearer(request: Request, required_scope: str) -> Access:
+    authorization = request.headers.get("Authorization")
+    if not authorization or not authorization.startswith("Bearer ") or authorization.count(" ") != 1:
+        raise HTTPException(401, "authentication required")
+    token = authorization[7:]
+    if not token or machine_auth_store is None:
+        raise HTTPException(401, "authentication required")
+    try:
+        principal = machine_auth_store.authenticate(token, _machine_config(request))
+    except Exception as exc:
+        logger.warning("machine_auth.bearer.storage_unavailable")
+        raise HTTPException(503, "admin unavailable") from exc
+    if principal is None:
+        raise HTTPException(401, "authentication required")
+    if not principal.allows(required_scope):
+        raise HTTPException(403, "insufficient scope")
+    return Access(principal)
+
+
+def require_access(required_scope: str, *, mutation: bool, bearer: bool = False):
+    def authorize(request: Request) -> Access:
+        if request.headers.get("Authorization") is not None:
+            if not bearer:
+                raise HTTPException(401, "authentication required")
+            return _load_bearer(request, required_scope)
+        token, session, config = _load_session(request)
+        if mutation:
+            _check_origin(request, config)
+            if not valid_csrf(session, request.headers.get(CSRF_HEADER)):
+                raise HTTPException(403, "csrf validation failed")
+        return Access(Principal("browser-admin", None), (token, session, config))
+
+    return authorize
+
+
+require_browser_mutation = require_access("browser:admin", mutation=True)
+require_timeline_create = require_access("timeline:create", mutation=True, bearer=True)
+require_browser_read = require_access("browser:admin", mutation=False)
 
 
 def _admin_entry(entry: dict) -> dict:
@@ -243,6 +327,123 @@ def _timeline_storage() -> TimelineStoreProtocol:
     if timeline_store is None:
         raise HTTPException(503, "admin unavailable")
     return timeline_store
+
+
+async def _bounded_json(request: Request, model, *, invalid_status: int = 422, invalid_detail: str = "invalid request"):
+    if request.headers.get("Content-Type", "").split(";", 1)[0].strip().lower() != "application/json":
+        raise HTTPException(415, "application/json required")
+    length = request.headers.get("Content-Length")
+    if length is not None:
+        try:
+            parsed_length = int(length)
+            if parsed_length < 0:
+                raise ValueError
+            if parsed_length > MAX_REQUEST_BYTES:
+                raise HTTPException(413, "request too large")
+        except ValueError as exc:
+            raise HTTPException(400, "invalid request") from exc
+    chunks = bytearray()
+    async for chunk in request.stream():
+        chunks.extend(chunk)
+        if len(chunks) > MAX_REQUEST_BYTES:
+            raise HTTPException(413, "request too large")
+    body = bytes(chunks)
+    try:
+        return model.model_validate_json(body)
+    except ValidationError as exc:
+        raise HTTPException(invalid_status, invalid_detail) from exc
+
+
+def _machine_store() -> MachineAuthStore:
+    if machine_auth_store is None:
+        raise HTTPException(503, "machine authentication unavailable")
+    return machine_auth_store
+
+
+@app.post("/api/cli/auth/challenge", status_code=201)
+async def machine_challenge(request: Request):
+    payload = await _bounded_json(request, ChallengeRequest)
+    if not payload.key_fingerprint or len(payload.key_fingerprint) > 128:
+        raise HTTPException(422, "invalid request")
+    try:
+        challenge = await asyncio.to_thread(
+            _machine_store().issue_challenge,
+            payload.key_fingerprint,
+            trusted_client_ip(request),
+            _machine_config(request),
+        )
+    except Throttled as exc:
+        logger.info("machine_auth.challenge.throttled")
+        raise HTTPException(429, "too many requests", headers={"Retry-After": str(exc.retry_after)}) from exc
+    except RuntimeError as exc:
+        logger.warning("machine_auth.challenge.unavailable")
+        raise HTTPException(503, "machine authentication unavailable") from exc
+    except Exception as exc:
+        logger.warning("machine_auth.challenge.storage_unavailable")
+        raise HTTPException(503, "machine authentication unavailable") from exc
+    logger.info("machine_auth.challenge.issued")
+    return {
+        "challenge_id": str(challenge.challenge_id),
+        "message": challenge.message,
+        "namespace": NAMESPACE,
+        "expires_at": challenge.expires_at.isoformat(timespec="seconds").replace("+00:00", "Z"),
+    }
+
+
+async def _reject_machine_proof(request: Request) -> None:
+    try:
+        retry = await asyncio.to_thread(
+            _machine_store().reject_exchange,
+            trusted_client_ip(request),
+            _machine_config(request),
+        )
+    except RuntimeError as exc:
+        raise HTTPException(503, "machine authentication unavailable") from exc
+    except Exception as exc:
+        logger.warning("machine_auth.exchange.storage_unavailable")
+        raise HTTPException(503, "machine authentication unavailable") from exc
+    if retry is not None:
+        raise HTTPException(429, "too many requests", headers={"Retry-After": str(retry)})
+    raise HTTPException(401, "invalid key proof")
+
+
+@app.post("/api/cli/auth/token")
+async def machine_token(request: Request):
+    try:
+        payload = await _bounded_json(request, TokenRequest, invalid_status=401, invalid_detail="invalid key proof")
+    except HTTPException as exc:
+        if exc.status_code == 401:
+            await _reject_machine_proof(request)
+        raise
+    if not payload.signature or len(payload.signature) > 12_000:
+        await _reject_machine_proof(request)
+    try:
+        token = await asyncio.to_thread(
+            _machine_store().exchange,
+            payload.challenge_id,
+            payload.signature,
+            trusted_client_ip(request),
+            _machine_config(request),
+        )
+    except Throttled as exc:
+        logger.info("machine_auth.exchange.throttled")
+        raise HTTPException(429, "too many requests", headers={"Retry-After": str(exc.retry_after)}) from exc
+    except InvalidProof as exc:
+        logger.info("machine_auth.exchange.rejected")
+        raise HTTPException(401, "invalid key proof") from exc
+    except RuntimeError as exc:
+        logger.warning("machine_auth.exchange.unavailable")
+        raise HTTPException(503, "machine authentication unavailable") from exc
+    except Exception as exc:
+        logger.warning("machine_auth.exchange.storage_unavailable")
+        raise HTTPException(503, "machine authentication unavailable") from exc
+    logger.info("machine_auth.exchange.succeeded")
+    return {
+        "access_token": token.access_token,
+        "token_type": "Bearer",
+        "expires_in": TOKEN_SECONDS,
+        "scopes": list(token.scopes),
+    }
 
 
 @app.get("/api/admin/session")
@@ -309,9 +510,10 @@ def admin_login(payload: LoginRequest, request: Request, response: Response):
 @app.post("/api/admin/logout", status_code=204)
 def admin_logout(
     response: Response,
-    auth: tuple[str, Session, AdminConfig] = Depends(require_mutation_admin),
+    access: Access = Depends(require_browser_mutation),
 ):
-    token, _, config = auth
+    assert access.session is not None
+    token, _, config = access.session
     try:
         assert auth_store is not None
         auth_store.delete_session(token)
@@ -324,12 +526,18 @@ def admin_logout(
 @app.post("/api/admin/timeline", status_code=201)
 def create_admin_timeline(
     payload: TimelineMutation,
-    _auth: tuple[str, Session, AdminConfig] = Depends(require_mutation_admin),
+    request: Request,
+    access: Access = Depends(require_timeline_create),
 ):
     try:
         validate_timeline_body(payload.body_markdown)
     except ValueError as exc:
         raise HTTPException(422, "invalid timeline entry") from exc
+    if access.principal.scopes is not None:
+        assert machine_auth_store is not None
+        retry = machine_auth_store.permit_create(access.principal.subject, _machine_config(request))
+        if retry is not None:
+            raise HTTPException(429, "too many requests", headers={"Retry-After": str(retry)})
     try:
         return _admin_entry(_timeline_storage().create(payload.body_markdown))
     except HTTPException:
@@ -342,7 +550,7 @@ def create_admin_timeline(
 @app.get("/api/admin/timeline/{entry_id}")
 def get_admin_timeline(
     entry_id: int,
-    _auth: tuple[str, Session, AdminConfig] = Depends(require_admin),
+    _access: Access = Depends(require_browser_read),
 ):
     if entry_id <= 0:
         raise HTTPException(422, "invalid timeline id")
@@ -362,7 +570,7 @@ def get_admin_timeline(
 def update_admin_timeline(
     entry_id: int,
     payload: TimelineMutation,
-    _auth: tuple[str, Session, AdminConfig] = Depends(require_mutation_admin),
+    _access: Access = Depends(require_browser_mutation),
 ):
     if entry_id <= 0:
         raise HTTPException(422, "invalid timeline id")
@@ -385,7 +593,7 @@ def update_admin_timeline(
 @app.delete("/api/admin/timeline/{entry_id}", status_code=204)
 def delete_admin_timeline(
     entry_id: int,
-    _auth: tuple[str, Session, AdminConfig] = Depends(require_mutation_admin),
+    _access: Access = Depends(require_browser_mutation),
 ):
     if entry_id <= 0:
         raise HTTPException(422, "invalid timeline id")
@@ -401,12 +609,14 @@ def delete_admin_timeline(
 
 
 @app.api_route("/readyz", methods=["GET", "HEAD"])
-async def readyz():
+async def readyz(request: Request):
     ready, reason = await check_readiness(
         timeline_store, EXPECTED_SCHEMA_REVISIONS, _admin_config().valid
     )
     if not ready:
         return JSONResponse({"status": "not_ready", "reason": reason or "dependency unavailable"}, status_code=503)
+    if request.app.state.machine_auth_configured and not _machine_config(request).valid:
+        return JSONResponse({"status": "not_ready", "reason": "authentication configuration invalid"}, status_code=503)
     return {"status": "ok"}
 
 def split_frontmatter(text: str) -> tuple[dict | None, str]:

@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import concurrent.futures
 import json
@@ -10,6 +11,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import delete, event, func, insert, inspect, select, text, update
 
 import app
+import machine_auth
 from auth import (
     AuthStore,
     admin_login_failures,
@@ -21,6 +23,7 @@ from auth import (
 )
 from client_identity import railway_client_ip, rate_limit_key
 from machine_auth import (
+    CHALLENGE_SECONDS,
     NAMESPACE,
     InvalidProof,
     MachineAuthConfig,
@@ -32,7 +35,7 @@ from machine_auth import (
 )
 from timeline import TimelineStore, timeline_entries
 
-SCOPES = ["timeline:create", "timeline:media"]
+SCOPES = ["timeline:create", "timeline:read"]
 
 
 @pytest.fixture
@@ -74,6 +77,8 @@ def machine_app(monkeypatch, key_pair):
     monkeypatch.setattr(app, "machine_auth_store", machine_store)
     monkeypatch.setattr(app, "auth_store", auth_store)
     monkeypatch.setattr(app, "timeline_store", timeline_store)
+    monkeypatch.setattr(app.app.state, "machine_auth_configured", True)
+    monkeypatch.setattr(app.app.state, "machine_auth_config", MachineAuthConfig.from_env())
     yield private, public, machine_store, rate_secret
     machine_store.close()
     auth_store.close()
@@ -91,7 +96,7 @@ def sign(private, message, namespace=NAMESPACE):
 
 
 def challenge_and_token(client, private, fingerprint=None):
-    config = MachineAuthConfig.from_env()
+    config = app.app.state.machine_auth_config
     fingerprint = fingerprint or next(iter(config.keys))
     challenge = client.post(
         "/api/cli/auth/challenge", json={"key_fingerprint": fingerprint}
@@ -204,8 +209,16 @@ def test_challenge_known_and_unknown_are_indistinguishable(machine_app):
     assert unknown_exchange.json() == {"detail": "invalid key proof"}
 
 
-def test_exact_message_namespace_audience_and_openssh_interop(machine_app):
+def test_exact_message_namespace_audience_and_openssh_interop(machine_app, monkeypatch):
     private, _public, _store, _secret = machine_app
+    now = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now
+
+    monkeypatch.setattr(machine_auth, "datetime", FixedDateTime)
     client = TestClient(app.app, base_url="http://127.0.0.1")
     challenge, token = challenge_and_token(client, private)
     body = challenge.json()
@@ -216,6 +229,8 @@ def test_exact_message_namespace_audience_and_openssh_interop(machine_app):
     assert lines[3].startswith("nonce:")
     assert lines[4] == "audience:http://127.0.0.1"
     assert lines[5] == f"expires_at:{body['expires_at']}"
+    assert CHALLENGE_SECONDS == 5 * 60
+    assert datetime.fromisoformat(body["expires_at"].replace("Z", "+00:00")) - now == timedelta(minutes=5)
     assert body["message"].endswith("\n")
     assert token.status_code == 200
     assert token.headers["Cache-Control"] == "no-store"
@@ -223,6 +238,62 @@ def test_exact_message_namespace_audience_and_openssh_interop(machine_app):
     assert token.json()["expires_in"] == 600
     assert token.json()["scopes"] == SCOPES
     assert len(base64.urlsafe_b64decode(token.json()["access_token"] + "==")) == 32
+
+
+def test_startup_owns_config_and_public_handlers_do_not_reload_it(
+    machine_app, monkeypatch
+):
+    private, _public, _store, _secret = machine_app
+    monkeypatch.setenv("ADMIN_PASSWORD_HASH", hash_password("fixture-password"))
+    original_from_env = MachineAuthConfig.from_env
+    loaded_without_loop = []
+
+    def recording_from_env(_cls):
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            loaded_without_loop.append(True)
+        else:
+            loaded_without_loop.append(False)
+        return original_from_env()
+
+    monkeypatch.setattr(MachineAuthConfig, "from_env", classmethod(recording_from_env))
+    with TestClient(app.app, base_url="http://127.0.0.1") as client:
+        assert loaded_without_loop == [True]
+
+        def unexpected_reload(_cls):
+            raise AssertionError("request paths must use startup-owned config")
+
+        monkeypatch.setattr(MachineAuthConfig, "from_env", classmethod(unexpected_reload))
+        fingerprint = next(iter(app.app.state.machine_auth_config.keys))
+        rejected = client.post(
+            "/api/cli/auth/token",
+            json={"challenge_id": "not-a-uuid", "signature": "bad"},
+        )
+        challenge = client.post(
+            "/api/cli/auth/challenge", json={"key_fingerprint": fingerprint}
+        )
+        assert challenge.status_code == 201
+        signature = sign(private, challenge.json()["message"])
+        token = client.post(
+            "/api/cli/auth/token",
+            json={
+                "challenge_id": challenge.json()["challenge_id"],
+                "signature": signature,
+            },
+        )
+        assert token.status_code == 200
+        assert token.json()["scopes"] == SCOPES
+        created = client.post(
+            "/api/admin/timeline",
+            headers={"Authorization": f"Bearer {token.json()['access_token']}"},
+            json={"body_markdown": "fixture"},
+        )
+        readiness = client.get("/readyz")
+
+    assert rejected.status_code == 401
+    assert created.status_code == 201
+    assert readiness.status_code == 200
 
 
 def test_malformed_exchange_fields_are_generic(machine_app):
@@ -638,6 +709,7 @@ def test_invalid_machine_config_only_breaks_machine_and_readiness(
     machine_app, monkeypatch
 ):
     monkeypatch.delenv("RATE_LIMIT_KEY")
+    app.app.state.machine_auth_config = MachineAuthConfig.from_env()
     client = TestClient(app.app, base_url="http://127.0.0.1")
     challenge = client.post(
         "/api/cli/auth/challenge", json={"key_fingerprint": "SHA256:" + "a" * 43}

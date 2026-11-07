@@ -89,8 +89,15 @@ md = MarkdownIt("commonmark", {"highlight": highlight}).enable(["table", "strike
 dollarmath_plugin(md, allow_digits=False)
 md.core.ruler.after("inline", "heading_anchors", add_heading_anchors)
 
+def _load_machine_auth_state() -> tuple[bool, MachineAuthConfig]:
+    return os.environ.get("ADMIN_SSH_KEYS") is not None, MachineAuthConfig.from_env()
+
+
 @asynccontextmanager
 async def lifespan(_app):
+    configured, config = await asyncio.to_thread(_load_machine_auth_state)
+    _app.state.machine_auth_configured = configured
+    _app.state.machine_auth_config = config
     yield
     if timeline_store is not None:
         await asyncio.to_thread(timeline_store.close)
@@ -101,6 +108,8 @@ async def lifespan(_app):
 
 
 app = FastAPI(lifespan=lifespan)
+app.state.machine_auth_configured = False
+app.state.machine_auth_config = MachineAuthConfig({}, None, None, False)
 configure_logging()
 timeline_store: TimelineStoreProtocol | None = (
     TimelineStore(os.environ["DATABASE_URL"]) if os.environ.get("DATABASE_URL") else None
@@ -237,6 +246,10 @@ def _clear_session_cookie(response: Response, config: AdminConfig) -> None:
     )
 
 
+def _machine_config(request: Request) -> MachineAuthConfig:
+    return request.app.state.machine_auth_config
+
+
 def _load_session(request: Request) -> tuple[str, Session, AdminConfig]:
     config = _admin_config()
     if not config.valid:
@@ -262,25 +275,31 @@ class Access:
     session: tuple[str, Session, AdminConfig] | None = None
 
 
+def _load_bearer(request: Request, required_scope: str) -> Access:
+    authorization = request.headers.get("Authorization")
+    if not authorization or not authorization.startswith("Bearer ") or authorization.count(" ") != 1:
+        raise HTTPException(401, "authentication required")
+    token = authorization[7:]
+    if not token or machine_auth_store is None:
+        raise HTTPException(401, "authentication required")
+    try:
+        principal = machine_auth_store.authenticate(token, _machine_config(request))
+    except Exception as exc:
+        logger.warning("machine_auth.bearer.storage_unavailable")
+        raise HTTPException(503, "admin unavailable") from exc
+    if principal is None:
+        raise HTTPException(401, "authentication required")
+    if not principal.allows(required_scope):
+        raise HTTPException(403, "insufficient scope")
+    return Access(principal)
+
+
 def require_access(required_scope: str, *, mutation: bool, bearer: bool = False):
     def authorize(request: Request) -> Access:
-        authorization = request.headers.get("Authorization")
-        if authorization is not None:
-            if not bearer or not authorization.startswith("Bearer ") or authorization.count(" ") != 1:
+        if request.headers.get("Authorization") is not None:
+            if not bearer:
                 raise HTTPException(401, "authentication required")
-            token = authorization[7:]
-            if not token or machine_auth_store is None:
-                raise HTTPException(401, "authentication required")
-            try:
-                principal = machine_auth_store.authenticate(token, MachineAuthConfig.from_env())
-            except Exception as exc:
-                logger.warning("machine_auth.bearer.storage_unavailable")
-                raise HTTPException(503, "admin unavailable") from exc
-            if principal is None:
-                raise HTTPException(401, "authentication required")
-            if not principal.allows(required_scope):
-                raise HTTPException(403, "insufficient scope")
-            return Access(principal)
+            return _load_bearer(request, required_scope)
         token, session, config = _load_session(request)
         if mutation:
             _check_origin(request, config)
@@ -350,7 +369,7 @@ async def machine_challenge(request: Request):
             _machine_store().issue_challenge,
             payload.key_fingerprint,
             trusted_client_ip(request),
-            MachineAuthConfig.from_env(),
+            _machine_config(request),
         )
     except Throttled as exc:
         logger.info("machine_auth.challenge.throttled")
@@ -375,7 +394,7 @@ async def _reject_machine_proof(request: Request) -> None:
         retry = await asyncio.to_thread(
             _machine_store().reject_exchange,
             trusted_client_ip(request),
-            MachineAuthConfig.from_env(),
+            _machine_config(request),
         )
     except RuntimeError as exc:
         raise HTTPException(503, "machine authentication unavailable") from exc
@@ -403,7 +422,7 @@ async def machine_token(request: Request):
             payload.challenge_id,
             payload.signature,
             trusted_client_ip(request),
-            MachineAuthConfig.from_env(),
+            _machine_config(request),
         )
     except Throttled as exc:
         logger.info("machine_auth.exchange.throttled")
@@ -506,6 +525,7 @@ def admin_logout(
 @app.post("/api/admin/timeline", status_code=201)
 def create_admin_timeline(
     payload: TimelineMutation,
+    request: Request,
     access: Access = Depends(require_timeline_create),
 ):
     try:
@@ -514,7 +534,7 @@ def create_admin_timeline(
         raise HTTPException(422, "invalid timeline entry") from exc
     if access.principal.scopes is not None:
         assert machine_auth_store is not None
-        retry = machine_auth_store.permit_create(access.principal.subject, MachineAuthConfig.from_env())
+        retry = machine_auth_store.permit_create(access.principal.subject, _machine_config(request))
         if retry is not None:
             raise HTTPException(429, "too many requests", headers={"Retry-After": str(retry)})
     try:
@@ -588,13 +608,13 @@ def delete_admin_timeline(
 
 
 @app.get("/readyz")
-async def readyz():
+async def readyz(request: Request):
     ready, reason = await check_readiness(
         timeline_store, EXPECTED_SCHEMA_REVISIONS, _admin_config().valid
     )
     if not ready:
         return JSONResponse({"status": "not_ready", "reason": reason or "dependency unavailable"}, status_code=503)
-    if os.environ.get("ADMIN_SSH_KEYS") is not None and not MachineAuthConfig.from_env().valid:
+    if request.app.state.machine_auth_configured and not _machine_config(request).valid:
         return JSONResponse({"status": "not_ready", "reason": "authentication configuration invalid"}, status_code=503)
     return {"status": "ok"}
 

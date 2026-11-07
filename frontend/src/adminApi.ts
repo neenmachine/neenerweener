@@ -1,5 +1,5 @@
 // The one owner of browser admin auth: the session check, the in-memory CSRF token, requests and their
-// error text, and the timeline body rule. Used by /admin and by the composer on /timeline; lazy loaded.
+// error text, and the empty-text check. Used by /admin and by the composer on /timeline; lazy loaded.
 
 export type Entry = { id: number; html: string; created_at: string; edited_at: string | null };
 export type AdminEntry = Entry & { body_markdown: string };
@@ -10,10 +10,10 @@ export type Result<T> = { ok: true; data: T } | { ok: false; status: number; mes
 export const LIMIT = 10_000;
 // Unicode code points, the unit the server's limit counts (not UTF-16 units, like String.length).
 export const length = (s: string) => [...s].length;
-// The characters Python's str.strip() removes (str.isspace()); JS trim() differs, for example on U+0085 and U+FEFF.
+// A subset of what Python's str.strip() removes, so the client is never stricter than the server; JS trim() also strips U+FEFF.
 const PYTHON_SPACE = /^[\t-\r\x1c-\x20\x85\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]*$/;
-// Mirrors validate_timeline_body in backend/timeline.py; the server still checks.
-export const validTimelineBody = (s: string) => !s.includes("\0") && !PYTHON_SPACE.test(s) && length(s) <= LIMIT;
+// The only client gate on the submit buttons. Every other rule (NUL, length, links) is the server's: its 422 shows inline.
+export const hasText = (s: string) => !PYTHON_SPACE.test(s);
 
 // In memory only: never in storage, the URL, or the DOM.
 let csrf: string | null = null;

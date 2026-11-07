@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { type Entry, createTimeline, LIMIT, length, validTimelineBody } from "./adminApi";
+import { type Entry, createTimeline, hasText, LIMIT, length } from "./adminApi";
 
 // The admin's compose box at the top of /timeline. A lazy chunk: only loaded after the session check says signed in.
 // The "admin" class reuses the /admin form styles.
@@ -11,7 +11,7 @@ export default function TimelineComposer({ onCreated, onExpired }: { onCreated: 
   // A ref, not state: two submits in the same task both see busy=false.
   const inFlight = useRef(false);
   const textarea = useRef<HTMLTextAreaElement>(null);
-  const valid = validTimelineBody(text);
+  const valid = hasText(text);
   const n = length(text);
 
   const post = async () => {

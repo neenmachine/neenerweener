@@ -1,19 +1,16 @@
 import { expect, test } from "vitest";
-import { validTimelineBody } from "./adminApi";
+import { hasText } from "./adminApi";
 
-// The server's rule (backend/timeline.py): no NUL, not only str.strip() whitespace, at most 10,000 code points.
+// Only whitespace-only text is held back, and only characters Python's str.strip() also removes; the server decides the rest.
 test.each([
   ["empty", "", false],
   ["spaces and newlines", " \n\t\r", false],
   ["python-only whitespace U+001C and U+0085", "\x1c\x85", false],
   ["unicode spaces", "\u00a0\u2000\u3000\u2028", false],
-  ["NUL", "a\0b", false],
   ["BOM, which JS trim() strips but Python keeps", "\ufeff", true],
   ["one letter", "a", true],
-  ["10,000 letters", "x".repeat(10_000), true],
-  ["10,001 letters", "x".repeat(10_001), false],
-  ["10,000 astral code points (20,000 UTF-16 units)", "😀".repeat(10_000), true],
-  ["10,001 astral code points", "😀".repeat(10_001), false],
-])("%s", (_, body, valid) => {
-  expect(validTimelineBody(body)).toBe(valid);
+  ["NUL, which the server refuses", "a\0b", true],
+  ["10,001 letters, which the server refuses", "x".repeat(10_001), true],
+])("%s", (_, body, expected) => {
+  expect(hasText(body)).toBe(expected);
 });

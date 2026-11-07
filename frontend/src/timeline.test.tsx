@@ -243,7 +243,7 @@ test("a server error shows inline and keeps the draft; two submits in one task p
   expect(ids()).toEqual(["entry-4"]);
 });
 
-test("tweet stays off for text the server would refuse", { timeout: 5000 }, async () => {
+test("tweet stays off only for whitespace-only text", { timeout: 5000 }, async () => {
   const calls = await openAdmin(true, signedIn);
   await showsComposer();
   type("\x85 ");
@@ -253,6 +253,24 @@ test("tweet stays off for text the server would refuse", { timeout: 5000 }, asyn
   expect(calls).toHaveLength(1);
   type("ok");
   expect(tweet()!.getAttribute("aria-disabled")).toBe("false");
+});
+
+// The server owns NUL, length and link rules: the client sends the text and shows the 422 inline.
+test.each([
+  ["NUL", "a\0b", "text must not contain NUL"],
+  ["10,001 characters", "x".repeat(10_001), "text is too long"],
+])("%s text is sent and the server's 422 shows inline with the draft kept", { timeout: 5000 }, async (_, body, detail) => {
+  const calls = await openAdmin(true, (url) => (url === "/api/admin/session" ? signedIn(url) : reply(422, { detail })));
+  await showsComposer();
+  type(body);
+  expect(tweet()!.getAttribute("aria-disabled")).toBe("false");
+  submit();
+  await settle();
+  const posts = calls.filter(([url]) => url === "/api/admin/timeline");
+  expect(posts).toHaveLength(1);
+  expect(posts[0][1]?.body).toBe(JSON.stringify({ body_markdown: body }));
+  expect(document.querySelector("form [role=alert]")?.textContent).toBe(detail);
+  expect(textarea()!.value).toBe(body);
 });
 
 test("a 401 on tweet removes the composer and the hint", { timeout: 5000 }, async () => {

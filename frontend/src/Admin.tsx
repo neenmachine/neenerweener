@@ -5,12 +5,12 @@ import {
   type Entry,
   type Result,
   checkSession,
+  hasText,
   LIMIT,
   length,
   login,
   logout as signOut,
   request,
-  validTimelineBody,
 } from "./adminApi";
 
 // The private /admin page: a password form, then compose, edit and delete for timeline entries.
@@ -308,7 +308,7 @@ function Manager({ send }: { send: Send }) {
         error={postError}
         onSubmit={post}
       >
-        <Button type="submit" busy={posting} off={!validTimelineBody(draft)} label="post" busyLabel="posting" />
+        <Button type="submit" busy={posting} off={!hasText(draft)} label="post" busyLabel="posting" />
       </Editor>
       {list === "loading" && <p className="muted">loading</p>}
       {list === "failed" && (
@@ -375,7 +375,7 @@ function Editor({
   children: ReactNode;
 }) {
   const n = length(text);
-  const submit = () => !busy && validTimelineBody(text) && onSubmit();
+  const submit = () => !busy && hasText(text) && onSubmit();
   return (
     <form
       className="editor"
@@ -509,7 +509,7 @@ function Row({
           onSubmit={save}
           onCancel={cancel(editButton)}
         >
-          <Button type="submit" busy={saving} off={!validTimelineBody(text)} label="save" busyLabel="saving" />
+          <Button type="submit" busy={saving} off={!hasText(text)} label="save" busyLabel="saving" />
         </Editor>
       ) : (
         // Rendered server side from Henry's entry, with raw HTML disabled.

@@ -34,7 +34,7 @@ class CliTests(unittest.TestCase):
 
     def test_tweet_signs_server_message_with_exact_namespace_and_posts_bearer_request(self):
         calls=[]
-        responses = iter([Response({"challenge_id":"c", "message":"line\nfinal\n"}), Response({"access_token":"tok-123"}), Response({"id":7})])
+        responses = iter([Response({"challenge_id":"123e4567-e89b-12d3-a456-426614174000", "message":"line\nfinal\n", "namespace":cli.NAMESPACE, "expires_at":"2099-01-01T00:00:00Z"}), Response({"access_token":"tok-123", "token_type":"Bearer", "expires_in":600, "scopes":["timeline:write"]}), Response({"id":7})])
         def open_(request, timeout): calls.append(request); return next(responses)
         def run(args, stdin=None):
             if args[1:3] == ["-lf", str(self.key)]: return subprocess.CompletedProcess(args, 0, b"256 SHA256:fp comment\n", b"")
@@ -55,9 +55,37 @@ class CliTests(unittest.TestCase):
             self.assertEqual(cm.exception.code, 1); self.assertEqual(op.call_count, 1)
 
     def test_tweet_errors_never_include_token_signature_or_body(self):
-        with patch.object(cli.OPENER, "open", side_effect=cli.HTTPError("https://s", 422, "x", {}, None)):
-            with self.assertRaises(cli.CliError) as cm: cli._request("https://s", "/api/admin/timeline", {"body_markdown":"UNPUBLISHED_TEXT"}, "tok-123")
-            self.assertNotIn("UNPUBLISHED_TEXT", str(cm.exception))
+        cases = [
+            ({"body_markdown":"UNPUBLISHED_TEXT"}, "tok-123"),
+            ({"challenge_id":"challenge-secret", "signature":"signature-secret"}, None),
+        ]
+        for payload, bearer in cases:
+            error = cli.HTTPError("https://s", 422, "x", {}, None)
+            error.read = lambda n=-1, payload=payload, bearer=bearer: json.dumps({"detail": "leak " + " ".join([*payload.values(), bearer or ""]) }).encode()
+            with patch.object(cli.OPENER, "open", side_effect=error):
+                with self.assertRaises(cli.CliError) as cm:
+                    cli._request("https://s", "/api/admin/timeline", payload, bearer)
+                for secret in [*payload.values(), bearer]:
+                    if secret:
+                        self.assertNotIn(secret, str(cm.exception))
+
+    def test_tweet_rejects_invalid_challenge_and_token_protocol(self):
+        valid_challenge = {"challenge_id":"123e4567-e89b-12d3-a456-426614174000", "message":"m", "namespace":cli.NAMESPACE, "expires_at":"2099-01-01T00:00:00Z"}
+        for challenge in [
+            {**valid_challenge, "challenge_id":"not-a-uuid"},
+            {**valid_challenge, "namespace":"wrong"},
+            {**valid_challenge, "expires_at":"2099-01-01T00:00:00+00:00"},
+            {**valid_challenge, "message":"x" * 4097},
+        ]:
+            with self.assertRaisesRegex(cli.CliError, "invalid response"):
+                cli._challenge(challenge)
+        for token in [
+            {"access_token":"token", "token_type":"Basic", "expires_in":600, "scopes":["timeline:write"]},
+            {"access_token":"token", "token_type":"Bearer", "expires_in":601, "scopes":["timeline:write"]},
+            {"access_token":"token", "token_type":"Bearer", "expires_in":600, "scopes":["timeline:write", "admin"]},
+        ]:
+            with self.assertRaisesRegex(cli.CliError, "invalid response"):
+                cli._token(token)
 
     @unittest.skipUnless(shutil.which("ssh-keygen"), "ssh-keygen unavailable")
     def test_real_interoperability_signature_verifies(self):

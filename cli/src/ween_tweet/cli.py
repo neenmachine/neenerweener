@@ -7,6 +7,9 @@ import socket
 import subprocess
 import sys
 import tomllib
+import uuid
+from datetime import datetime
+from re import fullmatch
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse, urlunparse
@@ -105,8 +108,21 @@ def _json_response(response):
     return value
 
 
+def _sensitive_values(payload, bearer):
+    values = {value for value in payload.values() if isinstance(value, str) and value}
+    if bearer:
+        values.add(bearer)
+    return values
+
+
+def _safe_detail(value, sensitive):
+    return (isinstance(value, str) and len(value) <= 120 and "\n" not in value
+            and "\r" not in value and not any(secret in value for secret in sensitive))
+
+
 def _request(server, path, payload, bearer=None):
     body = json.dumps(payload, separators=(",", ":")).encode()
+    sensitive = _sensitive_values(payload, bearer)
     if len(body) > 65_536:
         raise CliError("request is too large", 2)
     url = server + path
@@ -125,9 +141,7 @@ def _request(server, path, payload, bearer=None):
             try:
                 value = _json_response(e)
                 candidate = value.get("detail")
-                sensitive = [v for v in payload.values() if isinstance(v, str) and v]
-                if (isinstance(candidate, str) and len(candidate) <= 120 and "\n" not in candidate
-                        and "\r" not in candidate and not any(v in candidate for v in sensitive)):
+                if _safe_detail(candidate, sensitive):
                     detail = candidate
             except CliError:
                 pass
@@ -155,20 +169,59 @@ def _safe_header(value):
 def _required(data, name, typ):
     value = data.get(name)
     if not isinstance(value, typ) or (isinstance(value, str) and not value):
-        raise CliError("server returned an invalid response", 3)
+        raise CliError("server returned an invalid response", 1)
     return value
+
+
+def _challenge(data):
+    challenge_id = _required(data, "challenge_id", str)
+    try:
+        canonical_id = str(uuid.UUID(challenge_id))
+    except ValueError:
+        raise CliError("server returned an invalid response", 1)
+    if len(challenge_id) != 36 or canonical_id != challenge_id:
+        raise CliError("server returned an invalid response", 1)
+    message = _required(data, "message", str)
+    try:
+        encoded_message = message.encode("utf-8")
+    except UnicodeEncodeError:
+        raise CliError("server returned an invalid response", 1)
+    if len(encoded_message) > 4096:
+        raise CliError("server returned an invalid response", 1)
+    namespace = data.get("namespace")
+    if not isinstance(namespace, str) or len(namespace) > len(NAMESPACE) or namespace != NAMESPACE:
+        raise CliError("server returned an invalid response", 1)
+    expires_at = _required(data, "expires_at", str)
+    if len(expires_at) > 40 or not fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z", expires_at):
+        raise CliError("server returned an invalid response", 1)
+    try:
+        datetime.fromisoformat(expires_at[:-1] + "+00:00")
+    except ValueError:
+        raise CliError("server returned an invalid response", 1)
+    return challenge_id, encoded_message
+
+
+def _token(data):
+    token = _required(data, "access_token", str)
+    scopes = data.get("scopes")
+    if (len(token) > 4096 or any(ord(char) < 33 or ord(char) > 126 for char in token)
+            or data.get("token_type") != "Bearer" or data.get("expires_in") != 600
+            or not isinstance(scopes, list) or len(scopes) > 16
+            or any(not isinstance(scope, str) or len(scope) > 128 for scope in scopes)
+            or len(scopes) != len(set(scopes)) or set(scopes) != {"timeline:write"}):
+        raise CliError("server returned an invalid response", 1)
+    return token
 
 
 def post(server, key, text):
     fingerprint = _fingerprint(key)
     challenge = _request(server, "/api/cli/auth/challenge", {"key_fingerprint": fingerprint})
-    challenge_id = _required(challenge, "challenge_id", str)
-    message = _required(challenge, "message", str).encode("utf-8")
+    challenge_id, message = _challenge(challenge)
     signed = _run(["ssh-keygen", "-Y", "sign", "-n", NAMESPACE, "-f", str(key)], message)
     if signed.returncode or not signed.stdout.startswith(b"-----BEGIN SSH SIGNATURE-----"):
         raise CliError("SSH signing failed; check that the key is loaded or its passphrase is available", 3)
     token_data = _request(server, "/api/cli/auth/token", {"challenge_id": challenge_id, "signature": signed.stdout.decode("ascii", "strict")})
-    token = _required(token_data, "access_token", str)
+    token = _token(token_data)
     created = _request(server, "/api/admin/timeline", {"body_markdown": text}, token)
     entry_id = created.get("id")
     if not isinstance(entry_id, int) or isinstance(entry_id, bool) or entry_id < 1:

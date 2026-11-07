@@ -29,6 +29,7 @@ from pygments.util import ClassNotFound
 
 from anchors import add_heading_anchors
 from operations import check_readiness, configure_logging, load_schema_heads
+from page_markup import home_markup
 import routes
 
 POSTS_DIR = Path(os.environ.get("POSTS_DIR", Path(__file__).parent.parent / "posts"))
@@ -969,7 +970,8 @@ def render_page(match: tuple[str, dict[str, str]] | None, request: Request) -> t
 
 
 def home_page(request: Request) -> tuple[dict, dict, str, int]:
-    return {"/api/posts": list_posts()}, {"title": "neenerweener"}, '<main><h1 class="sr-only">neenerweener</h1></main>', 200
+    posts = list_posts()
+    return {"/api/posts": posts}, {"title": "neenerweener"}, home_markup(posts, request.query_params.get("tag")), 200
 
 
 def timeline_page_data(request: Request) -> tuple[dict, dict, str, int]:

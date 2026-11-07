@@ -56,13 +56,32 @@ function TimelinePage() {
   const [older, setOlder] = useState<Timeline[]>([]);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
+  // What the always-mounted status region says, so screen readers hear loading, failure and progress.
+  const [status, setStatus] = useState("");
+  // createRoot replaces the server markup, so the new entry is never the browser's :target; track the hash.
+  const [hash, setHash] = useState(location.hash);
+  // A ref, not state: two activations in the same task both see busy=false.
+  const inFlight = useRef(false);
+  const button = useRef<HTMLButtonElement>(null);
+  const list = useRef<HTMLDivElement>(null);
+  // Index of the entry to focus after the last page removes the focused button.
+  const focusAt = useRef<number | null>(null);
   useEffect(() => {
     document.title = "timeline";
+    const onHash = () => setHash(location.hash);
+    addEventListener("hashchange", onHash);
+    return () => removeEventListener("hashchange", onHash);
   }, []);
   useEffect(() => {
     // Entries render after the page loads, so the browser cannot jump to /timeline#entry-<id> itself.
     if (data && location.hash) document.getElementById(location.hash.slice(1))?.scrollIntoView();
   }, [data]);
+  useEffect(() => {
+    if (focusAt.current === null) return;
+    const links = list.current?.querySelectorAll<HTMLElement>(".timeline-entry > footer > a");
+    links?.[Math.min(focusAt.current, links.length - 1)]?.focus();
+    focusAt.current = null;
+  }, [older]);
   const heading = <h1>timeline</h1>;
   if (error)
     return (
@@ -84,32 +103,53 @@ function TimelinePage() {
       </article>
     );
   const loadMore = () => {
-    if (busy || cursor === null) return;
+    if (inFlight.current || cursor === null) return;
+    inFlight.current = true;
     setBusy(true);
     setFailed(false);
+    setStatus("loading");
     fetch(`/api/timeline?before=${cursor}`)
       .then((r) => (r.ok ? r.json() : Promise.reject()))
-      .then((page: Timeline) => setOlder((prev) => [...prev, page]), () => setFailed(true))
-      .finally(() => setBusy(false));
+      .then(
+        (page: Timeline) => {
+          const added = page.entries.filter((e) => !seen.has(e.id)).length;
+          // The button goes away with the last page; keep keyboard focus on the new entries, not <body>.
+          if (page.next_cursor === null && document.activeElement === button.current) focusAt.current = entries.length;
+          setOlder((prev) => [...prev, page]);
+          setStatus(page.next_cursor === null ? `${added} more loaded, end of timeline` : `${added} more loaded`);
+        },
+        () => {
+          setFailed(true);
+          setStatus("could not load more");
+        },
+      )
+      .finally(() => {
+        inFlight.current = false;
+        setBusy(false);
+      });
   };
   return (
     <article>
       {heading}
       {/* Mirrors timeline_markup in backend/app.py, so the swap from the server markup is not visible. */}
-      <div className="timeline">
+      <div className="timeline" ref={list}>
         {entries.map((e) => (
-          <article key={e.id} className="timeline-entry" id={`entry-${e.id}`}>
+          <article
+            key={e.id}
+            className={hash === `#entry-${e.id}` ? "timeline-entry target" : "timeline-entry"}
+            id={`entry-${e.id}`}
+          >
             {/* Rendered server side from Henry's entry, with raw HTML disabled. */}
             <div dangerouslySetInnerHTML={{ __html: e.html }} />
             <footer>
-              <a href={`#entry-${e.id}`}>
-                <time dateTime={e.created_at} title={full(e.created_at)}>
+              <a href={`#entry-${e.id}`} aria-label={full(e.created_at)}>
+                <time dateTime={new Date(e.created_at).toISOString()} title={full(e.created_at)}>
                   {compact(e.created_at)}
                 </time>
               </a>
               {e.edited_at && (
                 <span className="edited" title={full(e.edited_at)}>
-                  edited
+                  edited<span className="sr-only"> {full(e.edited_at)}</span>
                 </span>
               )}
             </footer>
@@ -119,16 +159,22 @@ function TimelinePage() {
       {cursor !== null && (
         <div className="load-more">
           {/* aria-disabled, not disabled, so keyboard focus stays on the button while it loads. */}
-          <button type="button" onClick={loadMore} aria-disabled={busy} aria-busy={busy}>
-            {busy ? "loading" : "load more"}
+          <button type="button" ref={button} onClick={loadMore} aria-disabled={busy} aria-busy={busy}>
+            {/* Both labels share one grid cell, so the button keeps the width of the longer one. */}
+            <span hidden={busy}>load more</span>
+            <span hidden={!busy}>loading</span>
           </button>
+          {/* The status region below announces it. */}
           {failed && (
-            <span className="muted" role="status">
+            <span className="muted" aria-hidden="true">
               could not load more
             </span>
           )}
         </div>
       )}
+      <p className="sr-only" role="status">
+        {status}
+      </p>
     </article>
   );
 }

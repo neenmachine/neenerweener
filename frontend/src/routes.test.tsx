@@ -20,7 +20,7 @@ afterEach(() => {
   vi.resetModules();
 });
 
-async function render(path: string, preload: object, fetched: Record<string, unknown> = {}) {
+async function render(path: string, preload: object, fetched: Record<string, unknown> = {}, title = "server title") {
   const fetch = vi.fn((url: string) =>
     Promise.resolve({ ok: true, status: 200, headers: new Headers(), json: () => Promise.resolve(fetched[url]) }),
   );
@@ -29,6 +29,7 @@ async function render(path: string, preload: object, fetched: Record<string, unk
   // Escaped like the server's preload, so data holding "</script>" stays inside the script.
   const json = JSON.stringify(preload).replace(/</g, "\\u003c");
   document.body.innerHTML = `<script id="preload" type="application/json">${json}</script><div id="root"></div>`;
+  document.title = title;
   await import("./Admin"); // the lazy chunk, loaded up front so the admin page renders within the wait
   const { default: App } = await import("./App");
   await act(async () => {
@@ -58,6 +59,11 @@ test.each(pages.map((row) => [row.path, row] as const))("%s has one footer feed 
   expect(footer.querySelector('a[href="/feed.xml"]')!.outerHTML).toBe('<a href="/feed.xml">feed</a>');
   const current = [...footer.querySelectorAll('a[aria-current="page"]')].map((a) => a.getAttribute("href"));
   expect(current).toEqual(({ "/": ["/"], "/timeline": ["/timeline"] } as Record<string, string[]>)[row.path] ?? []);
+});
+
+test("rendering a code page keeps the server document title", async () => {
+  await render("/code/demo/hello.py", { page: { kind: "code", project: "demo", path: "hello.py" } }, { "/api/code/demo": { name: "demo", files: ["hello.py"], readme_html: null }, "/api/code/demo/file/hello.py": { path: "hello.py", html: "<span>print(1)</span>" } }, "hello.py · demo");
+  expect(document.title).toBe("hello.py · demo");
 });
 
 test("a post title links nowhere; the back arrow sits beside it", async () => {

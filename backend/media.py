@@ -149,7 +149,8 @@ def process_image(data: bytes) -> ProcessedImage:
                 if source.format == "JPEG":
                     source.draft("RGB", (LG_EDGE, LG_EDGE))  # decode at 1/2..1/8 scale to bound memory
                 source.load()
-                image = _srgb(ImageOps.exif_transpose(source))
+                ImageOps.exif_transpose(source, in_place=True)  # in place: no second full-size copy
+                image = _srgb(source)
                 lg = image.resize(fit(*image.size, LG_EDGE), Image.Resampling.LANCZOS)
                 sm = lg.resize(fit(*lg.size, SM_EDGE), Image.Resampling.LANCZOS)
                 lg_bytes, sm_bytes = _webp(lg, LG_QUALITY), _webp(sm, SM_QUALITY)
@@ -168,7 +169,7 @@ def _srgb(image: Image.Image) -> Image.Image:
         if image.mode not in ("RGB", "RGBA", "CMYK", "L"):
             image = image.convert(mode)
         return ImageCms.profileToProfile(image, source, ImageCms.createProfile("sRGB"), outputMode=mode)
-    return image.convert(mode)
+    return image if image.mode == mode else image.convert(mode)
 
 
 def _webp(image: Image.Image, quality: int) -> bytes:

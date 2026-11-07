@@ -259,14 +259,14 @@ def test_one_decode_at_a_time(uploads, monkeypatch):
     active, peak, lock = [0], [0], threading.Lock()
     original = media.ImageOps.exif_transpose
 
-    def slow_transpose(image):
+    def slow_transpose(image, **kwargs):
         with lock:
             active[0] += 1
             peak[0] = max(peak[0], active[0])
         time.sleep(0.2)
         with lock:
             active[0] -= 1
-        return original(image)
+        return original(image, **kwargs)
 
     monkeypatch.setattr(media.ImageOps, "exif_transpose", slow_transpose)
     data = encode(two_tone(), "PNG")

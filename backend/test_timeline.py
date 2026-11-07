@@ -1,0 +1,110 @@
+import os
+from datetime import datetime, timezone
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+
+import app
+from timeline import render_timeline
+
+
+class FakeStore:
+    def __init__(self, rows):
+        self.rows = rows
+        self.calls = []
+
+    def list(self, before, limit):
+        self.calls.append((before, limit))
+        return self.rows
+
+
+def test_timeline_markdown_disables_html_and_images():
+    html = render_timeline('<strong>no</strong>\n\n![image](https://example.test/a.png)')
+    assert '<strong>' not in html
+    assert '&lt;strong&gt;' in html
+    assert '<img' not in html
+    assert 'image' in html
+
+
+def test_timeline_markdown_rejects_unsafe_links():
+    with pytest.raises(ValueError, match='unsafe link'):
+        render_timeline('[bad](javascript:alert(1))')
+
+
+def test_list_timeline_is_newest_first_and_paginated(monkeypatch):
+    rows = [
+        {"id": 8, "body_markdown": "new", "created_at": datetime(2026, 1, 2, tzinfo=timezone.utc), "edited_at": None},
+        {"id": 7, "body_markdown": "old", "created_at": datetime(2026, 1, 1, tzinfo=timezone.utc), "edited_at": None},
+        {"id": 6, "body_markdown": "next", "created_at": datetime(2025, 1, 1, tzinfo=timezone.utc), "edited_at": None},
+    ]
+    store = FakeStore(rows)
+    monkeypatch.setattr(app, "timeline_store", store)
+    response = TestClient(app.app).get('/api/timeline?limit=2')
+    assert response.status_code == 200
+    assert [entry['id'] for entry in response.json()['entries']] == [8, 7]
+    assert response.json()['next_cursor'] == 7
+    assert store.calls == [(None, 2)]
+
+
+def test_list_timeline_validates_cursor_and_limit(monkeypatch):
+    store = FakeStore([])
+    monkeypatch.setattr(app, "timeline_store", store)
+    client = TestClient(app.app)
+    assert client.get('/api/timeline?before=0').status_code == 422
+    assert client.get('/api/timeline?limit=21').status_code == 422
+    assert client.get('/api/timeline?limit=0').status_code == 422
+    assert client.get('/api/timeline?before=nope').status_code == 422
+    assert store.calls == []
+
+
+def test_timeline_is_unavailable_without_database(monkeypatch):
+    monkeypatch.setattr(app, "timeline_store", None)
+    response = TestClient(app.app).get('/api/timeline')
+    assert response.status_code == 503
+    assert response.json() == {'detail': 'timeline unavailable'}
+
+
+def test_alembic_has_one_head():
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    config = Config(str(Path(__file__).with_name('alembic.ini')))
+    script = ScriptDirectory.from_config(config)
+    assert script.get_heads() == ['001_timeline']
+    assert script.get_revision('001_timeline').down_revision is None
+
+
+@pytest.mark.skipif(not os.environ.get('DATABASE_URL'), reason='DATABASE_URL not configured')
+def test_alembic_upgrade_from_empty():
+    from alembic import command
+    from alembic.config import Config
+    from sqlalchemy import create_engine, inspect
+
+    config = Config(str(Path(__file__).with_name('alembic.ini')))
+    engine = create_engine(os.environ['DATABASE_URL'])
+    try:
+        with engine.begin() as connection:
+            connection.exec_driver_sql('DROP TABLE IF EXISTS timeline_entries CASCADE')
+            connection.exec_driver_sql('DROP TABLE IF EXISTS alembic_version')
+        command.upgrade(config, 'head')
+        assert 'timeline_entries' in inspect(engine).get_table_names()
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.skipif(not os.environ.get('DATABASE_URL'), reason='DATABASE_URL not configured')
+def test_alembic_upgrade_from_previous_head():
+    from alembic import command
+    from alembic.config import Config
+    from sqlalchemy import create_engine, text
+
+    config = Config(str(Path(__file__).with_name('alembic.ini')))
+    command.downgrade(config, 'base')
+    command.upgrade(config, '001_timeline')
+    engine = create_engine(os.environ['DATABASE_URL'])
+    try:
+        with engine.connect() as connection:
+            assert connection.execute(text('select version_num from alembic_version')).scalar() == '001_timeline'
+    finally:
+        engine.dispose()

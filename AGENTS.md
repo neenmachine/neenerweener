@@ -30,6 +30,7 @@ Everything else: the site, backend, frontend, styling, deployment, demos, toolin
 - All checks: `make test`
 - Backend: `cd backend && uv run fastapi dev app.py`
 - Backend tests: `cd backend && uv run pytest`
+- CLI tests: `cd cli && uv run --locked pytest -q`
 - Frontend: `cd frontend && pnpm dev`
 - Frontend build and type check: `cd frontend && pnpm build`
 - Snapshot a project's committed files: `make code-sync PROJECT=~/path/to/repo [NAME=name]` (skips files over 1 MB, warns on personal info, refuses secret-looking lines; uncommitted changes are not included)

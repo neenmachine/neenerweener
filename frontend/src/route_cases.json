@@ -1,5 +1,5 @@
 {
- "_comment": "Every page URL case, run by backend/test_routes.py (server) and src/routes.test.tsx (React). `data` is the server's preload besides `page`; `fetched` is what the React page then fetches. Fixtures: post hello, code project demo with hello.py, empty timeline.",
+ "_comment": "Every page URL case, run by backend/test_routes.py (server) and src/routes.test.tsx (React). `data` is the server's preload besides `page`; `fetched` is what the React page then fetches. Fixtures: post hello, code project demo with hello.py, empty timeline. `noscript` is the text the server shows without JavaScript.",
  "rows": [
   {
    "path": "/",
@@ -151,7 +151,8 @@
     "/api/admin/session": {
      "authenticated": false
     }
-   }
+   },
+   "noscript": "the admin panel needs JavaScript"
   },
   {
    "path": "/does-not-exist",

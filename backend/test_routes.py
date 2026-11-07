@@ -147,6 +147,8 @@ def test_route_table(site, case):
         assert [re.sub(r"<[^>]+>", "", h).strip() for h in re.findall(r"<h1[^>]*>(.*?)</h1>", markup)] == case["h1"]
     if "markup" in case:
         assert markup == case["markup"]
+    noscripts = re.findall(r"<noscript>(.*?)</noscript>", markup, re.S)
+    assert [case["noscript"] in n for n in noscripts] == ([True] if "noscript" in case else [])
 
 
 def test_route_table_covers_every_page_kind():

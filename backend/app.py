@@ -899,7 +899,7 @@ def render_page(match: tuple[str, dict[str, str]] | None, request: Request) -> t
 
 
 def shell_page(request: Request) -> tuple[dict, dict, str, int]:
-    """A page React renders alone, such as admin pages."""
+    """A page React renders alone, with no server markup."""
     return {}, {"title": "neenerweener"}, "", 200
 
 
@@ -921,6 +921,19 @@ def timeline_before(request: Request) -> int | None:
     return int(values[0])
 
 
+def admin_page(request: Request) -> tuple[dict, dict, str, int]:
+    return {}, {"title": "admin"}, ADMIN_NOSCRIPT, 200
+
+
+# The server footer for pages other than /timeline; Footer in App.tsx renders the same links.
+SITE_FOOTER = '<footer><a href="/">neenerweener</a><a href="/timeline">timeline</a></footer>'
+# Mirrors the Admin shell in Admin.tsx, so the no-JavaScript page keeps the same heading and footer.
+ADMIN_NOSCRIPT = (
+    '<noscript><main><article class="admin"><div class="admin-head"><h1>admin</h1></div>'
+    f'<p class="muted">the admin panel needs JavaScript</p></article>{SITE_FOOTER}</main></noscript>'
+)
+
+
 def post_page_data(request: Request, slug: str) -> tuple[dict, dict, str, int]:
     try:
         post = get_post(slug)
@@ -938,7 +951,7 @@ def code_page_data(request: Request, project: str, path: str = "") -> tuple[dict
     return {}, {"title": "neenerweener"}, "", 200
 
 
-RENDERERS = {"home": home_page, "timeline": timeline_page_data, "post": post_page_data, "code": code_page_data}
+RENDERERS = {"home": home_page, "timeline": timeline_page_data, "admin": admin_page, "post": post_page_data, "code": code_page_data}
 
 
 def not_found_page(label: str, back: bool = False) -> tuple[dict, dict, str, int]:
@@ -946,7 +959,7 @@ def not_found_page(label: str, back: bool = False) -> tuple[dict, dict, str, int
     heading = f'<h1 class="muted">{escape(label)}</h1>'
     # The footer already links home, so this visible copy is skipped by Tab and screen readers.
     heading = f'<div class="has-back"><a class="back" href="/" aria-label="back">←</a>{heading}</div>' if back else f'{heading}<a href="/" tabindex="-1" aria-hidden="true">neenerweener</a>'
-    markup = f'<main>{heading}<footer><a href="/">neenerweener</a><a href="/timeline">timeline</a></footer></main>'
+    markup = f'<main>{heading}{SITE_FOOTER}</main>'
     page = {"kind": "not-found", "label": label, "back": back}
     return {"page": page}, {"title": "not found", "robots": "noindex"}, markup, 404
 
@@ -1027,7 +1040,7 @@ def post_markup(post: dict) -> str:
     return (
         '<main><article><div class="has-back post-head"><a class="back" href="/" aria-label="back">←</a>'
         f'<h1>{escape(post["title"])}</h1></div><div class="meta"><span class="tags">{tags}</span></div>'
-        f'<div>{post["html"]}</div></article><footer><a href="/">neenerweener</a><a href="/timeline">timeline</a></footer></main>'
+        f'<div>{post["html"]}</div></article>{SITE_FOOTER}</main>'
     )
 
 

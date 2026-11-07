@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import { createTimeline, hasText, LIMIT, length } from "./adminApi";
+import { Attachments, useAttachments } from "./attachments";
 import type { Entry } from "./timelineTypes";
 
 // The admin's compose box at the top of /timeline. A lazy chunk: only loaded after the session check says signed in.
@@ -12,7 +13,9 @@ export default function TimelineComposer({ onCreated, onExpired }: { onCreated: 
   // A ref, not state: two submits in the same task both see busy=false.
   const inFlight = useRef(false);
   const textarea = useRef<HTMLTextAreaElement>(null);
-  const valid = hasText(text);
+  const images = useAttachments(onExpired);
+  // An entry needs text; images go only once uploaded.
+  const valid = hasText(text) && !images.uploading;
   const n = length(text);
 
   const post = async () => {
@@ -21,12 +24,13 @@ export default function TimelineComposer({ onCreated, onExpired }: { onCreated: 
     setBusy(true);
     setError("");
     setStatus("");
-    const r = await createTimeline(text);
+    const r = await createTimeline(text, images.payload());
     inFlight.current = false;
     setBusy(false);
     if (!r.ok) return r.status === 401 ? onExpired() : setError(r.message);
     onCreated(r.data);
     setText("");
+    images.clear();
     setStatus("posted");
     textarea.current?.focus();
   };
@@ -56,6 +60,7 @@ export default function TimelineComposer({ onCreated, onExpired }: { onCreated: 
           }
         }}
       />
+      <Attachments state={images} busy={busy} id="compose" />
       <div className="admin-row">
         <span id="compose-count" className={n > LIMIT ? "count error" : "count muted"}>
           {n.toLocaleString("en")} / {LIMIT.toLocaleString("en")}

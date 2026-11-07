@@ -66,10 +66,6 @@ export default function Admin() {
 
   useEffect(() => {
     document.title = "admin";
-    const robots = document.createElement("meta");
-    robots.name = "robots";
-    robots.content = "noindex";
-    document.head.append(robots);
     session();
   }, []);
 

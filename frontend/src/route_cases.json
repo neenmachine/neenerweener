@@ -171,7 +171,7 @@
   {
    "path": "/does-not-exist",
    "status": 404,
-   "noindex": false,
+   "noindex": true,
    "page": {
     "kind": "not-found",
     "label": "not found",
@@ -186,7 +186,7 @@
   {
    "path": "/posts/nope",
    "status": 404,
-   "noindex": false,
+   "noindex": true,
    "page": {
     "kind": "not-found",
     "label": "post not found",
@@ -201,7 +201,7 @@
   {
    "path": "/code/nope",
    "status": 404,
-   "noindex": false,
+   "noindex": true,
    "page": {
     "kind": "not-found",
     "label": "project not found",
@@ -216,7 +216,7 @@
   {
    "path": "/code/demo/nope.py",
    "status": 404,
-   "noindex": false,
+   "noindex": true,
    "page": {
     "kind": "not-found",
     "label": "file not found",

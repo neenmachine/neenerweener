@@ -18,6 +18,7 @@ afterEach(() => {
 });
 
 test("the admin fallback is the admin shell above the footer", { timeout: 5000 }, async () => {
+  document.head.innerHTML = '<meta name="robots" content="noindex">';
   document.body.innerHTML = `<script id="preload" type="application/json">{"page":{"kind":"admin"}}</script><div id="root"></div>`;
   const { default: App } = await import("./App");
   await act(async () => {
@@ -28,6 +29,7 @@ test("the admin fallback is the admin shell above the footer", { timeout: 5000 }
   const shell = main.firstElementChild!;
   expect(shell.matches("article.admin")).toBe(true);
   expect(shell.querySelector("h1")?.textContent).toBe("admin");
+  expect(document.head.querySelectorAll('meta[name="robots"]').length).toBe(1);
   const footer = main.querySelector("footer")!;
   expect(shell.compareDocumentPosition(footer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 });

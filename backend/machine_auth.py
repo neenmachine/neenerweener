@@ -535,7 +535,10 @@ class MachineAuthStore:
             scopes = frozenset(row["scopes"]) & key.scopes
             return Principal(row["key_fingerprint"], scopes)
 
-    def permit_create(self, fingerprint: str, config: MachineAuthConfig) -> int | None:
+    def permit(
+        self, event: str, limit: int, fingerprint: str, config: MachineAuthConfig
+    ) -> int | None:
+        """Record one `event` for this key, or return seconds to wait once `limit` per hour is reached."""
         if not config.valid or config.rate_secret is None:
             return 1
         now = datetime.now(timezone.utc)
@@ -544,8 +547,8 @@ class MachineAuthStore:
             self._lock(connection)
             retry = self._retry_after(
                 connection,
-                "timeline_create",
-                (("fingerprint_key", fingerprint_key, 30),),
+                event,
+                (("fingerprint_key", fingerprint_key, limit),),
                 now,
                 60,
             )
@@ -553,7 +556,7 @@ class MachineAuthStore:
                 return retry
             connection.execute(
                 insert(machine_auth_events).values(
-                    event="timeline_create", fingerprint_key=fingerprint_key
+                    event=event, fingerprint_key=fingerprint_key
                 )
             )
             return None

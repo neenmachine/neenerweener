@@ -68,7 +68,9 @@ li {
   text-wrap: pretty;
 }
 
+/* border-box on every main, so the server markup and the React page (with its footer) have the same width. */
 main {
+  box-sizing: border-box;
   max-width: 52rem;
   margin: 0 auto;
   padding: 3rem 1.25rem 6rem;
@@ -79,7 +81,6 @@ main:has(> footer) {
   display: flex;
   flex-direction: column;
   min-height: 100dvh;
-  box-sizing: border-box;
   padding-bottom: 2.5rem;
 }
 
@@ -103,6 +104,13 @@ main > footer a:first-child {
 main > footer a:hover,
 main > footer a[aria-current] {
   color: var(--accent);
+}
+
+/* The current page is also underlined: the site name is always bold, so color alone did not show it. */
+main > footer a[aria-current] {
+  text-decoration: underline;
+  text-decoration-color: var(--faint);
+  text-underline-offset: 0.3em;
 }
 
 /* The back arrow hangs in the left margin so the title stays aligned with the text. */
@@ -220,7 +228,7 @@ a {
 }
 
 /* The entry a /timeline#entry-<id> link points to gets the "you are here" accent. */
-.timeline-entry:target footer a {
+.timeline-entry:is(:target, .target) footer a {
   color: var(--accent);
   font-weight: 600;
 }
@@ -242,6 +250,25 @@ a {
   font: inherit;
   cursor: pointer;
   transition: color 0.15s, border-color 0.15s, scale 0.1s;
+  /* The two labels share one cell, so "loading" does not change the width. */
+  display: inline-grid;
+}
+
+.load-more button > span {
+  grid-area: 1 / 1;
+}
+
+.load-more button > span[hidden] {
+  display: block;
+  visibility: hidden;
+}
+
+/* A finger-sized target on phones and touch screens. */
+@media (max-width: 760px), (pointer: coarse) {
+  .load-more button {
+    min-height: 40px;
+    align-items: center;
+  }
 }
 
 .load-more button:hover {
@@ -265,6 +292,16 @@ a {
   .load-more button:active {
     scale: none;
   }
+}
+
+/* Read by screen readers, not shown. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 h1,
@@ -505,8 +542,9 @@ hr {
 }
 
 /* Code browser: bordered boxes like a repo browser, in the site's own type and colors. */
+/* 84rem of content plus the side padding (main is border-box). */
 main.wide {
-  max-width: 84rem;
+  max-width: 86.5rem;
 }
 
 /* Repo layout: a file tree on the left, the folder or file on the right. */

@@ -12,10 +12,12 @@ import math
 import os
 import secrets
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
 
+from argon2 import Type, extract_parameters
+from argon2.exceptions import InvalidHashError
 from pwdlib import PasswordHash
 from sqlalchemy import (
     CheckConstraint,
@@ -46,6 +48,12 @@ DEVELOPMENT_COOKIE = "ween_session_dev"
 CSRF_HEADER = "X-CSRF-Token"
 _PASSWORD_HASHER = PasswordHash.recommended()
 _DUMMY_HASH = _PASSWORD_HASHER.hash("invalid-configuration")
+_MAX_PASSWORD_HASH_LENGTH = 512
+_ARGON2_MEMORY_RANGE = range(19_456, 262_145)
+_ARGON2_TIME_RANGE = range(2, 11)
+_ARGON2_PARALLELISM_RANGE = range(1, 17)
+_ARGON2_SALT_LENGTH_RANGE = range(16, 65)
+_ARGON2_HASH_LENGTH_RANGE = range(16, 65)
 
 admin_sessions = Table(
     "admin_sessions",
@@ -73,11 +81,15 @@ admin_login_failures = Table(
 
 @dataclass(frozen=True)
 class AdminConfig:
-    password_hash: str | None
+    password_hash: str | None = field(repr=False)
     rate_limit_key: bytes | None
     origin: str | None
     secure_cookie: bool
     cookie_name: str
+    _password_hash_valid: bool = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "_password_hash_valid", _valid_password_hash(self.password_hash))
 
     @classmethod
     def from_env(cls) -> AdminConfig:
@@ -99,8 +111,7 @@ class AdminConfig:
     def valid(self) -> bool:
         return bool(
             self.origin_valid
-            and self.password_hash
-            and self.password_hash.startswith("$argon2id$")
+            and self._password_hash_valid
             and self.rate_limit_key is not None
         )
 
@@ -108,6 +119,24 @@ class AdminConfig:
         if self.rate_limit_key is None:
             return None
         return RateIdentity.from_headers(self.rate_limit_key, raw_headers)
+
+
+def _valid_password_hash(value: str | None) -> bool:
+    if not value or len(value) > _MAX_PASSWORD_HASH_LENGTH:
+        return False
+    try:
+        parameters = extract_parameters(value)
+    except (InvalidHashError, ValueError):
+        return False
+    return bool(
+        parameters.type is Type.ID
+        and parameters.version == 19
+        and parameters.memory_cost in _ARGON2_MEMORY_RANGE
+        and parameters.time_cost in _ARGON2_TIME_RANGE
+        and parameters.parallelism in _ARGON2_PARALLELISM_RANGE
+        and parameters.salt_len in _ARGON2_SALT_LENGTH_RANGE
+        and parameters.hash_len in _ARGON2_HASH_LENGTH_RANGE
+    )
 
 
 def _decode_rate_limit_key(value: str | None) -> bytes | None:

@@ -9,6 +9,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 import app
+from auth import hash_password
 from fastapi.testclient import TestClient
 from operations import JsonFormatter
 
@@ -23,13 +24,40 @@ def test_readyz_fails_closed_without_database(monkeypatch):
     assert response.json() == {"status": "not_ready", "reason": "database unavailable"}
 
 
-def test_readyz_reports_invalid_auth_configuration(monkeypatch):
+def test_readyz_validates_password_hash_configuration(monkeypatch, caplog):
+    class Available:
+        def ping(self):
+            pass
+
+    valid_hash = hash_password("test-password")
+    invalid_hashes = [
+        "$argon2id$configured",
+        "$argon2id$v=19$m=65536,t=3,p=4$c2FsdA",
+        valid_hash.replace("$argon2id$", "$argon2i$", 1),
+        valid_hash.replace("m=65536", "m=19455", 1),
+        valid_hash.replace("m=65536", "m=262145", 1),
+        valid_hash.replace("t=3", "t=1", 1),
+        valid_hash.replace("t=3", "t=11", 1),
+        valid_hash.replace("p=4", "p=17", 1),
+        "$argon2id$" + "x" * 513,
+    ]
+    monkeypatch.setattr(app, "timeline_store", Available())
     monkeypatch.setenv("ADMIN_ORIGIN", "http://127.0.0.1")
-    monkeypatch.setenv("ADMIN_PASSWORD_HASH", "$argon2id$configured")
-    monkeypatch.delenv("RATE_LIMIT_KEY", raising=False)
+    monkeypatch.setenv("RATE_LIMIT_KEY", "r" * 32)
+
+    monkeypatch.setenv("ADMIN_PASSWORD_HASH", valid_hash)
     response = client.get("/readyz")
-    assert response.status_code == 503
-    assert response.json() == {"status": "not_ready", "reason": "invalid authentication configuration"}
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
+    for invalid_hash in invalid_hashes:
+        caplog.clear()
+        monkeypatch.setenv("ADMIN_PASSWORD_HASH", invalid_hash)
+        response = client.get("/readyz")
+        assert response.status_code == 503
+        assert response.json() == {"status": "not_ready", "reason": "invalid authentication configuration"}
+        assert invalid_hash not in response.text
+        assert invalid_hash not in caplog.text
 
 
 def test_readyz_fails_closed_when_database_is_unavailable(monkeypatch):

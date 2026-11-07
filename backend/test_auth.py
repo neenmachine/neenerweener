@@ -123,12 +123,29 @@ def test_login_rejects_insecure_origin_configuration_as_invalid_credentials(monk
     assert response.json() == {"detail": "invalid credentials"}
 
 
-def test_login_rejects_invalid_hash_configuration_as_invalid_credentials(monkeypatch, configured_app, make_client):
-    password, _, _ = configured_app
-    monkeypatch.setenv("ADMIN_PASSWORD_HASH", "invalid")
-    response = login(make_client(base_url="http://127.0.0.1"), password)
+@pytest.mark.parametrize(
+    "invalid_hash",
+    [
+        "$argon2id$configured",
+        "$argon2id$v=19$m=65536,t=3,p=4$c2FsdA",
+        "$argon2i$v=19$m=65536,t=3,p=4$c2FsdA$Y29uZmlndXJlZA",
+        "$argon2id$v=19$m=999999999,t=3,p=4$c2FsdA$Y29uZmlndXJlZA",
+        "$argon2id$" + "x" * 513,
+    ],
+)
+def test_login_rejects_invalid_hash_configuration_as_invalid_credentials(
+    monkeypatch, make_client, invalid_hash, caplog
+):
+    monkeypatch.setenv("ADMIN_ORIGIN", "http://127.0.0.1")
+    monkeypatch.setenv("ADMIN_PASSWORD_HASH", invalid_hash)
+    monkeypatch.setenv("RATE_LIMIT_KEY", "r" * 32)
+    assert invalid_hash not in repr(AdminConfig.from_env())
+    caplog.clear()
+    response = login(make_client(base_url="http://127.0.0.1"), "test-password")
     assert response.status_code == 401
     assert response.json() == {"detail": "invalid credentials"}
+    assert invalid_hash not in response.text
+    assert invalid_hash not in caplog.text
 
 
 @pytest.mark.parametrize("key", [None, "x" * 31, "x" * 33])

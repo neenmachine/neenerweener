@@ -42,8 +42,8 @@ from client_identity import rate_limit_key
 from timeline import database_engine, metadata
 
 NAMESPACE = "neenerweener.ca/cli-auth/v1"
-SUPPORTED_SCOPES = frozenset({"timeline:create", "timeline:media"})
-CHALLENGE_SECONDS = 120
+SUPPORTED_SCOPES = frozenset({"timeline:create", "timeline:read"})
+CHALLENGE_SECONDS = 300
 TOKEN_SECONDS = 600
 RATE_WINDOW_MINUTES = 15
 MAX_REQUEST_BYTES = 16_384
@@ -194,37 +194,38 @@ def _parse_keys(raw: str | None) -> dict[str, AuthorizedKey]:
     keys: dict[str, AuthorizedKey] = {}
     names: set[str] = set()
     for item in value:
-        if not isinstance(item, dict) or set(item) != {"name", "public_key", "scopes"}:
+        key = _parse_key(item)
+        if key.name in names or key.fingerprint in keys:
             raise ValueError
-        name, public_key_text, scopes = item["name"], item["public_key"], item["scopes"]
-        if (
-            not isinstance(name, str)
-            or not name
-            or name.strip() != name
-            or len(name) > 100
-            or not isinstance(public_key_text, str)
-        ):
-            raise ValueError
-        if (
-            len(public_key_text) > 1024
-            or len(public_key_text.split()) != 2
-            or not public_key_text.startswith("ssh-ed25519 ")
-        ):
-            raise ValueError
-        if not isinstance(scopes, list) or any(
-            type(scope) is not str for scope in scopes
-        ):
-            raise ValueError
-        if len(scopes) != len(set(scopes)) or set(scopes) != SUPPORTED_SCOPES:
-            raise ValueError
-        fingerprint = _ed25519_fingerprint(public_key_text)
-        if name in names or fingerprint in keys:
-            raise ValueError
-        names.add(name)
-        keys[fingerprint] = AuthorizedKey(
-            name, public_key_text, fingerprint, frozenset(scopes)
-        )
+        names.add(key.name)
+        keys[key.fingerprint] = key
     return keys
+
+
+def _parse_key(item: Any) -> AuthorizedKey:
+    if not isinstance(item, dict) or set(item) != {"name", "public_key", "scopes"}:
+        raise ValueError
+    name, public_key, scopes = item["name"], item["public_key"], item["scopes"]
+    if (
+        not isinstance(name, str)
+        or not name
+        or name.strip() != name
+        or len(name) > 100
+        or not isinstance(public_key, str)
+    ):
+        raise ValueError
+    if (
+        len(public_key) > 1024
+        or len(public_key.split()) != 2
+        or not public_key.startswith("ssh-ed25519 ")
+    ):
+        raise ValueError
+    if not isinstance(scopes, list) or any(type(scope) is not str for scope in scopes):
+        raise ValueError
+    if len(scopes) != len(set(scopes)) or set(scopes) != SUPPORTED_SCOPES:
+        raise ValueError
+    fingerprint = _ed25519_fingerprint(public_key)
+    return AuthorizedKey(name, public_key, fingerprint, frozenset(scopes))
 
 
 def _ed25519_fingerprint(public_key: str) -> str:

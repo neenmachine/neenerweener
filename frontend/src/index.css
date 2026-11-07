@@ -253,7 +253,7 @@ a {
   font-size: 0.9em;
 }
 
-.load-more a {
+:is(.load-more a, .button) {
   padding: 0.2rem 0.75rem;
   border: 1px solid color-mix(in srgb, var(--fg) 14%, transparent);
   border-radius: 4px;
@@ -266,44 +266,206 @@ a {
   display: inline-grid;
 }
 
-.load-more a > span {
+:is(.load-more a, .button) > span {
   grid-area: 1 / 1;
 }
 
-.load-more a > span[hidden] {
+:is(.load-more a, .button) > span[hidden] {
   display: block;
   visibility: hidden;
 }
 
 /* A finger-sized target on phones and touch screens. */
 @media (max-width: 760px), (pointer: coarse) {
-  .load-more a {
+  :is(.load-more a, .button) {
     min-height: 40px;
     align-items: center;
   }
 }
 
-.load-more a:hover {
+:is(.load-more a, .button):hover {
   color: var(--fg);
   border-color: color-mix(in srgb, var(--fg) 28%, transparent);
 }
 
-.load-more a:active {
+:is(.load-more a, .button):active {
   scale: 0.97;
 }
 
-.load-more a[aria-busy="true"] {
+:is(.load-more a, .button)[aria-busy="true"] {
   cursor: progress;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .load-more a {
+  :is(.load-more a, .button) {
     transition: none;
   }
 
-  .load-more a:active {
+  :is(.load-more a, .button):active {
     scale: none;
   }
+}
+
+/* Buttons that cannot act right now (empty or too long text, a wait after too many logins). */
+.button[aria-disabled="true"]:not([aria-busy="true"]) {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Admin: the timeline entry look, with a form above and quiet controls under each entry. */
+.admin {
+  --error: #b42318;
+}
+
+@media (prefers-color-scheme: dark) {
+  .admin {
+    --error: #f97066;
+  }
+}
+
+.admin-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.admin-head .button,
+.admin .load-more {
+  font-size: 0.9rem;
+}
+
+.admin-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1.5ch;
+}
+
+.admin-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1ch;
+}
+
+.admin .error {
+  color: var(--error);
+  font-size: 0.9rem;
+}
+
+/* The always-present announcer for each form takes no space while empty. */
+.admin p.error:empty {
+  margin: 0;
+}
+
+.admin label {
+  display: block;
+  margin-bottom: 0.4rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.admin :is(input, textarea) {
+  box-sizing: border-box;
+  padding: 0.45rem 0.65rem;
+  border: 1px solid color-mix(in srgb, var(--fg) 14%, transparent);
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  transition: border-color 0.15s;
+}
+
+.admin input {
+  width: min(100%, 18rem);
+}
+
+.admin textarea {
+  display: block;
+  width: 100%;
+  min-height: 7.5rem;
+  resize: vertical;
+  line-height: 1.55;
+}
+
+.admin :is(input, textarea):hover {
+  border-color: color-mix(in srgb, var(--fg) 24%, transparent);
+}
+
+.admin :is(input, textarea):focus {
+  border-color: color-mix(in srgb, var(--fg) 40%, transparent);
+  outline: none;
+}
+
+.admin :is(input, textarea)[aria-invalid="true"] {
+  border-color: var(--error);
+}
+
+/* 16px keeps phones from zooming into a focused field. */
+@media (max-width: 760px), (pointer: coarse) {
+  .admin :is(input, textarea) {
+    font-size: 16px;
+  }
+}
+
+.editor {
+  margin-bottom: 1rem;
+}
+
+.editor > .admin-row {
+  justify-content: space-between;
+  margin-top: 0.5rem;
+}
+
+.editor .count {
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.editor + .timeline,
+.admin .timeline + .load-more {
+  margin-top: 1rem;
+}
+
+/* The login button matches the password field's height. */
+.login .admin-row {
+  align-items: stretch;
+}
+
+.login .button {
+  align-items: center;
+}
+
+/* Entry controls sit at the end of the time line, as plain text until hovered. */
+.admin .timeline-entry footer {
+  align-items: baseline;
+}
+
+.timeline-entry footer .admin-actions {
+  margin-left: auto;
+}
+
+.timeline-entry footer .button {
+  padding: 0 0.4rem;
+  border-color: transparent;
+}
+
+.timeline-entry footer .button:hover {
+  border-color: color-mix(in srgb, var(--fg) 14%, transparent);
+}
+
+.timeline-entry .editor {
+  margin: 0;
+}
+
+.button.danger {
+  color: var(--error);
+}
+
+.timeline-entry footer .button.danger {
+  border-color: color-mix(in srgb, var(--error) 40%, transparent);
 }
 
 /* Read by screen readers, not shown. */

@@ -4,6 +4,7 @@ import io
 import json
 import os
 import shutil
+import socketserver
 import subprocess
 import tempfile
 import threading
@@ -13,6 +14,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 from ween_tweet import cli
+
+
+class LocalServer(HTTPServer):
+    # HTTPServer.server_bind calls socket.getfqdn (reverse DNS), which stalls on some macOS hosts.
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
 
 
 class Response:
@@ -161,7 +169,7 @@ class CliTests(unittest.TestCase):
         calls=[]
         responses = iter([Response({"challenge_id":"123e4567-e89b-12d3-a456-426614174000", "message":"line\nfinal\n", "namespace":cli.NAMESPACE, "expires_at":"2099-01-01T00:00:00Z"}), Response({"access_token":"tok-123", "token_type":"Bearer", "expires_in":600, "scopes":["timeline:create", "timeline:read"]}), Response({"id":7})])
         def open_(request, timeout): calls.append(request); return next(responses)
-        def run(args, stdin=None, timeout=cli.TIMEOUT):
+        def run(args, stdin=None):
             if args[1:3] == ["-lf", str(self.key)]: return subprocess.CompletedProcess(args, 0, b"256 SHA256:fp comment\n", b"")
             self.assertEqual(args, ["ssh-keygen", "-Y", "sign", "-n", cli.NAMESPACE, "-f", str(self.key)])
             self.assertEqual(stdin, b"line\nfinal\n")
@@ -200,7 +208,6 @@ class CliTests(unittest.TestCase):
         for signer_error, message in [
             (FileNotFoundError("private path"), "ssh-keygen not found"),
             (OSError("private path"), "cannot run ssh-keygen"),
-            (subprocess.TimeoutExpired("private command", 15), "ssh-keygen timed out"),
         ]:
             with self.subTest(error=type(signer_error).__name__):
                 stderr = io.StringIO()
@@ -307,26 +314,28 @@ class CliTests(unittest.TestCase):
             with self.assertRaisesRegex(cli.CliError, "invalid response"):
                 cli._token(token)
 
-    def _post_with_signer(self, isatty, run):
+    def test_tweet_ssh_keygen_runs_without_timeout(self):
         challenge = {"challenge_id":"123e4567-e89b-12d3-a456-426614174000", "message":"m", "namespace":cli.NAMESPACE, "expires_at":"2099-01-01T00:00:00Z"}
         token = {"access_token":"tok", "token_type":"Bearer", "expires_in":600, "scopes":["timeline:create", "timeline:read"]}
-        with patch.object(cli, "_fingerprint", return_value="SHA256:fp"), patch.object(cli, "_request", side_effect=[challenge, token, {"id":1}]), \
-                patch.object(cli.sys.stdin, "isatty", return_value=isatty), patch("subprocess.run", side_effect=run) as run_mock:
-            return cli.post("https://s.example", self.key, "text"), run_mock
-
-    def test_tweet_sign_has_no_timeout_only_when_interactive(self):
-        for isatty, expected in [(True, None), (False, cli.TIMEOUT)]:
-            with self.subTest(isatty=isatty):
-                _, run = self._post_with_signer(isatty, lambda *a, **k: subprocess.CompletedProcess([], 0, signature_bytes(), b""))
-                self.assertEqual(run.call_args.args[0][:3], ["ssh-keygen", "-Y", "sign"])
-                self.assertIs(run.call_args.kwargs["timeout"], expected)
+        def run(args, **kwargs):
+            if args[1] == "-lf":
+                return subprocess.CompletedProcess(args, 0, b"256 SHA256:fp comment\n", b"")
+            return subprocess.CompletedProcess(args, 0, signature_bytes(), b"")
+        with patch.object(cli, "_request", side_effect=[challenge, token, {"id":1}]), patch("subprocess.run", side_effect=run) as run_mock:
+            cli.post("https://s.example", self.key, "text")
+        self.assertEqual([c.args[0][:3] for c in run_mock.call_args_list], [["ssh-keygen", "-lf", str(self.key)], ["ssh-keygen", "-Y", "sign"]])
+        for call in run_mock.call_args_list:
+            self.assertNotIn("timeout", call.kwargs)
 
     def test_tweet_ctrl_c_exits_130_without_traceback(self):
         stderr = io.StringIO()
         with patch.object(cli, "_config", return_value={}), patch.object(cli, "_fingerprint", return_value="SHA256:fp"), \
                 patch.object(cli, "_request", return_value={"challenge_id":"123e4567-e89b-12d3-a456-426614174000", "message":"m", "namespace":cli.NAMESPACE, "expires_at":"2099-01-01T00:00:00Z"}), \
                 patch("subprocess.run", side_effect=KeyboardInterrupt), contextlib.redirect_stderr(stderr):
-            result = cli.main(["--server", "https://s.example", "--key", str(self.key), "text"])
+            try:
+                result = cli.main(["--server", "https://s.example", "--key", str(self.key), "text"])
+            except KeyboardInterrupt:
+                self.fail("KeyboardInterrupt escaped main()")
         self.assertEqual(result, 130)
         self.assertEqual(stderr.getvalue(), "tweet: interrupted\n")
 
@@ -357,7 +366,7 @@ class CliTests(unittest.TestCase):
                 self.send_response(200); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
             do_PUT = do_POST
             def log_message(self, *args): pass
-        server = HTTPServer(("127.0.0.1", 0), Handler)
+        server = LocalServer(("127.0.0.1", 0), Handler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:

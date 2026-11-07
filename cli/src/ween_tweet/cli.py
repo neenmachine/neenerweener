@@ -120,15 +120,14 @@ def _key(path):
     return p
 
 
-def _run(args, stdin=None, timeout=TIMEOUT):
+def _run(args, stdin=None):
+    # No timeout: ssh-keygen may wait for a passphrase on /dev/tty, and Ctrl-C ends the run cleanly.
     try:
-        return subprocess.run(args, input=stdin, capture_output=True, timeout=timeout, check=False, shell=False)
+        return subprocess.run(args, input=stdin, capture_output=True, check=False, shell=False)
     except FileNotFoundError:
         raise SignerAuthError("ssh-keygen not found") from None
     except OSError:
         raise SignerAuthError("cannot run ssh-keygen") from None
-    except subprocess.TimeoutExpired:
-        raise SignerAuthError("ssh-keygen timed out") from None
 
 
 def _fingerprint(key):
@@ -285,9 +284,7 @@ def post(server, key, text):
     fingerprint = _fingerprint(key)
     challenge = _request(server, "/api/cli/auth/challenge", {"key_fingerprint": fingerprint})
     challenge_id, message = _challenge(challenge)
-    # No timeout when interactive: a passphrase prompt is not a hang, and killing it leaves the tty without echo.
-    timeout = None if sys.stdin.isatty() else TIMEOUT
-    signed = _run(["ssh-keygen", "-Y", "sign", "-n", NAMESPACE, "-f", str(key)], message, timeout)
+    signed = _run(["ssh-keygen", "-Y", "sign", "-n", NAMESPACE, "-f", str(key)], message)
     signature = _signature(signed)
     token_data = _request(server, "/api/cli/auth/token", {"challenge_id": challenge_id, "signature": signature})
     token = _token(token_data)

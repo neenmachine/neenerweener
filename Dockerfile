@@ -12,7 +12,6 @@ WORKDIR /app
 COPY backend/ /app/backend/
 RUN cd /app/backend && uv sync --frozen --no-dev
 COPY posts/ /app/posts/
-COPY pages/ /app/pages/
 COPY code/ /app/code/
 COPY --from=frontend /app/frontend/dist/ /app/frontend/dist/
 RUN useradd --create-home app && chown -R app:app /app

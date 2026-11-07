@@ -369,13 +369,11 @@ def test_tags(tmp_path, monkeypatch, caplog):
     assert c.get("/api/posts/one").json()["tags"] == ["notes"]
 
 
-def test_now(tmp_path, monkeypatch):
-    monkeypatch.setattr(app, "PAGES_DIR", tmp_path)
+def test_old_now_redirects_and_api_is_gone():
     c = TestClient(app.app)
+    assert c.get("/now", follow_redirects=False).status_code == 301
+    assert c.get("/now", follow_redirects=False).headers["location"] == "/timeline"
     assert c.get("/api/now").status_code == 404
-
-    (tmp_path / "now.md").write_text("plain body")
-    assert c.get("/api/now").json() == {"html": "<p>plain body</p>\n"}
 
 
 INDEX = '<html><head><title>neenerweener</title></head><body><div id="root"> </div></body></html>'
@@ -393,7 +391,12 @@ def test_server_rendered_pages(tmp_path, monkeypatch):
     (posts / "brief.md").write_text("---\ntitle: Brief\ndate: 2026-01-02\nexcerpt: short one\n---\nbody")
     monkeypatch.setattr(app, "FRONTEND_DIST", dist)
     monkeypatch.setattr(app, "POSTS_DIR", posts)
-    monkeypatch.setattr(app, "PAGES_DIR", tmp_path / "pages")
+    class Store:
+        def list(self, before, limit):
+            from datetime import datetime, timezone
+            return [{"id": 2, "body_markdown": "first & <safe>", "created_at": datetime(2026, 1, 2, tzinfo=timezone.utc), "edited_at": None}]
+
+    monkeypatch.setattr(app, "timeline_store", Store())
     c = TestClient(app.app)
 
     page = c.get("/posts/hello").text
@@ -406,7 +409,15 @@ def test_server_rendered_pages(tmp_path, monkeypatch):
     assert "<" not in preload  # post text cannot close the script tag
     data = __import__("json").loads(preload)
     assert data["/api/posts/hello"]["title"] == "Hi & <bye>"
-    assert data["/api/now"] is None
+    assert "/api/now" not in data
+
+    timeline = c.get("/timeline").text
+    assert "<title>timeline</title>" in timeline
+    assert '<meta name="description" content="timeline" />' in timeline
+    assert 'id="entry-2"' in timeline
+    assert "first &amp; &lt;safe&gt;" in timeline
+    assert '"/api/timeline"' in timeline
+    assert "<" not in timeline.split('<script id="preload" type="application/json">')[1].split("</script>")[0]
 
     assert '<meta name="description" content="short one" />' in c.get("/posts/brief").text
     missing = c.get("/posts/nope").text

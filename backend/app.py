@@ -14,7 +14,7 @@ from pathlib import Path
 import yaml
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from markdown_it import MarkdownIt
 from mdit_py_plugins.dollarmath import dollarmath_plugin
@@ -24,7 +24,6 @@ from pygments.lexers import TextLexer, get_lexer_by_name, get_lexer_for_filename
 from pygments.util import ClassNotFound
 
 POSTS_DIR = Path(os.environ.get("POSTS_DIR", Path(__file__).parent.parent / "posts"))
-PAGES_DIR = Path(os.environ.get("PAGES_DIR", Path(__file__).parent.parent / "pages"))
 DRAFTS_DIR = Path(os.environ.get("DRAFTS_DIR", Path(__file__).parent.parent / "drafts"))
 CODE_DIR = Path(os.environ.get("CODE_DIR", Path(__file__).parent.parent / "code"))
 FRONTEND_DIST = Path(os.environ.get("FRONTEND_DIST", Path(__file__).parent.parent / "frontend" / "dist"))
@@ -264,14 +263,9 @@ def get_post(slug: str):
     raise HTTPException(404, "post not found")
 
 
-@app.get("/api/now")
-def get_now():
-    """pages/now.md: plain Markdown, no frontmatter."""
-    try:
-        text = (PAGES_DIR / "now.md").read_text(encoding="utf-8-sig")
-    except (OSError, UnicodeDecodeError):
-        raise HTTPException(404, "not found")
-    return {"html": md.render(text)}
+@app.get("/now")
+def old_now():
+    return RedirectResponse("/timeline", status_code=301)
 
 
 # check_dir=False: the app still starts when POSTS_DIR has no images folder.
@@ -385,18 +379,21 @@ def frontend(path: str):
 
 
 def page_data(path: str) -> tuple[dict, dict, str] | None:
-    """For the home, /now and post pages: the API responses the page needs (null for a 404),
-    its <head> tags, and markup shown before the scripts run. None for other pages."""
+    """For the home, timeline, and post pages: preload data, head tags, and no-JS markup."""
     path = path.strip("/")
     preload: dict = {}
     head = {"title": "neenerweener"}
     markup = ""
-    try:
-        preload["/api/now"] = get_now()
-    except HTTPException:
-        preload["/api/now"] = None
     if path == "":
         preload["/api/posts"] = list_posts()
+    elif path == "timeline":
+        head = {"title": "timeline", "description": "timeline"}
+        try:
+            first_page = list_timeline(before=None, limit=20)
+        except HTTPException:
+            first_page = {"entries": [], "next_cursor": None}
+        preload["/api/timeline"] = first_page
+        markup = timeline_markup(first_page["entries"])
     elif (m := re.fullmatch(r"posts/([a-z0-9-]+)", path)):
         url = f"/api/posts/{m[1]}"
         try:
@@ -407,7 +404,7 @@ def page_data(path: str) -> tuple[dict, dict, str] | None:
             preload[url] = post
             head = {"title": post["title"], "description": post["excerpt"] or summary(post["html"])}
             markup = post_markup(post)
-    elif path != "now":
+    else:
         return None
     return preload, head, markup
 
@@ -418,6 +415,19 @@ def summary(html: str, limit: int = 200) -> str:
     text = re.sub(r"<[^>]+>", "", first[1]) if first else ""
     text = " ".join(unescape(text).split())
     return text if len(text) <= limit else text[: limit - 1].rsplit(" ", 1)[0] + "…"
+
+
+def timeline_markup(entries: list[dict]) -> str:
+    items = []
+    for entry in entries:
+        edited = '<span class="edited">edited</span>' if entry.get("edited_at") else ""
+        items.append(
+            f'<article class="timeline-entry" id="entry-{entry["id"]}">'
+            f'<div>{entry["html"]}</div>'
+            f'<footer><a href="/timeline#entry-{entry["id"]}"><time datetime="{escape(entry["created_at"])}">{escape(entry["created_at"])}</time></a>{edited}</footer>'
+            "</article>"
+        )
+    return f'<main><article><h1>timeline</h1><div class="timeline">{"".join(items)}</div></article></main>'
 
 
 def post_markup(post: dict) -> str:

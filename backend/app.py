@@ -394,13 +394,20 @@ def frontend(path: str, request: Request):
     index = contained_file(root, "index.html")
     if not index:
         raise HTTPException(404, "not found")
-    before = request.query_params.get("before")
-    before_cursor = int(before) if before and before.isdigit() and int(before) > 0 else None
+    before_cursor = timeline_before(request) if path.strip("/") == "timeline" else None
     page = page_data(path, before_cursor)
     if page is None:
         return HTMLResponse(fill_index(index.read_text(encoding="utf-8"), {}, {"title": "neenerweener"}, ""))
     preload, head, markup, status_code = page
     return HTMLResponse(fill_index(index.read_text(encoding="utf-8"), preload, head, markup), status_code=status_code)
+
+
+def timeline_before(request: Request) -> int | None:
+    values = request.query_params.getlist("before")
+    if len(values) != 1 or not values[0].isdigit():
+        return None
+    before = int(values[0])
+    return before if before > 0 else None
 
 
 def page_data(path: str, before: int | None = None) -> tuple[dict, dict, str, int] | None:
@@ -414,20 +421,7 @@ def page_data(path: str, before: int | None = None) -> tuple[dict, dict, str, in
         preload["/api/posts"] = list_posts()
     elif path == "timeline":
         head = {"title": "timeline", "description": "timeline"}
-        try:
-            first_page = list_timeline(before=before, limit=20)
-        except HTTPException:
-            preload[f"/api/timeline{f'?before={before}' if before is not None else ''}"] = None
-            markup = timeline_markup(None)
-            status_code = 503
-        except Exception:
-            logger.warning("timeline unavailable during page render")
-            preload[f"/api/timeline{f'?before={before}' if before is not None else ''}"] = None
-            markup = timeline_markup(None)
-            status_code = 503
-        else:
-            preload[f"/api/timeline{f'?before={before}' if before is not None else ''}"] = first_page
-            markup = timeline_markup(first_page)
+        preload["/api/timeline"], markup, status_code = timeline_page(before)
     elif (m := re.fullmatch(r"posts/([a-z0-9-]+)", path)):
         url = f"/api/posts/{m[1]}"
         try:
@@ -441,6 +435,17 @@ def page_data(path: str, before: int | None = None) -> tuple[dict, dict, str, in
     else:
         return None
     return preload, head, markup, status_code
+
+
+def timeline_page(before: int | None) -> tuple[dict | None, str, int]:
+    try:
+        page = list_timeline(before=before, limit=20)
+    except HTTPException:
+        return None, timeline_markup(None), 503
+    except Exception:
+        logger.warning("timeline unavailable during page render")
+        return None, timeline_markup(None), 503
+    return page, timeline_markup(page), 200
 
 
 def summary(html: str, limit: int = 200) -> str:

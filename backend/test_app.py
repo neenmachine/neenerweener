@@ -454,6 +454,49 @@ def test_server_rendered_pages(tmp_path, monkeypatch):
     assert '"/api/posts": [' in home and '<div id="root"></div>' in home
 
 
+@pytest.mark.parametrize(
+    ("query", "expected_id", "next_cursor"),
+    [
+        ("", 1, 11),
+        ("?before=11", 11, 22),
+        ("?before=nope", 1, 11),
+        ("?before=11&before=22", 1, 11),
+        ("?before=11&before=nope", 1, 11),
+        ("?before=", 1, 11),
+        ("?before=0", 1, 11),
+        ("?before=22", 22, None),
+        ("?before=33", 33, 11),
+    ],
+)
+def test_timeline_ssr_and_preload_share_one_initial_page(tmp_path, monkeypatch, query, expected_id, next_cursor):
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text(INDEX)
+    monkeypatch.setattr(app, "FRONTEND_DIST", dist)
+
+    class Store:
+        def list(self, before, limit):
+            from datetime import datetime, timezone
+            row_id = before or 1
+            count = 21 if next_cursor is not None else 1
+            rows = [{"id": row_id, "body_markdown": f"entry {row_id}", "created_at": datetime(2026, 1, 1, tzinfo=timezone.utc), "edited_at": None} for _ in range(count)]
+            if next_cursor is not None:
+                rows[19]["id"] = next_cursor
+            return rows
+
+    monkeypatch.setattr(app, "timeline_store", Store())
+    response = TestClient(app.app).get("/timeline" + query)
+    assert response.status_code == 200
+    html = response.text
+    preload = html.split('<script id="preload" type="application/json">')[1].split("</script>")[0]
+    data = __import__("json").loads(preload)
+    assert set(data) == {"/api/timeline"}
+    assert data["/api/timeline"]["entries"][0]["id"] == expected_id
+    assert f'id="entry-{expected_id}"' in html
+    control = f'<div class="load-more"><a href="/timeline?before={next_cursor}">load more</a></div>'
+    assert (control in html) is (next_cursor is not None)
+
+
 def test_timeline_empty_and_unavailable_are_distinct(tmp_path, monkeypatch):
     dist = tmp_path / "dist"
     dist.mkdir()

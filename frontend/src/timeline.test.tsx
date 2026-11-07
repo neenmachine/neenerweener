@@ -24,7 +24,7 @@ afterEach(() => {
 });
 
 // Older pages answer in order; each answer waits until release() so a test can act while it is in flight.
-async function open(first: Page, older: Page[]) {
+async function open(first: Page, older: Page[], query = "") {
   const releases: (() => void)[] = [];
   const fetch = vi.fn(
     () =>
@@ -34,7 +34,7 @@ async function open(first: Page, older: Page[]) {
       }),
   );
   vi.stubGlobal("fetch", fetch);
-  history.replaceState(null, "", "/timeline");
+  history.replaceState(null, "", `/timeline${query}`);
   document.body.innerHTML = `<script id="preload" type="application/json">${JSON.stringify({ "/api/timeline": first })}</script><div id="root"></div>`;
   const { default: App } = await import("./App");
   act(() => {
@@ -58,6 +58,13 @@ const click = () => {
   expect(button(), "load more button").not.toBeNull();
   act(() => button()!.click());
 };
+
+test("the client uses the canonical preload despite duplicate URL cursors", async () => {
+  const { fetch } = await open(page([4], 11), [], "?before=22&before=11");
+  expect(ids()).toEqual(["entry-4"]);
+  expect(button()?.getAttribute("href")).toBe("/timeline?before=11");
+  expect(fetch).not.toHaveBeenCalled();
+});
 
 test("an empty page with a cursor keeps load more and shows the older entries", async () => {
   const { fetch, release } = await open(page([], 11), [page([5], null)]);

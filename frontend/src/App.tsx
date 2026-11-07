@@ -52,9 +52,7 @@ function Footer() {
 
 // Newest first. The first page comes from the preload; "load more" fetches older pages by cursor.
 function TimelinePage() {
-  const before = new URLSearchParams(location.search).get("before");
-  const timelineUrl = `/api/timeline${before && /^\d+$/.test(before) && Number(before) > 0 ? `?before=${before}` : ""}`;
-  const { data, error } = useApi<Timeline>(timelineUrl);
+  const { data, error } = useApi<Timeline>("/api/timeline");
   const [older, setOlder] = useState<Timeline[]>([]);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);

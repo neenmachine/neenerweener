@@ -1,8 +1,8 @@
 :root {
   color-scheme: light dark;
   --fg: #1a1a1a;
-  --muted: #777;
-  --faint: #a3a3a0;
+  --muted: #666664;
+  --faint: #737371;
   /* The one accent: a darker grey, used bold for "you are here". */
   --accent: #4a4a48;
   --bg: #fdfdfc;
@@ -16,7 +16,7 @@
   :root {
     --fg: #e6e6e3;
     --muted: #8f8f8b;
-    --faint: #6a6a67;
+    --faint: #82827e;
     --accent: #c4c4c0;
     --bg: #161616;
   }
@@ -343,15 +343,15 @@ article li::marker {
 
 /* Syntax colors for Pygments token classes (c=comment, k=keyword, s=string, m=number). */
 :root {
-  --syn-comment: #8a8a86;
-  --syn-keyword: #8a3ffc;
+  --syn-comment: #6c6c69;
+  --syn-keyword: #873afc;
   --syn-string: #1f7a4d;
-  --syn-number: #b4540a;
+  --syn-number: #af520a;
   --syn-func: #1d5fbf;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --syn-comment: #7d7d78;
+    --syn-comment: #979793;
     --syn-keyword: #b99aff;
     --syn-string: #7fc8a0;
     --syn-number: #e3a26b;

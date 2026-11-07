@@ -76,6 +76,27 @@ def test_timeline_is_unavailable_without_database(monkeypatch):
     assert response.json() == {'detail': 'timeline unavailable'}
 
 
+def test_timeline_omits_invalid_entry_without_leaking_body(monkeypatch, caplog):
+    rows = [
+        {"id": 8, "body_markdown": "[bad](javascript:alert(1))", "created_at": datetime(2026, 1, 2, tzinfo=timezone.utc), "edited_at": None},
+        {"id": 7, "body_markdown": "valid", "created_at": datetime(2026, 1, 1, tzinfo=timezone.utc), "edited_at": None},
+    ]
+    monkeypatch.setattr(app, "timeline_store", FakeStore(rows))
+    with caplog.at_level("WARNING"):
+        response = TestClient(app.app).get('/api/timeline?limit=2')
+    assert response.status_code == 200
+    assert [entry['id'] for entry in response.json()['entries']] == [7]
+    assert response.json()['next_cursor'] is None
+    assert "invalid timeline entry id=8 error=ValueError" in caplog.messages[0]
+    assert "javascript" not in caplog.text
+
+
+def test_timestamps_are_utc():
+    from timeline import serialize_entry
+    entry = serialize_entry({"id": 1, "body_markdown": "x", "created_at": datetime(2026, 1, 2, 5, tzinfo=timezone.utc), "edited_at": None})
+    assert entry["created_at"] == "2026-01-02T05:00:00+00:00"
+
+
 def test_alembic_has_one_head():
     from alembic.config import Config
     from alembic.script import ScriptDirectory

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Protocol
 
 from markdown_it import MarkdownIt
@@ -98,4 +98,4 @@ def serialize_entry(entry: dict) -> dict:
 
 
 def _timestamp(value: datetime | None) -> str | None:
-    return value.isoformat() if value is not None else None
+    return value.astimezone(timezone.utc).isoformat() if value is not None else None

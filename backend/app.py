@@ -126,12 +126,21 @@ def list_timeline(
 ):
     if timeline_store is None:
         raise HTTPException(503, "timeline unavailable")
-    rows = timeline_store.list(before, limit)
+    try:
+        rows = timeline_store.list(before, limit)
+    except Exception as exc:
+        logger.warning("timeline unavailable: %s", type(exc).__name__)
+        raise HTTPException(503, "timeline unavailable") from exc
     has_next = len(rows) > limit
-    entries = [serialize_entry(row) for row in rows[:limit]]
+    entries = []
+    for row in rows[:limit]:
+        try:
+            entries.append(serialize_entry(row))
+        except Exception as exc:
+            logger.warning("invalid timeline entry id=%s error=%s", row.get("id"), type(exc).__name__)
     return {
         "entries": entries,
-        "next_cursor": entries[-1]["id"] if has_next else None,
+        "next_cursor": rows[limit - 1]["id"] if has_next and rows else None,
     }
 
 
@@ -263,7 +272,8 @@ def get_post(slug: str):
     raise HTTPException(404, "post not found")
 
 
-@app.get("/now")
+@app.api_route("/now", methods=["GET", "HEAD"])
+@app.api_route("/now/", methods=["GET", "HEAD"])
 def old_now():
     return RedirectResponse("/timeline", status_code=301)
 
@@ -375,15 +385,17 @@ def frontend(path: str):
     page = page_data(path)
     if page is None:
         return FileResponse(index)
-    return HTMLResponse(fill_index(index.read_text(encoding="utf-8"), *page))
+    preload, head, markup, status_code = page
+    return HTMLResponse(fill_index(index.read_text(encoding="utf-8"), preload, head, markup), status_code=status_code)
 
 
-def page_data(path: str) -> tuple[dict, dict, str] | None:
+def page_data(path: str) -> tuple[dict, dict, str, int] | None:
     """For the home, timeline, and post pages: preload data, head tags, and no-JS markup."""
     path = path.strip("/")
     preload: dict = {}
     head = {"title": "neenerweener"}
     markup = ""
+    status_code = 200
     if path == "":
         preload["/api/posts"] = list_posts()
     elif path == "timeline":
@@ -393,10 +405,12 @@ def page_data(path: str) -> tuple[dict, dict, str] | None:
         except HTTPException:
             preload["/api/timeline"] = None
             markup = timeline_markup([], unavailable=True)
+            status_code = 503
         except Exception:
             logger.warning("timeline unavailable during page render")
             preload["/api/timeline"] = None
             markup = timeline_markup([], unavailable=True)
+            status_code = 503
         else:
             preload["/api/timeline"] = first_page
             markup = timeline_markup(first_page["entries"])
@@ -412,7 +426,7 @@ def page_data(path: str) -> tuple[dict, dict, str] | None:
             markup = post_markup(post)
     else:
         return None
-    return preload, head, markup
+    return preload, head, markup, status_code
 
 
 def summary(html: str, limit: int = 200) -> str:
@@ -443,7 +457,8 @@ def timeline_markup(entries: list[dict], unavailable: bool = False) -> str:
                 "</article>"
             )
         content = f'<div class="timeline">{"".join(items)}</div>'
-    return f'<main><article><h1>timeline</h1>{content}</article></main>'
+    footer = '<footer><a href="/">neenerweener</a><a href="/timeline" aria-current="page">timeline</a></footer>'
+    return f'<main><article><h1>timeline</h1>{content}</article>{footer}</main>'
 
 
 def _utc_datetime(value: str) -> datetime:
@@ -469,7 +484,7 @@ def post_markup(post: dict) -> str:
     return (
         '<main><article><h1 class="has-back"><a class="back" href="/" aria-label="back">←</a>'
         f'{escape(post["title"])}</h1><div class="meta"><span class="tags">{tags}</span></div>'
-        f'<div>{post["html"]}</div></article></main>'
+        f'<div>{post["html"]}</div></article><footer><a href="/">neenerweener</a><a href="/timeline">timeline</a></footer></main>'
     )
 
 

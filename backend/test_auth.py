@@ -226,6 +226,10 @@ def test_login_rejects_unencodable_password_like_wrong_password(configured_app, 
     assert (surrogate.status_code, surrogate.content) == (wrong.status_code, wrong.content)
     for name in ("cache-control", "content-type"):
         assert surrogate.headers[name] == wrong.headers[name]
+    assert not any(
+        cookie.startswith("admin_hint=")
+        for cookie in surrogate.headers.get_list("set-cookie")
+    )
 
     with auth_store.engine.begin() as connection:
         connection.execute(delete(admin_login_failures))

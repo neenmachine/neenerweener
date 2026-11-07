@@ -6,7 +6,6 @@ import hashlib
 import io
 import logging
 import os
-import threading
 import uuid
 from dataclasses import dataclass, fields
 from typing import Protocol
@@ -24,7 +23,6 @@ VARIANTS = ("lg", "sm")
 CONTENT_TYPE = "image/webp"
 
 Image.MAX_IMAGE_PIXELS = MAX_PIXELS
-_decode = threading.BoundedSemaphore(1)  # one decode per process, so two large uploads cannot double peak RAM
 logger = logging.getLogger(__name__)
 
 
@@ -138,26 +136,25 @@ def fit(width: int, height: int, edge: int) -> tuple[int, int]:
 
 def process_image(data: bytes) -> ProcessedImage:
     """Decode JPEG/PNG/WebP bytes and re-encode them as metadata-free WebP variants."""
-    with _decode:
-        try:
-            with Image.open(io.BytesIO(data), formats=FORMATS) as source:
-                if source.format not in FORMATS or getattr(source, "n_frames", 1) > 1:
-                    raise UnsupportedImage
-                width, height = source.size
-                if width * height > MAX_PIXELS or max(width, height) > MAX_SIDE:
-                    raise UnsupportedImage
-                if source.format == "JPEG":
-                    source.draft("RGB", (LG_EDGE, LG_EDGE))  # decode at 1/2..1/8 scale to bound memory
-                source.load()
-                ImageOps.exif_transpose(source, in_place=True)  # in place: no second full-size copy
-                image = _srgb(source)
-                lg = image.resize(fit(*image.size, LG_EDGE), Image.Resampling.LANCZOS)
-                sm = lg.resize(fit(*lg.size, SM_EDGE), Image.Resampling.LANCZOS)
-                lg_bytes, sm_bytes = _webp(lg, LG_QUALITY), _webp(sm, SM_QUALITY)
-        except UnsupportedImage:
-            raise
-        except Exception as exc:  # any decode failure is the client's bad input
-            raise UnsupportedImage from exc
+    try:
+        with Image.open(io.BytesIO(data), formats=FORMATS) as source:
+            if source.format not in FORMATS or getattr(source, "n_frames", 1) > 1:
+                raise UnsupportedImage
+            width, height = source.size
+            if width * height > MAX_PIXELS or max(width, height) > MAX_SIDE:
+                raise UnsupportedImage
+            if source.format == "JPEG":
+                source.draft("RGB", (LG_EDGE, LG_EDGE))  # decode at 1/2..1/8 scale to bound memory
+            source.load()
+            ImageOps.exif_transpose(source, in_place=True)  # in place: no second full-size copy
+            image = _srgb(source)
+            lg = image.resize(fit(*image.size, LG_EDGE), Image.Resampling.LANCZOS)
+            sm = lg.resize(fit(*lg.size, SM_EDGE), Image.Resampling.LANCZOS)
+            lg_bytes, sm_bytes = _webp(lg, LG_QUALITY), _webp(sm, SM_QUALITY)
+    except UnsupportedImage:
+        raise
+    except Exception as exc:  # any decode failure is the client's bad input
+        raise UnsupportedImage from exc
     return ProcessedImage(lg_bytes, sm_bytes, lg.width, lg.height, hashlib.sha256(lg_bytes).digest())
 
 

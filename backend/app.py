@@ -14,7 +14,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 import yaml
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
@@ -141,6 +141,9 @@ machine_auth_store: MachineAuthStore | None = (
     MachineAuthStore(os.environ["DATABASE_URL"]) if os.environ.get("DATABASE_URL") else None
 )
 media_store: MediaStore | None = None  # set at startup when all MEDIA_* variables are present
+_decode = asyncio.Semaphore(1)  # one decode per process, so two large uploads cannot double peak RAM
+MEDIA_SWEEP_INTERVAL_SECONDS = 600
+_media_sweep_due = 0.0  # time.monotonic() after which the next upload may schedule a sweep
 
 
 @app.exception_handler(RequestValidationError)
@@ -580,7 +583,9 @@ def create_admin_timeline(
 
 
 @app.post("/api/admin/media", status_code=201)
-async def upload_media(request: Request, access: Access = Depends(require_timeline_create)):
+async def upload_media(
+    request: Request, background: BackgroundTasks, access: Access = Depends(require_timeline_create)
+):
     # The client filename and Content-Type are never read: the format comes from the decoded bytes.
     store, assets = media_store, timeline_store
     if store is None or assets is None:
@@ -590,11 +595,8 @@ async def upload_media(request: Request, access: Access = Depends(require_timeli
     await asyncio.to_thread(_permit_machine, request, access, "media_upload", 40)
     data = await _bounded_body(request, MAX_UPLOAD_BYTES)
     try:
-        await asyncio.to_thread(sweep, assets, store)
-    except Exception as exc:
-        logger.warning("media.sweep.unavailable: %s", type(exc).__name__)
-    try:
-        image = await asyncio.to_thread(process_image, data)
+        async with _decode:  # waiters park on the event loop, not in an executor thread
+            image = await asyncio.to_thread(process_image, data)
     except UnsupportedImage as exc:
         raise HTTPException(422, "unsupported image") from exc
     try:
@@ -602,7 +604,18 @@ async def upload_media(request: Request, access: Access = Depends(require_timeli
     except Exception as exc:
         logger.warning("media.store.unavailable: %s", type(exc).__name__)
         raise HTTPException(503, "media unavailable") from exc
+    global _media_sweep_due
+    if time.monotonic() >= _media_sweep_due:
+        _media_sweep_due = time.monotonic() + MEDIA_SWEEP_INTERVAL_SECONDS
+        background.add_task(_sweep_media, assets, store)  # after the response, so a slow bucket cannot hold it
     return {"id": str(asset_id), "width": image.width, "height": image.height}
+
+
+async def _sweep_media(assets, store) -> None:
+    try:
+        await asyncio.to_thread(sweep, assets, store)
+    except Exception as exc:
+        logger.warning("media.sweep.unavailable: %s", type(exc).__name__)
 
 
 @app.get("/api/admin/timeline/{entry_id}")

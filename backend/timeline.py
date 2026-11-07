@@ -69,7 +69,9 @@ timeline_entry_media = Table(
     UniqueConstraint("asset_id"),
     CheckConstraint("position BETWEEN 0 AND 3", name="ck_timeline_entry_media_position"),
 )
-# An attached asset is never swept, even if a later attach races the sweep.
+# The sweep never deletes the row of an attached asset. It does not protect the objects: an attach that lands
+# between the sweep's object deletes and its row delete leaves a row with no objects. M2 must reject attaching
+# a never-attached asset older than about 23 h, and must set detached_at when an entry is deleted.
 _unattached = ~exists().where(timeline_entry_media.c.asset_id == media_assets.c.id)
 NEVER_ATTACHED_GRACE = timedelta(hours=24)
 DETACHED_GRACE = timedelta(days=7)

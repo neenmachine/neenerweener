@@ -1,3 +1,4 @@
+import asyncio
 import io
 import logging
 import re
@@ -102,8 +103,13 @@ def riff_chunks(data):
 
 
 def png_header(width, height):
+    """A valid PNG stream that claims `width` x `height` but carries almost no pixel data."""
+
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+
     ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
-    return b"\x89PNG\r\n\x1a\n" + struct.pack(">I", 13) + b"IHDR" + ihdr + struct.pack(">I", zlib.crc32(b"IHDR" + ihdr))
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(b"\0" * 64)) + chunk(b"IEND", b"")
 
 
 def post(client, data, **headers):
@@ -252,32 +258,78 @@ def test_logs_have_one_access_event_and_no_filename_or_exif(uploads, caplog):
         assert secret not in caplog.text
 
 
-def test_one_decode_at_a_time(uploads, monkeypatch):
-    client, _store, _assets = uploads
-    import media
-
+def test_one_decode_at_a_time_and_waiters_hold_no_thread(uploads, monkeypatch):
+    _client, _store, _assets = uploads
     active, peak, lock = [0], [0], threading.Lock()
-    original = media.ImageOps.exif_transpose
+    original = app.process_image
 
-    def slow_transpose(image, **kwargs):
+    def slow_process(data):
+        # Counts threads inside the decode call, so an upload that waits inside a thread counts too.
         with lock:
             active[0] += 1
             peak[0] = max(peak[0], active[0])
-        time.sleep(0.2)
-        with lock:
-            active[0] -= 1
-        return original(image, **kwargs)
+        try:
+            time.sleep(0.2)
+            return original(data)
+        finally:
+            with lock:
+                active[0] -= 1
 
-    monkeypatch.setattr(media.ImageOps, "exif_transpose", slow_transpose)
+    monkeypatch.setattr(app, "process_image", slow_process)
     data = encode(two_tone(), "PNG")
     statuses = []
-    threads = [threading.Thread(target=lambda: statuses.append(post(client, data).status_code)) for _ in range(3)]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join(10)
+    with TestClient(app.app, base_url="http://127.0.0.1") as client:  # one event loop for all three uploads
+        threads = [threading.Thread(target=lambda: statuses.append(post(client, data).status_code)) for _ in range(3)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(10)
     assert statuses == [201, 201, 201]
     assert peak[0] == 1
+
+
+def test_upload_response_does_not_wait_for_a_slow_sweep(uploads, monkeypatch):
+    client, _store, _assets = uploads
+    release, swept, swept_at_response = threading.Event(), [], []
+
+    def slow_sweep(_assets, _store):
+        release.wait(5)
+        swept.append(time.monotonic())
+
+    monkeypatch.setattr(app, "sweep", slow_sweep)
+    monkeypatch.setattr(app, "_media_sweep_due", 0.0)
+    data = encode(two_tone(), "PNG")
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": "/api/admin/media",
+        "raw_path": b"/api/admin/media",
+        "query_string": b"",
+        "root_path": "",
+        "headers": [(b"host", b"127.0.0.1"), (b"content-length", str(len(data)).encode())],
+        "client": ("127.0.0.1", 50000),
+        "server": ("127.0.0.1", 80),
+    }
+    messages = []
+
+    async def receive():
+        return {"type": "http.request", "body": data, "more_body": False}
+
+    async def send(message):
+        messages.append(message)
+        if message["type"] == "http.response.body" and not message.get("more_body"):
+            swept_at_response.extend(swept)  # what the sweep had finished when the client got the full response
+            release.set()
+
+    asyncio.run(app.app(scope, receive, send))
+    assert messages[0]["status"] == 201
+    assert swept_at_response == [] and len(swept) == 1, "the sweep runs only after the response is sent"
+
+    assert post(client, data).status_code == 201
+    assert len(swept) == 1, "at most one sweep per interval per process"
 
 
 def test_upload_requires_authentication():
@@ -342,6 +394,7 @@ def test_complete_config_builds_the_bucket_store_once_at_startup(monkeypatch):
     assert store.bucket == "fake-bucket"
     assert store.client.meta.endpoint_url == "https://storage.invalid"
     assert store.client.meta.region_name == "auto"
+    assert store.client.meta.config.s3["addressing_style"] == "virtual"
 
 
 def test_upload_route_uses_startup_config_only(monkeypatch):
@@ -458,7 +511,7 @@ def test_machine_uploads_are_limited_to_40_per_hour(media_db):
     assert timeline.status_code == 201, "uploads use their own limit, not the timeline create limit"
 
 
-def test_sweep_removes_expired_unattached_assets_objects_then_row(media_db):
+def test_sweep_removes_expired_unattached_assets_objects_then_row(media_db, monkeypatch):
     _machine, store = media_db
     timeline: TimelineStore = app.timeline_store
     now = datetime.now(UTC)
@@ -491,6 +544,7 @@ def test_sweep_removes_expired_unattached_assets_objects_then_row(media_db):
         original_delete(key)
 
     store.delete = failing_delete
+    monkeypatch.setattr(app, "_media_sweep_due", 0.0)
     app.app.dependency_overrides[app.require_timeline_create] = lambda: app.Access(Principal("browser-admin", None))
     try:
         upload = post(TestClient(app.app), encode(two_tone(), "PNG"))

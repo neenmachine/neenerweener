@@ -138,6 +138,11 @@ main > footer a[aria-current] {
   letter-spacing: -0.01em;
 }
 
+/* Paint the title over the arrow's focus ring, as when the arrow sat inside the h1. */
+.post-head > h1 {
+  position: relative;
+}
+
 /* No margin to hang into on narrow screens: the arrow gets its own 1.5em column (a hanging indent),
    so the title keeps a clear gap from it and wrapped title lines line up with the first. */
 @media (max-width: 760px) {
@@ -517,6 +522,9 @@ article h3 {
   margin: 0 0 0.35rem;
   line-height: 1.25;
   text-wrap: balance;
+  /* Source h1 was not in the article heading-anchor rule; keep its positioning. */
+  position: static;
+  scroll-margin-top: 0;
 }
 
 .readme-body .readme-h2 {

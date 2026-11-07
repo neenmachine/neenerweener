@@ -36,3 +36,16 @@ def configure_logging() -> None:
         handler.setFormatter(JsonFormatter())
         root.addHandler(handler)
     root.setLevel(logging.INFO)
+
+import asyncio
+
+
+async def check_readiness(store) -> tuple[bool, str | None]:
+    """Return ready only after a bounded query on the shared database store."""
+    if store is None:
+        return False, "database unavailable"
+    try:
+        await asyncio.wait_for(asyncio.to_thread(store.ping), timeout=3)
+    except Exception:
+        return False, "database unavailable"
+    return True, None

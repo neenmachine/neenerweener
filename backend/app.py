@@ -23,6 +23,7 @@ from pygments.formatters import HtmlFormatter
 from pygments.lexers import TextLexer, get_lexer_by_name, get_lexer_for_filename
 from pygments.util import ClassNotFound
 
+from anchors import add_heading_anchors
 from operations import check_readiness, configure_logging, load_schema_heads
 from timeline import TimelineStore, TimelineStoreProtocol, serialize_entry
 
@@ -59,6 +60,7 @@ def highlight(code: str, lang: str, _attrs) -> str:
 # CommonMark + GitHub tables and strikethrough. Raw HTML is on: posts are Henry's own trusted files.
 md = MarkdownIt("commonmark", {"highlight": highlight}).enable(["table", "strikethrough"])
 dollarmath_plugin(md, allow_digits=False)
+md.core.ruler.after("inline", "heading_anchors", add_heading_anchors)
 
 @asynccontextmanager
 async def lifespan(_app):
@@ -249,7 +251,8 @@ CAPTIONED = re.compile(r'<p>(<img [^>]*?title="([^"]*)"[^>]*>)</p>')
 
 
 def render_post(body: str) -> str:
-    return CAPTIONED.sub(r"<figure>\1<figcaption>\2</figcaption></figure>", md.render(body))
+    html = md.render(body, {"heading_anchors": True})
+    return CAPTIONED.sub(r"<figure>\1<figcaption>\2</figcaption></figure>", html)
 
 
 @app.get("/api/posts")

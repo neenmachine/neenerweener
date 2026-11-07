@@ -662,6 +662,47 @@ main.wide {
   background: color-mix(in srgb, #e8b500 16%, var(--bg));
 }
 
+/* Post headings expose small, keyboard-accessible links to their section.
+   The link follows the heading text; on wide screens with hover it hangs in the left margin. */
+article :is(h2, h3, h4, h5, h6) {
+  position: relative;
+  scroll-margin-top: 1.5rem;
+}
+
+article :is(h2, h3, h4, h5, h6) .anchor {
+  position: absolute;
+  top: 0;
+  right: 100%;
+  padding-right: 0.35em;
+  color: var(--muted);
+  text-decoration: none;
+  opacity: 0;
+}
+
+article :is(h2, h3, h4, h5, h6):hover .anchor,
+article :is(h2, h3, h4, h5, h6) .anchor:focus-visible {
+  opacity: 1;
+}
+
+/* No margin to hang into, or no hover: show the link inline after the text, with a 24px tap target. */
+@media (max-width: 760px), (hover: none) {
+  article :is(h2, h3, h4, h5, h6) .anchor {
+    position: static;
+    display: inline-block;
+    min-width: 24px;
+    min-height: 24px;
+    margin-left: 0.15em;
+    padding: 0;
+    text-align: center;
+  }
+}
+
+@media (hover: none) {
+  article :is(h2, h3, h4, h5, h6) .anchor {
+    opacity: 1;
+  }
+}
+
 @media (max-width: 480px) {
   .box-head {
     padding: 0.5rem 0.75rem;

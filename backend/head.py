@@ -1,6 +1,7 @@
 """Build server-rendered document head tags."""
 
 from html import escape
+from urllib.parse import quote
 
 from discovery import origin
 
@@ -23,12 +24,12 @@ def head_tags(kind: str, head: dict, canonical_path: str) -> list[str]:
     if head.get("robots"):
         tags.append(f'<meta name="robots" content="{escape(head["robots"])}">')
     if not head.get("robots"):
-        url = escape(origin() + canonical_path, quote=True)
+        url = escape(origin() + quote(canonical_path, safe="/"), quote=True)
         tags += [
             f'<link rel="canonical" href="{url}" />',
             f'<meta property="og:url" content="{url}" />',
             f'<meta property="og:type" content="{"article" if kind == "post" else "website"}" />',
         ]
-        if kind == "post":
+        if kind == "post" and head.get("published"):
             tags.append(f'<meta property="article:published_time" content="{escape(str(head["published"]), quote=True)}" />')
     return tags

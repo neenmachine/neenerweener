@@ -65,7 +65,6 @@ export default function Admin() {
   };
 
   useEffect(() => {
-    document.title = "admin";
     session();
   }, []);
 

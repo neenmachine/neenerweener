@@ -1,13 +1,10 @@
 // @vitest-environment jsdom
-// While the Admin chunk loads, /admin shows the admin shell above the footer, not the footer alone.
+// The loaded Admin chunk must not add a second server-rendered robots tag.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, expect, test, vi } from "vitest";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
-// The lazy chunk never loads, so the Suspense fallback stays on screen.
-vi.mock("./Admin", () => new Promise(() => {}));
 
 let root: Root | undefined;
 
@@ -17,8 +14,9 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-test("the admin fallback is the admin shell above the footer", { timeout: 5000 }, async () => {
+test("the loaded admin page keeps one server robots tag", { timeout: 5000 }, async () => {
   document.head.innerHTML = '<meta name="robots" content="noindex">';
+  vi.stubGlobal("fetch", vi.fn(() => Promise.resolve({ ok: true, status: 200, headers: new Headers(), json: () => Promise.resolve({ authenticated: false }) })));
   document.body.innerHTML = `<script id="preload" type="application/json">{"page":{"kind":"admin"}}</script><div id="root"></div>`;
   const { default: App } = await import("./App");
   await act(async () => {

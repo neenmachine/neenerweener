@@ -154,7 +154,6 @@ function TimelinePage() {
   // Index of the entry to focus after the last page removes the focused button.
   const focusAt = useRef<number | null>(null);
   useEffect(() => {
-    document.title = "timeline";
     const onHash = () => setHash(location.hash);
     addEventListener("hashchange", onHash);
     return () => removeEventListener("hashchange", onHash);
@@ -377,7 +376,6 @@ function PostPage({ slug }: { slug: string }) {
   const body = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!data) return;
-    document.title = data.title;
     const diagrams = body.current?.querySelectorAll<HTMLElement>("pre.mermaid");
     if (diagrams?.length) {
       // Mermaid is large, so only posts with diagrams load it.
@@ -546,9 +544,6 @@ function Tree({ project, files, path }: { project: string; files: string[]; path
 
 function ProjectPage({ name, path }: { name: string; path: string }) {
   const { data, error } = useApi<Project>(`/api/code/${name}`);
-  useEffect(() => {
-    document.title = path || name;
-  }, [name, path]);
   const crumbs = <Crumbs project={name} path={path} />;
   if (error)
     return (

@@ -21,10 +21,11 @@ def _tag_filter(posts: list[dict], selected_tag: str | None) -> str:
         return ""
     all_link = '<a href="/" aria-current="page">all</a>' if selected_tag is None else '<a href="/">all</a>'
     links = [all_link]
+    # match JavaScript string comparison, which compares UTF-16 code units
     links.extend(
         f'<a href="/?tag={_url_tag(tag)}"'
         f'{" aria-current=\"page\"" if tag == selected_tag else ""}>#{escape(tag, quote=False)}<span class="muted"> {count}</span></a>'
-        for tag, count in sorted(counts.items())
+        for tag, count in sorted(counts.items(), key=lambda item: item[0].encode("utf-16-be"))
     )
     return f'<nav class="tag-filter" aria-label="tags">{"".join(links)}</nav>'
 

@@ -18,7 +18,9 @@
       "tags": [
        "z",
        "ä",
-       "a&<\""
+       "a&<\"",
+       "\ue000",
+       "\ud800\udc00"
       ],
       "draft": false
      }
@@ -27,7 +29,7 @@
    "h1": [
     "neenerweener"
    ],
-   "markup": "<main><h1 class=\"sr-only\">neenerweener</h1><nav class=\"tag-filter\" aria-label=\"tags\"><a href=\"/\" aria-current=\"page\">all</a><a href=\"/?tag=a%26%3C%22\">#a&amp;&lt;\"<span class=\"muted\"> 1</span></a><a href=\"/?tag=z\">#z<span class=\"muted\"> 1</span></a><a href=\"/?tag=%C3%A4\">#ä<span class=\"muted\"> 1</span></a></nav><ul class=\"posts\"><li><div class=\"post-info\"><a href=\"/posts/hello\">hello</a><span class=\"tags\"><a href=\"/?tag=z\">#z</a><a href=\"/?tag=%C3%A4\">#ä</a><a href=\"/?tag=a%26%3C%22\">#a&amp;&lt;\"</a></span></div></li></ul><footer><a href=\"/\" aria-current=\"page\">neenerweener</a><a href=\"/timeline\">timeline</a></footer></main>"
+   "markup": "<main><h1 class=\"sr-only\">neenerweener</h1><nav class=\"tag-filter\" aria-label=\"tags\"><a href=\"/\" aria-current=\"page\">all</a><a href=\"/?tag=a%26%3C%22\">#a&amp;&lt;\"<span class=\"muted\"> 1</span></a><a href=\"/?tag=z\">#z<span class=\"muted\"> 1</span></a><a href=\"/?tag=%C3%A4\">#ä<span class=\"muted\"> 1</span></a><a href=\"/?tag=%F0%90%80%80\">#\ud800\udc00<span class=\"muted\"> 1</span></a><a href=\"/?tag=%EE%80%80\">#\ue000<span class=\"muted\"> 1</span></a></nav><ul class=\"posts\"><li><div class=\"post-info\"><a href=\"/posts/hello\">hello</a><span class=\"tags\"><a href=\"/?tag=z\">#z</a><a href=\"/?tag=%C3%A4\">#ä</a><a href=\"/?tag=a%26%3C%22\">#a&amp;&lt;\"</a><a href=\"/?tag=%EE%80%80\">#\ue000</a><a href=\"/?tag=%F0%90%80%80\">#\ud800\udc00</a></span></div></li></ul><footer><a href=\"/\" aria-current=\"page\">neenerweener</a><a href=\"/timeline\">timeline</a></footer></main>"
   },
   {
    "path": "/?tag=a%26%3C%22",
@@ -46,7 +48,9 @@
       "tags": [
        "z",
        "ä",
-       "a&<\""
+       "a&<\"",
+       "\ue000",
+       "\ud800\udc00"
       ],
       "draft": false
      }
@@ -55,7 +59,7 @@
    "h1": [
     "neenerweener"
    ],
-   "markup": "<main><h1 class=\"sr-only\">neenerweener</h1><nav class=\"tag-filter\" aria-label=\"tags\"><a href=\"/\">all</a><a href=\"/?tag=a%26%3C%22\" aria-current=\"page\">#a&amp;&lt;\"<span class=\"muted\"> 1</span></a><a href=\"/?tag=z\">#z<span class=\"muted\"> 1</span></a><a href=\"/?tag=%C3%A4\">#ä<span class=\"muted\"> 1</span></a></nav><ul class=\"posts\"><li><div class=\"post-info\"><a href=\"/posts/hello\">hello</a><span class=\"tags\"><a href=\"/?tag=z\">#z</a><a href=\"/?tag=%C3%A4\">#ä</a><a href=\"/?tag=a%26%3C%22\">#a&amp;&lt;\"</a></span></div></li></ul><footer><a href=\"/\">neenerweener</a><a href=\"/timeline\">timeline</a></footer></main>"
+   "markup": "<main><h1 class=\"sr-only\">neenerweener</h1><nav class=\"tag-filter\" aria-label=\"tags\"><a href=\"/\">all</a><a href=\"/?tag=a%26%3C%22\" aria-current=\"page\">#a&amp;&lt;\"<span class=\"muted\"> 1</span></a><a href=\"/?tag=z\">#z<span class=\"muted\"> 1</span></a><a href=\"/?tag=%C3%A4\">#ä<span class=\"muted\"> 1</span></a><a href=\"/?tag=%F0%90%80%80\">#\ud800\udc00<span class=\"muted\"> 1</span></a><a href=\"/?tag=%EE%80%80\">#\ue000<span class=\"muted\"> 1</span></a></nav><ul class=\"posts\"><li><div class=\"post-info\"><a href=\"/posts/hello\">hello</a><span class=\"tags\"><a href=\"/?tag=z\">#z</a><a href=\"/?tag=%C3%A4\">#ä</a><a href=\"/?tag=a%26%3C%22\">#a&amp;&lt;\"</a><a href=\"/?tag=%EE%80%80\">#\ue000</a><a href=\"/?tag=%F0%90%80%80\">#\ud800\udc00</a></span></div></li></ul><footer><a href=\"/\">neenerweener</a><a href=\"/timeline\">timeline</a></footer></main>"
   },
   {
    "path": "/timeline",

@@ -13,6 +13,7 @@ const slug = location.pathname.match(/^\/posts\/([a-z0-9-]+)\/?$/)?.[1];
 // There is no project index: Henry links to code from his posts.
 const code = location.pathname.match(/^\/code\/([a-z0-9-]+)(?:\/(.+?))?\/?$/);
 const timeline = /^\/timeline\/?$/.test(location.pathname);
+const home = /^\/?$/.test(location.pathname);
 // Private and unlinked; its code is a separate chunk that public pages never load.
 const admin = /^\/admin\/?$/.test(location.pathname);
 const Admin = lazy(() => import("./Admin"));
@@ -21,10 +22,14 @@ const tag = new URLSearchParams(location.search).get("tag");
 const IMAGE = /\.(png|jpe?g|webp|gif|svg)$/i;
 
 // API responses the server put into the page (backend `preload`), so the first render needs no fetch.
-// null means the server answered 404.
+// null means the server could not load it.
 const preloaded: Record<string, unknown> = JSON.parse(document.getElementById("preload")?.textContent || "{}");
+// The server decides not-found and sends its label; the page then shows only that, with no fetch.
+const notFound = preloaded["not-found"] as string | undefined;
 
 export default function App() {
+  // The server decides not-found; the client has no second route list.
+  if (notFound) return <NotFound label={notFound} />;
   // Project pages are wider, like a repo browser, so long code lines fit.
   if (code)
     return (
@@ -50,10 +55,30 @@ export default function App() {
   );
 }
 
+// Mirrors not_found_page in backend/app.py, so the swap from the server markup is not visible.
+function NotFound({ label }: { label: string }) {
+  return (
+    <main>
+      {slug ? (
+        <div className="has-back">
+          <Back href="/" />
+          <h1 className="muted">{label}</h1>
+        </div>
+      ) : (
+        <>
+          <h1 className="muted">{label}</h1>
+          <a href="/">neenerweener</a>
+        </>
+      )}
+      <Footer />
+    </main>
+  );
+}
+
 function Footer() {
   return (
     <footer>
-      <a href="/" aria-current={!slug && !timeline && !admin && !tag ? "page" : undefined}>
+      <a href="/" aria-current={home && !tag ? "page" : undefined}>
         neenerweener
       </a>
       <a href="/timeline" aria-current={timeline ? "page" : undefined}>
@@ -314,9 +339,10 @@ function PostPage({ slug }: { slug: string }) {
   const back = <Back href="/" />;
   if (error)
     return (
-      <p className="muted has-back">
-        {back}post not found
-      </p>
+      <div className="has-back">
+        {back}
+        <h1 className="muted">post not found</h1>
+      </div>
     );
   if (!data) return null;
   return (
@@ -456,6 +482,7 @@ function ProjectPage({ name, path }: { name: string; path: string }) {
       <>
         {crumbs}
         <p className="muted">project not found</p>
+        <Footer />
       </>
     );
   if (!data) return crumbs;
@@ -476,7 +503,7 @@ function ProjectPage({ name, path }: { name: string; path: string }) {
 
 function Folder({ project, path }: { project: Project; path: string }) {
   const { dirs, files } = children(project.files, path);
-  if (!dirs.length && !files.length) return <p className="muted">file not found</p>;
+  if (!dirs.length && !files.length) return <><p className="muted">file not found</p><Footer /></>;
   const prefix = path && path + "/";
   return (
     <>
@@ -534,7 +561,7 @@ function FileView({ project, path }: { project: string; path: string }) {
     if (lines) document.getElementById(location.hash.slice(1))?.scrollIntoView();
   }, [data]);
   if (error)
-    return <p className="muted">file not found</p>;
+    return <><p className="muted">file not found</p><Footer /></>;
   if (!data) return null;
   const raw = `/code-raw/${project}/${encoded}`;
   const copy = () => {

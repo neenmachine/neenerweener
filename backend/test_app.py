@@ -9,6 +9,19 @@ import pytest
 from fastapi.testclient import TestClient
 
 
+def test_index_html_redirects_to_directory_and_keeps_query(tmp_path, monkeypatch):
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text("<html>app</html>")
+    monkeypatch.setattr(app, "FRONTEND_DIST", dist)
+
+    with TestClient(app.app) as client:
+        assert client.get("/index.html", follow_redirects=False).status_code == 301
+        assert client.get("/index.html", follow_redirects=False).headers["location"] == "/"
+        assert client.head("/index.html", follow_redirects=False).status_code == 301
+        assert client.get("/index.html?tag=x", follow_redirects=False).headers["location"] == "/?tag=x"
+
+
 def test_spa_fallback(tmp_path, monkeypatch):
     dist = tmp_path / "dist"
     (dist / "assets").mkdir(parents=True)
@@ -35,10 +48,19 @@ def test_admin_spa_is_noindex_and_public_pages_do_not_link_to_it(tmp_path, monke
     monkeypatch.setattr(app, "FRONTEND_DIST", dist)
 
     with TestClient(app.app) as client:
-        for path in ("/admin", "/admin/settings"):
+        for path in ("/admin", "/admin/", "/admin/anything"):
             admin = client.get(path)
             assert admin.status_code == 200
             assert admin.headers["X-Robots-Tag"] == "noindex"
+            assert '"not-found"' not in admin.text
+            head = client.head(path)
+            assert head.status_code == 200
+            assert head.headers["X-Robots-Tag"] == "noindex"
+        missing = client.get("/missing")
+        assert missing.status_code == 404
+        assert missing.headers["X-Content-Type-Options"] == "nosniff"
+        assert missing.headers["Referrer-Policy"] == "strict-origin-when-cross-origin"
+        assert missing.headers["X-Frame-Options"] == "DENY"
         assert client.head("/admin").headers["X-Robots-Tag"] == "noindex"
         for path in ("/", "/timeline"):
             public = client.get(path)
@@ -496,8 +518,9 @@ def test_server_rendered_pages(tmp_path, monkeypatch):
     assert "<" not in timeline.split('<script id="preload" type="application/json">')[1].split("</script>")[0]
 
     assert '<meta name="description" content="short one" />' in c.get("/posts/brief").text
-    missing = c.get("/posts/nope").text
-    assert '"/api/posts/nope": null' in missing and "<title>neenerweener</title>" in missing
+    missing = c.get("/posts/nope")
+    assert missing.status_code == 404
+    assert '{"not-found": "post not found"}' in missing.text and '<meta name="robots" content="noindex">' in missing.text
     home = c.get("/?tag=a").text
     assert '"/api/posts": [' in home and '<div id="root"></div>' in home
 

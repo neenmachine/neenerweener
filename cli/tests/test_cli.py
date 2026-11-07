@@ -1,3 +1,5 @@
+import contextlib
+import io
 import json
 import os
 import shutil
@@ -99,6 +101,26 @@ class CliTests(unittest.TestCase):
                         with self.assertRaises(cli.CliError) as cm:
                             cli._request("https://s", "/path", {"body_markdown":"text"})
                     self.assertEqual(str(cm.exception), expected)
+
+    def test_tweet_rejects_unknown_challenge_field_with_safe_exit(self):
+        secret = "challenge-extra-secret"
+        response = Response({"challenge_id":"123e4567-e89b-12d3-a456-426614174000", "message":"m", "namespace":cli.NAMESPACE, "expires_at":"2099-01-01T00:00:00Z", "extra":secret})
+        stderr = io.StringIO()
+        with patch.object(cli, "_fingerprint", return_value="SHA256:fp"), patch.object(cli.OPENER, "open", return_value=response), patch.object(cli, "_run") as run, contextlib.redirect_stderr(stderr):
+            result = cli.main(["--server", "https://s.example", "--key", str(self.key), "text"])
+        self.assertEqual(result, 1)
+        run.assert_not_called()
+        self.assertNotIn(secret, stderr.getvalue())
+
+    def test_tweet_rejects_unknown_token_field_with_safe_exit(self):
+        secret = "token-extra-secret"
+        challenge = Response({"challenge_id":"123e4567-e89b-12d3-a456-426614174000", "message":"m", "namespace":cli.NAMESPACE, "expires_at":"2099-01-01T00:00:00Z"})
+        token = Response({"access_token":"token", "token_type":"Bearer", "expires_in":600, "scopes":["timeline:write"], "extra":secret})
+        stderr = io.StringIO()
+        with patch.object(cli, "_fingerprint", return_value="SHA256:fp"), patch.object(cli.OPENER, "open", side_effect=[challenge, token]), patch.object(cli, "_run", return_value=subprocess.CompletedProcess([], 0, b"-----BEGIN SSH SIGNATURE-----", b"")), contextlib.redirect_stderr(stderr):
+            result = cli.main(["--server", "https://s.example", "--key", str(self.key), "text"])
+        self.assertEqual(result, 1)
+        self.assertNotIn(secret, stderr.getvalue())
 
     def test_tweet_rejects_invalid_challenge_and_token_protocol(self):
         valid_challenge = {"challenge_id":"123e4567-e89b-12d3-a456-426614174000", "message":"m", "namespace":cli.NAMESPACE, "expires_at":"2099-01-01T00:00:00Z"}

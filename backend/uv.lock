@@ -1204,6 +1204,11 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/d0/0b/0dd9686842d9dc49c3ee84cced31c54bceb0fb52a826be7d3d4fe30d882a/sentry_sdk-2.72.0-py3-none-any.whl", hash = "sha256:3e13ace4ffd0b3cc78288236edfc4e4bd90eb12a396cc5845fa10a58ff289f50", size = 544754, upload-time = "2026-10-12T13:08:01.619Z" },
 ]
 
+[package.optional-dependencies]
+fastapi = [
+    { name = "fastapi" },
+]
+
 [[package]]
 name = "shellingham"
 version = "1.5.4"
@@ -1498,6 +1503,7 @@ dependencies = [
     { name = "mdit-py-plugins" },
     { name = "pygments" },
     { name = "pyyaml" },
+    { name = "sentry-sdk", extra = ["fastapi"] },
 ]
 
 [package.dev-dependencies]
@@ -1512,6 +1518,7 @@ requires-dist = [
     { name = "mdit-py-plugins", specifier = ">=0.5.0" },
     { name = "pygments", specifier = ">=2.21.0" },
     { name = "pyyaml", specifier = ">=6.0.3" },
+    { name = "sentry-sdk", extras = ["fastapi"], specifier = ">=2.0.0" },
 ]
 
 [package.metadata.requires-dev]

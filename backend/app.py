@@ -3,6 +3,8 @@ import logging
 import os
 import posixpath
 import re
+import time
+import uuid
 from datetime import date, datetime
 from html import escape, unescape
 from urllib.parse import quote
@@ -10,8 +12,8 @@ from pathlib import Path
 
 import yaml
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from markdown_it import MarkdownIt
 from mdit_py_plugins.dollarmath import dollarmath_plugin
@@ -27,6 +29,8 @@ CODE_DIR = Path(os.environ.get("CODE_DIR", Path(__file__).parent.parent / "code"
 FRONTEND_DIST = Path(os.environ.get("FRONTEND_DIST", Path(__file__).parent.parent / "frontend" / "dist"))
 FILENAME = re.compile(r"^([a-z0-9-]+)\.md$")
 PROJECT = re.compile(r"[a-z0-9-]+")
+from operations import check_readiness, configure_logging, configure_sentry
+
 logger = logging.getLogger(__name__)
 
 
@@ -45,6 +49,67 @@ md = MarkdownIt("commonmark", {"highlight": highlight}).enable(["table", "strike
 dollarmath_plugin(md, allow_digits=False)
 
 app = FastAPI()
+configure_logging()
+configure_sentry()
+
+
+@app.middleware("http")
+async def operational_middleware(request: Request, call_next):
+    started = time.perf_counter()
+    request_id = request.headers.get("x-request-id", "")
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", request_id):
+        request_id = uuid.uuid4().hex
+    status = 500
+    try:
+        response = await call_next(request)
+        status = response.status_code
+        response.headers["X-Request-ID"] = request_id
+        return response
+    except Exception:
+        logger.exception("request failed", extra={"request_id": request_id})
+        response = JSONResponse({"detail": "internal server error"}, status_code=500)
+        response.headers["X-Request-ID"] = request_id
+        return response
+    finally:
+        logger.info(
+            "request",
+            extra={
+                "request_id": request_id,
+                "method": request.method,
+                "route": request.url.path,
+                "status": status,
+                "duration": round((time.perf_counter() - started) * 1000, 2),
+            },
+        )
+
+
+@app.middleware("http")
+async def security_middleware(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), geolocation=(), microphone=(), payment=(), usb=()"
+    response.headers["Content-Security-Policy-Report-Only"] = (
+        "default-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; "
+        "base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+    )
+    forwarded_proto = request.headers.get("x-forwarded-proto", "").split(",", 1)[0].strip()
+    if os.environ.get("ENVIRONMENT") == "production" and (request.url.scheme == "https" or forwarded_proto == "https"):
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
+
+
+@app.get("/healthz")
+async def healthz():
+    return {"status": "ok"}
+
+
+@app.get("/readyz")
+async def readyz():
+    ready, reason = await check_readiness()
+    if not ready:
+        return JSONResponse({"status": "not_ready", "reason": reason or "dependency unavailable"}, status_code=503)
+    return {"status": "ok"}
 
 
 def split_frontmatter(text: str) -> tuple[dict | None, str]:

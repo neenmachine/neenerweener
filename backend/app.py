@@ -5,6 +5,7 @@ import posixpath
 import re
 import time
 import uuid
+from contextlib import asynccontextmanager
 from datetime import date, datetime
 from html import escape, unescape
 from urllib.parse import quote
@@ -57,7 +58,14 @@ def highlight(code: str, lang: str, _attrs) -> str:
 md = MarkdownIt("commonmark", {"highlight": highlight}).enable(["table", "strikethrough"])
 dollarmath_plugin(md, allow_digits=False)
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(_app):
+    yield
+    if timeline_store is not None:
+        timeline_store.close()
+
+
+app = FastAPI(lifespan=lifespan)
 configure_logging()
 timeline_store: TimelineStoreProtocol | None = (
     TimelineStore(os.environ["DATABASE_URL"]) if os.environ.get("DATABASE_URL") else None
@@ -130,7 +138,7 @@ def list_timeline(
 
 @app.get("/readyz")
 async def readyz():
-    ready, reason = await check_readiness()
+    ready, reason = await check_readiness(timeline_store)
     if not ready:
         return JSONResponse({"status": "not_ready", "reason": reason or "dependency unavailable"}, status_code=503)
     return {"status": "ok"}

@@ -94,7 +94,7 @@ def test_alembic_upgrade_from_empty():
 
 
 @pytest.mark.skipif(not os.environ.get('DATABASE_URL'), reason='DATABASE_URL not configured')
-def test_alembic_upgrade_from_previous_head():
+def test_alembic_upgrade_from_base_is_repeatable():
     from alembic import command
     from alembic.config import Config
     from sqlalchemy import create_engine, text

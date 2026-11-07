@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Protocol
 
 from markdown_it import MarkdownIt
-from sqlalchemy import BigInteger, Column, DateTime, MetaData, Table, Text, create_engine, desc, select
+from sqlalchemy import BigInteger, Column, DateTime, MetaData, Table, Text, create_engine, desc, select, text
 from sqlalchemy.engine import Engine
 
 metadata = MetaData()
@@ -25,6 +25,11 @@ _UNSAFE_SCHEME = re.compile(r"^(?:javascript|vbscript|data):", re.IGNORECASE)
 _UNSAFE_MARKDOWN_LINK = re.compile(r"\]\(\s*(?:javascript|vbscript|data):", re.IGNORECASE)
 
 
+CONNECT_TIMEOUT_SECONDS = 2
+POOL_TIMEOUT_SECONDS = 1
+STATEMENT_TIMEOUT_MS = 2000
+
+
 def database_engine(database_url: str, **kwargs) -> Engine:
     if database_url.startswith("postgres://"):
         database_url = "postgresql+psycopg://" + database_url.removeprefix("postgres://")
@@ -35,6 +40,9 @@ def database_engine(database_url: str, **kwargs) -> Engine:
 
 class TimelineStoreProtocol(Protocol):
     def list(self, before: int | None, limit: int) -> list[dict]: ...
+    def ping(self) -> None: ...
+    def close(self) -> None: ...
+
 
 
 def render_timeline(body: str) -> str:
@@ -54,7 +62,15 @@ def render_timeline(body: str) -> str:
 
 class TimelineStore:
     def __init__(self, database_url: str, engine: Engine | None = None):
-        self.engine = engine or database_engine(database_url, pool_pre_ping=True)
+        self.engine = engine or database_engine(
+            database_url,
+            pool_pre_ping=True,
+            pool_timeout=POOL_TIMEOUT_SECONDS,
+            connect_args={
+                "connect_timeout": CONNECT_TIMEOUT_SECONDS,
+                "options": f"-c statement_timeout={STATEMENT_TIMEOUT_MS}",
+            },
+        )
 
     def list(self, before: int | None, limit: int) -> list[dict]:
         query = select(timeline_entries).order_by(desc(timeline_entries.c.id)).limit(limit + 1)
@@ -63,6 +79,13 @@ class TimelineStore:
         with self.engine.connect() as connection:
             rows = connection.execute(query).mappings().all()
         return [dict(row) for row in rows]
+
+    def ping(self) -> None:
+        with self.engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
+
+    def close(self) -> None:
+        self.engine.dispose()
 
 
 def serialize_entry(entry: dict) -> dict:

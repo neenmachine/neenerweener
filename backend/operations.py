@@ -38,27 +38,14 @@ def configure_logging() -> None:
     root.setLevel(logging.INFO)
 
 import asyncio
-import os
-from sqlalchemy import text
-from timeline import database_engine
 
 
-async def check_readiness() -> tuple[bool, str | None]:
-    """Return readiness with a bounded database check when configured."""
-    database_url = os.environ.get("DATABASE_URL")
-    if not database_url:
-        return True, None
-
-    def check() -> None:
-        engine = database_engine(database_url, connect_args={"connect_timeout": 2})
-        try:
-            with engine.connect() as connection:
-                connection.execute(text("SELECT 1"))
-        finally:
-            engine.dispose()
-
+async def check_readiness(store) -> tuple[bool, str | None]:
+    """Return ready only after a bounded query on the shared database store."""
+    if store is None:
+        return False, "database unavailable"
     try:
-        await asyncio.wait_for(asyncio.to_thread(check), timeout=3)
+        await asyncio.wait_for(asyncio.to_thread(store.ping), timeout=3)
     except Exception:
         return False, "database unavailable"
     return True, None

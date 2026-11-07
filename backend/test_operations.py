@@ -26,8 +26,8 @@ def test_readyz_fails_closed_without_database(monkeypatch):
 
 def test_readyz_validates_password_hash_configuration(monkeypatch, caplog):
     class Available:
-        def ping(self):
-            pass
+        def schema_revisions(self):
+            return app.EXPECTED_SCHEMA_REVISIONS
 
     valid_hash = hash_password("test-password")
     invalid_hashes = [
@@ -86,6 +86,7 @@ def test_readyz_fails_closed_when_schema_version_table_is_missing(monkeypatch):
             return frozenset()
 
     monkeypatch.setattr(app, "timeline_store", MissingSchema())
+    monkeypatch.setattr(app, "_admin_config", lambda: type("Config", (), {"valid": True})())
     response = client.get("/readyz")
     assert response.status_code == 503
     assert response.json() == {"status": "not_ready", "reason": "database unavailable"}
@@ -100,6 +101,7 @@ def test_readyz_fails_closed_when_schema_is_stale(monkeypatch):
             return frozenset({"stale"})
 
     monkeypatch.setattr(app, "timeline_store", StaleSchema())
+    monkeypatch.setattr(app, "_admin_config", lambda: type("Config", (), {"valid": True})())
     response = client.get("/readyz")
     assert response.status_code == 503
     assert response.json() == {"status": "not_ready", "reason": "database unavailable"}
@@ -114,10 +116,11 @@ def test_readyz_accepts_current_schema_without_reloading_migration_files(monkeyp
         raise AssertionError("migration heads must be loaded once at import")
 
     monkeypatch.setattr(app, "timeline_store", CurrentSchema())
+    monkeypatch.setattr(app, "_admin_config", lambda: type("Config", (), {"valid": True})())
     monkeypatch.setattr(app, "load_schema_heads", unexpected_reload)
     first = client.get("/readyz")
     second = client.get("/readyz")
-    assert app.EXPECTED_SCHEMA_REVISIONS == frozenset({"001_timeline"})
+    assert app.EXPECTED_SCHEMA_REVISIONS == frozenset({"002_admin_auth"})
     assert first.status_code == second.status_code == 200
     assert first.json() == second.json() == {"status": "ok"}
 
@@ -131,6 +134,7 @@ def test_readyz_rejects_multiple_unexpected_schema_revisions(monkeypatch):
             return frozenset({"001_timeline", "unexpected"})
 
     monkeypatch.setattr(app, "timeline_store", MultipleSchemas())
+    monkeypatch.setattr(app, "_admin_config", lambda: type("Config", (), {"valid": True})())
     response = client.get("/readyz")
     assert response.status_code == 503
     assert response.json() == {"status": "not_ready", "reason": "database unavailable"}

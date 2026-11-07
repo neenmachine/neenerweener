@@ -16,30 +16,18 @@ from operations import JsonFormatter
 client = TestClient(app.app)
 
 
-def test_healthz_does_not_call_dependencies(monkeypatch):
-    async def fail():
-        raise AssertionError("health must not check dependencies")
-
-    monkeypatch.setattr(app, "check_readiness", fail)
+def test_healthz_returns_ok():
     response = client.get("/healthz")
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
 
 
-def test_readyz_reports_dependency_failure(monkeypatch):
-    async def fail():
-        return False, "database unavailable"
-
-    monkeypatch.setattr(app, "check_readiness", fail)
-    response = client.get("/readyz")
-    assert response.status_code == 503
-    assert response.json() == {"status": "not_ready", "reason": "database unavailable"}
-
-
-def test_request_id_is_returned():
-    response = client.get("/healthz", headers={"X-Request-ID": "support-123"})
-    assert response.headers["X-Request-ID"] == "support-123"
-    assert client.get("/healthz", headers={"X-Request-ID": "bad id"}).headers["X-Request-ID"] != "bad id"
+def test_request_id_is_generated_server_side():
+    response = client.get("/healthz", headers={"X-Request-ID": "inbound-secret-marker"})
+    request_id = response.headers["X-Request-ID"]
+    assert request_id != "inbound-secret-marker"
+    assert len(request_id) == 32
+    assert all(character in "0123456789abcdef" for character in request_id)
 
 
 def test_request_log_is_structured_and_scrubbed(caplog):
@@ -74,6 +62,7 @@ def test_uvicorn_writes_only_allowlisted_request_events():
         ("query", "query-secret-marker"),
         ("header", "header-secret-marker"),
         ("body", "body-secret-marker"),
+        ("request-id", "request-id-secret-marker"),
     ]
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
@@ -114,6 +103,8 @@ def test_uvicorn_writes_only_allowlisted_request_events():
         for kind, marker in cases:
             query = f"?token={marker}" if kind == "query" else ""
             headers = {"Authorization": f"Bearer {marker}"} if kind == "header" else {}
+            if kind == "request-id":
+                headers["X-Request-ID"] = marker
             body = marker.encode() if kind == "body" else None
             request = Request(
                 f"http://127.0.0.1:{port}/healthz{query}",

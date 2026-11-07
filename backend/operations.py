@@ -2,7 +2,6 @@
 
 import json
 import logging
-import os
 import sys
 import traceback
 from datetime import datetime, timezone
@@ -37,11 +36,3 @@ def configure_logging() -> None:
         handler.setFormatter(JsonFormatter())
         root.addHandler(handler)
     root.setLevel(logging.INFO)
-
-
-async def check_readiness() -> tuple[bool, str | None]:
-    """Return readiness without making the pre-database app depend on a database."""
-    if not os.environ.get("DATABASE_URL"):
-        return True, None
-    # PR 1 replaces this seam with a bounded database SELECT 1.
-    return True, None

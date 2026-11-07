@@ -29,7 +29,7 @@ CODE_DIR = Path(os.environ.get("CODE_DIR", Path(__file__).parent.parent / "code"
 FRONTEND_DIST = Path(os.environ.get("FRONTEND_DIST", Path(__file__).parent.parent / "frontend" / "dist"))
 FILENAME = re.compile(r"^([a-z0-9-]+)\.md$")
 PROJECT = re.compile(r"[a-z0-9-]+")
-from operations import check_readiness, configure_logging
+from operations import configure_logging
 
 logger = logging.getLogger(__name__)
 
@@ -63,9 +63,7 @@ configure_logging()
 @app.middleware("http")
 async def operational_middleware(request: Request, call_next):
     started = time.perf_counter()
-    request_id = request.headers.get("x-request-id", "")
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", request_id):
-        request_id = uuid.uuid4().hex
+    request_id = uuid.uuid4().hex
     status = 500
     try:
         response = await call_next(request)
@@ -108,14 +106,6 @@ async def security_middleware(request: Request, call_next):
 
 @app.get("/healthz")
 async def healthz():
-    return {"status": "ok"}
-
-
-@app.get("/readyz")
-async def readyz():
-    ready, reason = await check_readiness()
-    if not ready:
-        return JSONResponse({"status": "not_ready", "reason": reason or "dependency unavailable"}, status_code=503)
     return {"status": "ok"}
 
 

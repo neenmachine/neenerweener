@@ -8,6 +8,7 @@ import os
 import stat
 import subprocess
 import sys
+import tempfile
 import tomllib
 import uuid
 from datetime import datetime
@@ -21,6 +22,8 @@ from . import __version__
 
 MAX_RESPONSE = 1_048_576
 TIMEOUT = 15
+UPLOAD_TIMEOUT = 120
+MAX_IMAGE_BYTES = 20 * 1024 * 1024
 NAMESPACE = "neenerweener.ca/cli-auth/v1"
 
 class CliError(Exception):
@@ -197,6 +200,8 @@ def _http_error(error, sensitive, rejected):
         except CliError:
             pass
         return ServerValidationError(detail)
+    if error.code == 413:
+        return ServerValidationError("image is too large (max 20 MB)")
     if error.code == 429:
         retry = _safe_server_value(error.headers.get("Retry-After"), sensitive, 80)
         return ThrottleError("request throttled" + (f"; retry after {retry}" if retry else ""))
@@ -280,7 +285,121 @@ def _token(data):
     return token
 
 
-def post(server, key, text):
+def _image_kind(data):
+    if data.startswith(b"\xff\xd8\xff"):
+        return "jpeg"
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png"
+    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "webp"
+    if len(data) >= 12 and data[4:8] == b"ftyp":
+        brands = data[8:32]
+        if any(brand in brands for brand in (b"heic", b"heix", b"hevc", b"hevx", b"mif1", b"msf1")):
+            return "heic"
+    return None
+
+
+def _image_file(path):
+    try:
+        file_stat = path.lstat()
+    except OSError:
+        raise UsageConfigError("not a JPEG, PNG, WebP, or HEIC image") from None
+    if not stat.S_ISREG(file_stat.st_mode):
+        raise UsageConfigError("not a JPEG, PNG, WebP, or HEIC image")
+    if file_stat.st_size > MAX_IMAGE_BYTES:
+        raise UsageConfigError("image is too large (max 20 MB)")
+    try:
+        data = path.read_bytes()
+    except OSError:
+        raise UsageConfigError("not a JPEG, PNG, WebP, or HEIC image") from None
+    if len(data) > MAX_IMAGE_BYTES:
+        raise UsageConfigError("image is too large (max 20 MB)")
+    kind = _image_kind(data)
+    if kind == "heic":
+        if sys.platform != "darwin":
+            raise UsageConfigError("HEIC is not supported here; convert to JPEG first")
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "converted.jpg"
+            try:
+                result = subprocess.run(
+                    ["sips", "-s", "format", "jpeg", str(path), "--out", str(output)],
+                    capture_output=True, check=False, shell=False,
+                )
+            except OSError:
+                raise UsageConfigError("HEIC is not supported here; convert to JPEG first") from None
+            if result.returncode:
+                raise UsageConfigError("HEIC is not supported here; convert to JPEG first")
+            try:
+                data = output.read_bytes()
+            except OSError:
+                raise UsageConfigError("HEIC is not supported here; convert to JPEG first") from None
+            if len(data) > MAX_IMAGE_BYTES:
+                raise UsageConfigError("image is too large (max 20 MB)")
+            if _image_kind(data) != "jpeg":
+                raise UsageConfigError("HEIC is not supported here; convert to JPEG first")
+    elif kind is None:
+        raise UsageConfigError("not a JPEG, PNG, WebP, or HEIC image")
+    return data
+
+
+def _upload(server, data, bearer):
+    request = Request(server + "/api/admin/media", data=data, headers={
+        "Content-Type": "application/octet-stream",
+        "Content-Length": str(len(data)),
+        "Authorization": "Bearer " + bearer,
+        "Accept": "application/json",
+    }, method="POST")
+    try:
+        response = OPENER.open(request, timeout=UPLOAD_TIMEOUT)
+    except HTTPError as error:
+        raise _http_error(error, {bearer, server}, "server rejected the image")
+    except (URLError, TimeoutError, OSError) as error:
+        raise NetworkError("network or TLS error; retry") from error
+    result = _json_response(response)
+    _validate_response_fields(result, {"id", "width", "height"})
+    image_id = _required(result, "id", str)
+    try:
+        if str(uuid.UUID(image_id)) != image_id:
+            raise ValueError
+    except ValueError:
+        raise NetworkError("server returned an invalid response") from None
+    for field in ("width", "height"):
+        value = result.get(field)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+            raise NetworkError("server returned an invalid response")
+    return image_id
+
+
+def _post_validation_error(text, attachments, alts):
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        return "invalid text"
+    if "\0" in text:
+        return "invalid text"
+    if not text.strip():
+        return "text must not be empty"
+    if len(text) > 10_000:
+        return "text is too long (max 10000 characters)"
+    if any(len(alt) > 1000 or "\0" in alt for alt in alts):
+        return "invalid alt text"
+    try:
+        for alt in alts:
+            alt.encode("utf-8")
+    except UnicodeEncodeError:
+        return "invalid alt text"
+    if len(attachments) > 4:
+        return "at most 4 images"
+    if alts and len(alts) != len(attachments):
+        return "give one --alt per --attach, or none"
+    return None
+
+
+def post(server, key, text, attachments=(), alts=()):
+    validation_error = _post_validation_error(text, attachments, alts)
+    if validation_error:
+        raise UsageConfigError(validation_error)
+    image_data = [_image_file(path) for path in attachments]
     fingerprint = _fingerprint(key)
     challenge = _request(server, "/api/cli/auth/challenge", {"key_fingerprint": fingerprint})
     challenge_id, message = _challenge(challenge)
@@ -288,7 +407,11 @@ def post(server, key, text):
     signature = _signature(signed)
     token_data = _request(server, "/api/cli/auth/token", {"challenge_id": challenge_id, "signature": signature})
     token = _token(token_data)
-    created = _request(server, "/api/admin/timeline", {"body_markdown": text}, token)
+    payload = {"body_markdown": text}
+    if attachments:
+        payload["attachments"] = [{"id": _upload(server, data, token), "alt": alt}
+                                   for data, alt in zip(image_data, alts or ("",) * len(attachments))]
+    created = _request(server, "/api/admin/timeline", payload, token)
     entry_id = created.get("id")
     if not isinstance(entry_id, int) or isinstance(entry_id, bool) or entry_id < 1:
         raise NetworkError("server returned an invalid response")
@@ -300,6 +423,8 @@ def parser():
     p.add_argument("--server")
     p.add_argument("--key")
     p.add_argument("--version", action="version", version=__version__)
+    p.add_argument("--attach", action="append", type=Path)
+    p.add_argument("--alt", action="append", default=[])
     p.add_argument("text")
     return p
 
@@ -307,10 +432,17 @@ def parser():
 def main(argv=None):
     try:
         args = parser().parse_args(argv)
+        validation_error = _post_validation_error(args.text, args.attach or (), args.alt)
+        if validation_error:
+            raise UsageConfigError(validation_error)
         cfg = _config()
         server = _server(args.server or os.environ.get("WEEN_SERVER") or cfg.get("server", "https://www.neenerweener.ca"))
         key = _key(args.key or os.environ.get("WEEN_SSH_KEY") or cfg.get("key", "~/.ssh/ween_tweet_ed25519"))
-        print(post(server, key, args.text))
+        if args.attach or args.alt:
+            result = post(server, key, args.text, args.attach or (), args.alt)
+        else:
+            result = post(server, key, args.text)
+        print(result)
         return 0
     except tuple(ERROR_CODES) as error:
         print(f"tweet: {error}", file=sys.stderr)

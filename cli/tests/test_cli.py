@@ -30,6 +30,18 @@ class CliTests(unittest.TestCase):
             self.assertEqual(cli.main(["--server", "https://flag.example", "--key", str(self.key), "text"]), 0)
             post.assert_called_once_with("https://flag.example", self.key, "text")
 
+    def test_tweet_rejects_invalid_utf8_config_without_leaking_file_details(self):
+        config = Path(self.tmp.name) / ".config" / "ween" / "config.toml"
+        config.parent.mkdir(parents=True)
+        config.write_bytes(b"server = \xff secret-config-content")
+        stderr = io.StringIO()
+        with patch.dict(os.environ, {"HOME": self.tmp.name}, clear=False), contextlib.redirect_stderr(stderr):
+            result = cli.main(["text"])
+        self.assertEqual(result, 2)
+        self.assertEqual(stderr.getvalue(), "tweet: cannot read config\n")
+        self.assertNotIn(str(config), stderr.getvalue())
+        self.assertNotIn("secret-config-content", stderr.getvalue())
+
     def test_tweet_rejects_non_https_non_loopback_server(self):
         with self.assertRaises(cli.CliError): cli._server("http://example.com")
         self.assertEqual(cli._server("http://localhost:8000/"), "http://localhost:8000")

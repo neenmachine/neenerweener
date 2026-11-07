@@ -57,8 +57,8 @@ def _config():
     try:
         with path.open("rb") as f:
             data = tomllib.load(f)
-    except (OSError, tomllib.TOMLDecodeError) as e:
-        raise CliError(f"cannot read config: {e}", 2)
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        raise CliError("cannot read config", 2)
     if not isinstance(data, dict) or set(data) - {"server", "key"}:
         raise CliError("config contains an unknown key", 2)
     if any(not isinstance(v, str) for v in data.values()):

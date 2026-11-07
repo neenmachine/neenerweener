@@ -13,7 +13,7 @@ however, recently ive been thinking about "productionizing" it. not to the gener
 i think theres so much to be unlocked by doing so.
 
 ## the dream
-the coolest agentic products out there right now are just really good agent harnesses. the dream is to be able to replicate any agentic product, deploy it right away, in one prompt like:
+the coolest agentic products out there right now are just really good agent harnesses. the dream is to be able to replicate any agentic product, deploy it right away, in one prompt:
 
 > "build braintrust locally. ingest all of my agent traces from X, build analytics and a judge pipeline, surface all urgent results through my messaging agent. add a dashboard for judge verdicts"
 
@@ -21,7 +21,7 @@ the coolest agentic products out there right now are just really good agent harn
 
 > "build an IDE in which an agent guides me through leetcode problems"
 
-this would be the coolest thing ever. 
+this would be the coolest thing ever.
 
 a surface for flexible agent harnesses.
 

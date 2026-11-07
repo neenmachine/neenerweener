@@ -24,9 +24,10 @@ const PYTHON_ISSPACE = [
 // Near-misses Python keeps: zero-width space, BOM, Mongolian vowel separator, word joiner.
 const PYTHON_KEEPS = [0x200b, 0xfeff, 0x180e, 0x2060];
 test("python whitespace table has 29 code points", () => expect(PYTHON_ISSPACE).toHaveLength(29));
-test.each([...PYTHON_ISSPACE.map((c) => [c, false]), ...PYTHON_KEEPS.map((c) => [c, true])] as [number, boolean][])(
+const hex = (c: number) => c.toString(16).toUpperCase().padStart(4, "0");
+test.each([...PYTHON_ISSPACE.map((c) => [hex(c), false, c]), ...PYTHON_KEEPS.map((c) => [hex(c), true, c])] as [string, boolean, number][])(
   "U+%s alone: hasText is %s",
-  (c, expected) => {
+  (_, expected, c) => {
     expect(hasText(String.fromCodePoint(c))).toBe(expected);
   },
 );

@@ -6,7 +6,7 @@ import re
 import time
 import uuid
 from contextlib import asynccontextmanager
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from html import escape, unescape
 from urllib.parse import quote
 from pathlib import Path
@@ -391,9 +391,15 @@ def page_data(path: str) -> tuple[dict, dict, str] | None:
         try:
             first_page = list_timeline(before=None, limit=20)
         except HTTPException:
-            first_page = {"entries": [], "next_cursor": None}
-        preload["/api/timeline"] = first_page
-        markup = timeline_markup(first_page["entries"])
+            preload["/api/timeline"] = None
+            markup = timeline_markup([], unavailable=True)
+        except Exception:
+            logger.warning("timeline unavailable during page render")
+            preload["/api/timeline"] = None
+            markup = timeline_markup([], unavailable=True)
+        else:
+            preload["/api/timeline"] = first_page
+            markup = timeline_markup(first_page["entries"])
     elif (m := re.fullmatch(r"posts/([a-z0-9-]+)", path)):
         url = f"/api/posts/{m[1]}"
         try:
@@ -417,17 +423,44 @@ def summary(html: str, limit: int = 200) -> str:
     return text if len(text) <= limit else text[: limit - 1].rsplit(" ", 1)[0] + "…"
 
 
-def timeline_markup(entries: list[dict]) -> str:
-    items = []
-    for entry in entries:
-        edited = '<span class="edited">edited</span>' if entry.get("edited_at") else ""
-        items.append(
-            f'<article class="timeline-entry" id="entry-{entry["id"]}">'
-            f'<div>{entry["html"]}</div>'
-            f'<footer><a href="/timeline#entry-{entry["id"]}"><time datetime="{escape(entry["created_at"])}">{escape(entry["created_at"])}</time></a>{edited}</footer>'
-            "</article>"
-        )
-    return f'<main><article><h1>timeline</h1><div class="timeline">{"".join(items)}</div></article></main>'
+def timeline_markup(entries: list[dict], unavailable: bool = False) -> str:
+    if unavailable:
+        content = '<p class="muted">could not load timeline</p>'
+    elif not entries:
+        content = '<p class="muted">nothing here yet</p>'
+    else:
+        items = []
+        for entry in entries:
+            edited = (
+                f'<span class="edited" title="{escape(full_timestamp(entry["edited_at"]))}">edited</span>'
+                if entry.get("edited_at") else ""
+            )
+            created = entry["created_at"]
+            items.append(
+                f'<article class="timeline-entry" id="entry-{entry["id"]}">'
+                f'<div>{entry["html"]}</div>'
+                f'<footer><a href="/timeline#entry-{entry["id"]}"><time datetime="{escape(created)}" title="{escape(full_timestamp(created))}">{escape(compact_timestamp(created))}</time></a>{edited}</footer>'
+                "</article>"
+            )
+        content = f'<div class="timeline">{"".join(items)}</div>'
+    return f'<main><article><h1>timeline</h1>{content}</article></main>'
+
+
+def _utc_datetime(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value)
+    return parsed.astimezone(timezone.utc)
+
+
+def compact_timestamp(value: str, today: date | None = None) -> str:
+    current = today or datetime.now(timezone.utc).date()
+    moment = _utc_datetime(value)
+    year = "" if moment.date().year == current.year else f", {moment.year}"
+    return f"{moment.strftime('%b').lower()} {moment.day}{year}"
+
+
+def full_timestamp(value: str) -> str:
+    moment = _utc_datetime(value)
+    return moment.strftime('%B %-d, %Y at %-I:%M %p')
 
 
 def post_markup(post: dict) -> str:

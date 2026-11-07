@@ -136,11 +136,11 @@ function TimelinePage() {
 // "nov 7" this year, "nov 7, 2025" before; the full date and time are in the tooltip.
 function compact(iso: string) {
   const d = new Date(iso);
-  const year = d.getFullYear() === new Date().getFullYear() ? undefined : "numeric";
-  return d.toLocaleDateString("en", { month: "short", day: "numeric", year }).toLowerCase();
+  const year = d.getUTCFullYear() === new Date().getUTCFullYear() ? undefined : "numeric";
+  return d.toLocaleDateString("en", { month: "short", day: "numeric", year, timeZone: "UTC" }).toLowerCase();
 }
 
-const full = (iso: string) => new Date(iso).toLocaleString("en", { dateStyle: "long", timeStyle: "short" });
+const full = (iso: string) => new Date(iso).toLocaleString("en", { dateStyle: "long", timeStyle: "short", timeZone: "UTC" });
 
 function Back({ href }: { href: string }) {
   return (

@@ -16,8 +16,6 @@ def page_kind(path: str) -> tuple[str, ...] | None:
         return ("home",)
     if normalized == "timeline":
         return ("timeline",)
-    if normalized == "now":
-        return ("now",)
     if match := _POST.fullmatch(normalized):
         return ("post", match[1])
     if match := _CODE.fullmatch(normalized):

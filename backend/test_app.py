@@ -450,7 +450,7 @@ def test_server_rendered_pages(tmp_path, monkeypatch):
     assert '<meta name="description" content="short one" />' in c.get("/posts/brief").text
     missing = c.get("/posts/nope")
     assert missing.status_code == 404
-    assert '"/api/posts/nope": null' in missing.text and '<meta name="robots" content="noindex">' in missing.text
+    assert '{"not-found": "post not found"}' in missing.text and '<meta name="robots" content="noindex">' in missing.text
     home = c.get("/?tag=a").text
     assert '"/api/posts": [' in home and '<div id="root"></div>' in home
 

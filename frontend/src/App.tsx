@@ -19,10 +19,13 @@ const tag = new URLSearchParams(location.search).get("tag");
 const IMAGE = /\.(png|jpe?g|webp|gif|svg)$/i;
 
 // API responses the server put into the page (backend `preload`), so the first render needs no fetch.
-// null means the server answered 404.
+// null means the server could not load it.
 const preloaded: Record<string, unknown> = JSON.parse(document.getElementById("preload")?.textContent || "{}");
+// The server decides not-found and sends its label; the page then shows only that, with no fetch.
+const notFound = preloaded["not-found"] as string | undefined;
 
 export default function App() {
+  if (notFound || !(code || slug || timeline || home)) return <NotFound label={notFound ?? "not found"} />;
   // Project pages are wider, like a repo browser, so long code lines fit.
   if (code)
     return (
@@ -32,25 +35,36 @@ export default function App() {
     );
   return (
     <main>
-      {slug ? <PostPage slug={slug} /> : timeline ? <TimelinePage /> : home ? <PostList /> : <NotFound />}
+      {slug ? <PostPage slug={slug} /> : timeline ? <TimelinePage /> : <PostList />}
       <Footer />
     </main>
   );
 }
 
-function NotFound() {
+// Mirrors not_found_page in backend/app.py, so the swap from the server markup is not visible.
+function NotFound({ label }: { label: string }) {
   return (
-    <>
-      <h1 className="muted">not found</h1>
-      <a href="/">neenerweener</a>
-    </>
+    <main>
+      {slug ? (
+        <div className="has-back">
+          <Back href="/" />
+          <h1 className="muted">{label}</h1>
+        </div>
+      ) : (
+        <>
+          <h1 className="muted">{label}</h1>
+          <a href="/">neenerweener</a>
+        </>
+      )}
+      <Footer />
+    </main>
   );
 }
 
 function Footer() {
   return (
     <footer>
-      <a href="/" aria-current={!slug && !timeline && !tag ? "page" : undefined}>
+      <a href="/" aria-current={home && !tag ? "page" : undefined}>
         neenerweener
       </a>
       <a href="/timeline" aria-current={timeline ? "page" : undefined}>

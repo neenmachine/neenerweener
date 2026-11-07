@@ -1,3 +1,6 @@
+import json
+import re
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -91,3 +94,7 @@ def test_not_found_pages_have_one_labeled_heading_and_main(client):
         assert response.text.count("<h1") == 1
         assert f">{label}</h1>" in response.text
         assert "back" not in response.text.split("<h1", 1)[1].split("</h1>", 1)[0]
+        preload = re.search(r'<script id="preload" type="application/json">(.*?)</script>', response.text)[1]
+        assert json.loads(preload) == {"not-found": label}
+        assert '<footer><a href="/">neenerweener</a><a href="/timeline">timeline</a></footer></main>' in response.text
+        assert response.text.count('href="/"') == 2  # one home link (the back arrow on posts) plus the footer

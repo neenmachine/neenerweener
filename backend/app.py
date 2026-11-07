@@ -434,20 +434,15 @@ def page_data(kind: tuple[str, ...] | None, before: int | None = None) -> tuple[
         return {"/api/timeline": page}, {"title": "timeline", "description": "timeline"}, markup, status_code
     if kind[0] == "post":
         return post_page_data(kind[1])
-    if kind[0] == "code":
-        return code_page_data(*kind[1:])
-    return None
+    return code_page_data(*kind[1:])
 
 
 def post_page_data(slug: str) -> tuple[dict, dict, str, int]:
-    url = f"/api/posts/{slug}"
     try:
         post = get_post(slug)
     except HTTPException:
-        preload, head, markup, status = not_found_page("post not found", back=True)
-        preload[url] = None
-        return preload, head, markup, status
-    return {url: post}, {"title": post["title"], "description": post["excerpt"] or summary(post["html"])}, post_markup(post), 200
+        return not_found_page("post not found", back=True)
+    return {f"/api/posts/{slug}": post}, {"title": post["title"], "description": post["excerpt"] or summary(post["html"])}, post_markup(post), 200
 
 
 def code_page_data(project: str, code_path: str) -> tuple[dict, dict, str, int]:
@@ -460,9 +455,11 @@ def code_page_data(project: str, code_path: str) -> tuple[dict, dict, str, int]:
 
 
 def not_found_page(label: str, back: bool = False) -> tuple[dict, dict, str, int]:
-    heading = f'<div class="has-back"><a class="back" href="/" aria-label="back">←</a><h1 class="muted">{escape(label)}</h1></div>' if back else f'<h1 class="muted">{escape(label)}</h1>'
-    markup = f'<main>{heading}<a href="/">neenerweener</a><footer><a href="/">neenerweener</a><a href="/timeline">timeline</a></footer></main>'
-    return {"not-found": True}, {"title": "not found", "robots": "noindex"}, markup, 404
+    """The one not-found view; the React app reads the label from the preload and renders the same markup."""
+    heading = f'<h1 class="muted">{escape(label)}</h1>'
+    heading = f'<div class="has-back"><a class="back" href="/" aria-label="back">←</a>{heading}</div>' if back else f'{heading}<a href="/">neenerweener</a>'
+    markup = f'<main>{heading}<footer><a href="/">neenerweener</a><a href="/timeline">timeline</a></footer></main>'
+    return {"not-found": label}, {"title": "not found", "robots": "noindex"}, markup, 404
 
 
 def timeline_page(before: int | None) -> tuple[dict | None, str, int]:

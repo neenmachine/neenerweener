@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 import threading
 import time
 from datetime import date
@@ -73,6 +74,36 @@ def test_admin_spa_is_noindex_and_public_pages_do_not_link_to_it(tmp_path, monke
             public = client.get(path)
             assert "X-Robots-Tag" not in public.headers
             assert 'href="/admin"' not in public.text
+
+
+def test_only_admin_page_has_no_javascript_notice(tmp_path, monkeypatch):
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text('<html><head></head><body><div id="root"></div></body></html>')
+    posts = tmp_path / "posts"
+    posts.mkdir()
+    (posts / "hello.md").write_text("---\ntitle: Hi\ndate: 2026-01-01\n---\nbody\n")
+    monkeypatch.setattr(app, "FRONTEND_DIST", dist)
+    monkeypatch.setattr(app, "POSTS_DIR", posts)
+    with TestClient(app.app) as client:
+        for path in ("/admin", "/admin/"):
+            response = client.get(path)
+            assert response.status_code == 200
+            page = response.text
+            assert "<title>admin</title>" in page
+            noscript = re.search(r"<noscript>(.*?)</noscript>", page, re.S)[1]
+            assert '<p class="muted">the admin panel needs JavaScript</p>' in noscript
+            assert "<h1>admin</h1>" in noscript
+            assert '<footer><a href="/">neenerweener</a><a href="/timeline">timeline</a></footer>' in noscript
+        for path in ("/", "/timeline", "/posts/hello"):
+            page = client.get(path)
+            assert page.status_code in (200, 503)  # 503: /timeline has no database in tests
+            assert "<noscript" not in page.text
+            assert "the admin panel" not in page.text
+        missing = client.get("/admin/x")
+        assert missing.status_code == 404
+        assert "<noscript" not in missing.text
+        assert "the admin panel" not in missing.text
 
 
 def test_lifespan_closes_stores_sequentially_off_event_loop(monkeypatch):
@@ -730,7 +761,7 @@ def test_home_ssr_has_one_h1(tmp_path, monkeypatch):
         ("/code/demo/missing.py", 1),
         ("/code/demo", 0),
         ("/code/demo/hello.py", 0),
-        ("/admin", 0),
+        ("/admin", 1),
         ("/admin/settings", 1),
     ],
 )

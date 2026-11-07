@@ -920,10 +920,19 @@ def page_data(kind: tuple[str, ...] | None, before: int | None = None) -> tuple[
         page, markup, status_code = timeline_page(before)
         return {"/api/timeline": page}, {"title": "timeline", "description": "timeline"}, markup, status_code
     if kind[0] == "admin":
-        return {}, {"title": "neenerweener"}, "", 200
+        return {}, {"title": "admin"}, ADMIN_NOSCRIPT, 200
     if kind[0] == "post":
         return post_page_data(kind[1])
     return code_page_data(*kind[1:])
+
+
+# The server footer for pages other than /timeline; Footer in App.tsx renders the same links.
+SITE_FOOTER = '<footer><a href="/">neenerweener</a><a href="/timeline">timeline</a></footer>'
+# Mirrors the Admin shell in Admin.tsx, so the no-JavaScript page keeps the same heading and footer.
+ADMIN_NOSCRIPT = (
+    '<noscript><main><article class="admin"><div class="admin-head"><h1>admin</h1></div>'
+    f'<p class="muted">the admin panel needs JavaScript</p></article>{SITE_FOOTER}</main></noscript>'
+)
 
 
 def post_page_data(slug: str) -> tuple[dict, dict, str, int]:
@@ -947,7 +956,7 @@ def not_found_page(label: str, back: bool = False) -> tuple[dict, dict, str, int
     """The one not-found view; the React app reads the label from the preload and renders the same markup."""
     heading = f'<h1 class="muted">{escape(label)}</h1>'
     heading = f'<div class="has-back"><a class="back" href="/" aria-label="back">←</a>{heading}</div>' if back else f'{heading}<a href="/">neenerweener</a>'
-    markup = f'<main>{heading}<footer><a href="/">neenerweener</a><a href="/timeline">timeline</a></footer></main>'
+    markup = f'<main>{heading}{SITE_FOOTER}</main>'
     return {"not-found": label}, {"title": "not found", "robots": "noindex"}, markup, 404
 
 
@@ -1027,7 +1036,7 @@ def post_markup(post: dict) -> str:
     return (
         '<main><article><div class="has-back post-head"><a class="back" href="/" aria-label="back">←</a>'
         f'<h1>{escape(post["title"])}</h1></div><div class="meta"><span class="tags">{tags}</span></div>'
-        f'<div>{post["html"]}</div></article><footer><a href="/">neenerweener</a><a href="/timeline">timeline</a></footer></main>'
+        f'<div>{post["html"]}</div></article>{SITE_FOOTER}</main>'
     )
 
 

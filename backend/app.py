@@ -29,7 +29,7 @@ from pygments.util import ClassNotFound
 
 from anchors import add_heading_anchors
 from operations import check_readiness, configure_logging, load_schema_heads
-from page_markup import home_markup
+from page_markup import home_markup, site_footer
 import routes
 
 POSTS_DIR = Path(os.environ.get("POSTS_DIR", Path(__file__).parent.parent / "posts"))
@@ -1087,13 +1087,11 @@ def admin_page(request: Request) -> tuple[dict, dict, str, int]:
     return {}, {"title": "admin", "robots": "noindex"}, ADMIN_SHELL, 200
 
 
-# The server footer for pages other than /timeline; Footer in App.tsx renders the same links.
-SITE_FOOTER = '<footer><a href="/">neenerweener</a><a href="/timeline">timeline</a></footer>'
 # Mirrors the admin Suspense fallback in App.tsx, so the first paint is already the shell React renders.
 ADMIN_SHELL = (
     '<main><article class="admin"><div class="admin-head"><h1>admin</h1></div>'
     '<noscript><p class="muted">the admin panel needs JavaScript</p></noscript></article>'
-    f"{SITE_FOOTER}</main>"
+    f"{site_footer(None)}</main>"
 )
 
 
@@ -1121,7 +1119,7 @@ def not_found_page(label: str, back: bool = False) -> tuple[dict, dict, str, int
     """The one not-found view; the React app reads it from the preload and renders the same markup."""
     heading = f'<h1 class="muted">{escape(label)}</h1>'
     heading = f'<div class="has-back"><a class="back" href="/" aria-label="back">←</a>{heading}</div>' if back else f'{heading}<a href="/">neenerweener</a>'
-    markup = f'<main>{heading}{SITE_FOOTER}</main>'
+    markup = f'<main>{heading}{site_footer(None)}</main>'
     page = {"kind": "not-found", "label": label, "back": back}
     return {"page": page}, {"title": "not found", "robots": "noindex"}, markup, 404
 
@@ -1178,8 +1176,7 @@ def timeline_markup(page: dict | None) -> str:
         content += f'<div class="load-more"><a href="/timeline?before={cursor}">load more</a></div>'
     if page is not None:
         content += '<p class="sr-only" role="status"></p>'  # the React page's always-mounted status region
-    footer = '<footer><a href="/">neenerweener</a><a href="/timeline" aria-current="page">timeline</a></footer>'
-    return f'<main><article><h1>timeline</h1>{content}</article>{footer}</main>'
+    return f'<main><article><h1>timeline</h1>{content}</article>{site_footer("timeline")}</main>'
 
 
 # A single image keeps its shape up to this height (CSS px); 2 to 4 images fill a grid of fixed cell shapes.
@@ -1235,7 +1232,7 @@ def post_markup(post: dict) -> str:
     return (
         '<main><article><div class="has-back post-head"><a class="back" href="/" aria-label="back">←</a>'
         f'<h1>{escape(post["title"])}</h1></div><div class="meta"><span class="tags">{tags}</span></div>'
-        f'<div>{post["html"]}</div></article>{SITE_FOOTER}</main>'
+        f'<div>{post["html"]}</div></article>{site_footer(None)}</main>'
     )
 
 

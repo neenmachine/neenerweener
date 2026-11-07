@@ -31,9 +31,13 @@ def _tag_filter(posts: list[dict], selected_tag: str | None) -> str:
     return f'<nav class="tag-filter" aria-label="tags">{"".join(links)}</nav>'
 
 
-def _footer(selected_tag: str | None) -> str:
-    current = ' aria-current="page"' if selected_tag is None else ""
-    return f'<footer><a href="/"{current}>neenerweener</a><a href="/timeline">timeline</a></footer>'
+def site_footer(current: str | None) -> str:
+    """The site footer on every server page; current is "home", "timeline", or None. Footer in App.tsx mirrors it."""
+    mark = ' aria-current="page"'
+    return (
+        f'<footer><a href="/"{mark if current == "home" else ""}>neenerweener</a>'
+        f'<a href="/timeline"{mark if current == "timeline" else ""}>timeline</a><a href="/feed.xml">feed</a></footer>'
+    )
 
 
 def _post_row(post: dict) -> str:
@@ -52,4 +56,4 @@ def home_markup(posts: list[dict], selected_tag: str | None) -> str:
         shown = [post for post in posts if selected_tag is None or selected_tag in post["tags"]]
         empty = '<p class="muted">no posts with this tag</p>' if not shown else ""
         body = _tag_filter(posts, selected_tag) + empty + f'<ul class="posts">{"".join(_post_row(post) for post in shown)}</ul>'
-    return f'<main><h1 class="sr-only">neenerweener</h1>{body}{_footer(selected_tag)}</main>'
+    return f'<main><h1 class="sr-only">neenerweener</h1>{body}{site_footer("home" if selected_tag is None else None)}</main>'

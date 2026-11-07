@@ -1,0 +1,89 @@
+// The one owner of browser admin auth: the session check, the in-memory CSRF token, requests and their
+// error text, and the timeline body rule. Used by /admin and by the composer on /timeline; lazy loaded.
+
+export type Entry = { id: number; html: string; created_at: string; edited_at: string | null };
+export type AdminEntry = Entry & { body_markdown: string };
+export type Session = { authenticated: false } | { authenticated: true; csrf_token: string };
+// message is "" for 401: the caller treats it as a signed-out session.
+export type Result<T> = { ok: true; data: T } | { ok: false; status: number; message: string; retryAfter?: number };
+
+export const LIMIT = 10_000;
+// Unicode code points, the unit the server's limit counts (not UTF-16 units, like String.length).
+export const length = (s: string) => [...s].length;
+// The characters Python's str.strip() removes (str.isspace()); JS trim() differs, for example on U+0085 and U+FEFF.
+const PYTHON_SPACE = /^[\t-\r\x1c-\x20\x85\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]*$/;
+// Mirrors validate_timeline_body in backend/timeline.py; the server still checks.
+export const validTimelineBody = (s: string) => !s.includes("\0") && !PYTHON_SPACE.test(s) && length(s) <= LIMIT;
+
+// In memory only: never in storage, the URL, or the DOM.
+let csrf: string | null = null;
+
+// The hint only decides whether /timeline checks the session; the server sets it at login.
+function clearHint() {
+  document.cookie = `admin_hint=; Max-Age=0; Path=/; SameSite=Strict${location.protocol === "https:" ? "; Secure" : ""}`;
+}
+
+function failure(status: number, detail: unknown, retryAfter?: number): string {
+  if (status === 401) return "";
+  if (status === 403) return "request refused, reload the page";
+  if (status === 404) return "entry not found";
+  // The server's validation message is a short functional one; schema errors come as a list.
+  if (status === 422) return typeof detail === "string" ? detail : "invalid text";
+  if (status === 429)
+    return retryAfter
+      ? `too many attempts, try again in ${retryAfter < 60 ? `${retryAfter} s` : `${Math.ceil(retryAfter / 60)} min`}`
+      : "too many attempts, try again later";
+  if (status === 503) return "unavailable, try again";
+  return "something went wrong";
+}
+
+async function send<T>(method: string, url: string, body?: object): Promise<Result<T>> {
+  let r: Response;
+  try {
+    r = await fetch(url, {
+      method,
+      cache: "no-store",
+      headers: {
+        ...(body && { "Content-Type": "application/json" }),
+        ...(method !== "GET" && csrf && { "X-CSRF-Token": csrf }),
+      },
+      body: body && JSON.stringify(body),
+    });
+  } catch {
+    return { ok: false, status: 0, message: "could not reach the server" };
+  }
+  const json = await r.json().catch(() => undefined);
+  if (r.ok) return { ok: true, data: json };
+  const seconds = Number(r.headers.get("Retry-After"));
+  const retryAfter = seconds > 0 ? Math.ceil(seconds) : undefined;
+  return { ok: false, status: r.status, message: failure(r.status, json?.detail, retryAfter), retryAfter };
+}
+
+// An authenticated request; a 401 means the session ended, so the token and the hint go.
+export async function request<T = undefined>(method: string, url: string, body?: object): Promise<Result<T>> {
+  const r = await send<T>(method, url, body);
+  if (!r.ok && r.status === 401) {
+    csrf = null;
+    clearHint();
+  }
+  return r;
+}
+
+// A 401 here is a wrong password, not an ended session.
+export const login = (password: string) => send("POST", "/api/admin/login", { password });
+
+export async function checkSession(): Promise<Result<Session>> {
+  const r = await send<Session>("GET", "/api/admin/session");
+  if (!r.ok) return r; // a 503 is not proof of sign-out: keep the hint
+  csrf = r.data.authenticated ? r.data.csrf_token : null;
+  if (!r.data.authenticated) clearHint();
+  return r;
+}
+
+export async function logout() {
+  const r = await request("POST", "/api/admin/logout");
+  if (r.ok) csrf = null;
+  return r;
+}
+
+export const createTimeline = (body_markdown: string) => request<AdminEntry>("POST", "/api/admin/timeline", { body_markdown });

@@ -57,11 +57,14 @@ def test_known_routes_stay_200(client):
     assert client.get("/now", follow_redirects=False).status_code == 301
 
 
-def test_admin_routes_are_known_pages():
+def test_only_the_admin_root_is_a_known_admin_page():
     from routes import page_kind
 
-    for path in ("admin", "admin/", "admin/settings", "/admin/anything/deeper"):
+    for path in ("admin", "admin/", "/admin"):
         assert page_kind(path) == ("admin",)
+    # React has no admin subroutes, so the server serves them as the not-found page.
+    for path in ("admin/settings", "/admin/anything/deeper"):
+        assert page_kind(path) is None
 
 
 def test_api_404_stays_json(client):

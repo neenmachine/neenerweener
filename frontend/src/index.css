@@ -123,11 +123,24 @@ main > footer a[aria-current] {
 
 .back {
   position: absolute;
+  top: 0;
   right: 100%;
   margin-right: 0.6em;
   color: var(--muted);
   font-weight: normal;
   text-decoration: none;
+}
+
+/* The arrow is beside the post h1, not in it; the h1's type settings keep it where it was on the title's first line. */
+.post-head {
+  font-size: 1.85rem;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+}
+
+/* Paint the title over the arrow's focus ring, as when the arrow sat inside the h1. */
+.post-head > h1 {
+  position: relative;
 }
 
 /* No margin to hang into on narrow screens: the arrow gets its own 1.5em column (a hanging indent),
@@ -139,11 +152,11 @@ main > footer a[aria-current] {
   }
 
   .back {
-    position: static;
-    display: inline-block;
+    left: 0;
+    right: auto;
     width: var(--back-col);
     min-height: 24px;
-    margin: 0 0 0 calc(-1 * var(--back-col));
+    margin: 0;
   }
 }
 
@@ -499,6 +512,43 @@ article h2 {
 article h3 {
   font-size: 1.1rem;
   margin: 2rem 0 0.5rem;
+}
+
+/* README headings use lower native levels for one page outline, while these classes preserve their source styles
+   (source h4/h5 copy the browser defaults for h4/h5; source h6 stays h6). */
+.readme-body .readme-h1 {
+  font-size: 1.85rem;
+  letter-spacing: -0.01em;
+  margin: 0 0 0.35rem;
+  line-height: 1.25;
+  text-wrap: balance;
+  /* Source h1 was not in the article heading-anchor rule; keep its positioning. */
+  position: static;
+  scroll-margin-top: 0;
+}
+
+.readme-body .readme-h2 {
+  font-size: 1.35rem;
+  margin: 2.5rem 0 0.75rem;
+  line-height: 1.25;
+  text-wrap: balance;
+}
+
+.readme-body .readme-h3 {
+  font-size: 1.1rem;
+  margin: 2rem 0 0.5rem;
+  line-height: 1.25;
+  text-wrap: balance;
+}
+
+.readme-body .readme-h4 {
+  font-size: 1em;
+  margin: 1.33em 0;
+}
+
+.readme-body .readme-h5 {
+  font-size: 0.83em;
+  margin: 1.67em 0;
 }
 
 article .meta {

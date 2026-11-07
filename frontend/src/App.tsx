@@ -47,6 +47,11 @@ export default function App() {
         <PostPage slug={slug} />
       ) : timeline ? (
         <TimelinePage />
+      ) : home ? (
+        <>
+          <h1 className="sr-only">neenerweener</h1>
+          <PostList />
+        </>
       ) : (
         <PostList />
       )}
@@ -347,10 +352,13 @@ function PostPage({ slug }: { slug: string }) {
   if (!data) return null;
   return (
     <article>
-      <h1 className="has-back">
+      {/* The back link sits beside the h1, not in it, so the heading's name is the title alone. */}
+      <div className="has-back post-head">
         {back}
-        {data.title} {data.draft && <span className="draft muted">draft</span>}
-      </h1>
+        <h1>
+          {data.title} {data.draft && <span className="draft muted">draft</span>}
+        </h1>
+      </div>
       <div className="meta">
         <Tags tags={data.tags} />
       </div>

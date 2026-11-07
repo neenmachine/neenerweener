@@ -31,6 +31,18 @@ test("an admin page without not-found preload does not render not found", async 
   expect(document.querySelector('input[type="password"]')).not.toBeNull();
 });
 
+test("home renders exactly one h1", async () => {
+  history.replaceState(null, "", "/");
+  document.body.innerHTML = `<script id="preload" type="application/json">${JSON.stringify({ "/api/posts": [] })}</script><div id="root"></div>`;
+  const { default: App } = await import("./App");
+  await act(async () => {
+    root = createRoot(document.getElementById("root")!);
+    root.render(<App />);
+  });
+  expect(document.querySelectorAll("h1")).toHaveLength(1);
+  expect(document.querySelector("h1")?.textContent).toBe("neenerweener");
+});
+
 test.each([
   ["/does-not-exist", "not found"],
   ["/posts/nope", "post not found"],
@@ -52,4 +64,39 @@ test.each([
   expect(root_.querySelector("main > footer")?.innerHTML).toBe('<a href="/">neenerweener</a><a href="/timeline">timeline</a>');
   expect(root_.querySelectorAll('a[href="/"]')).toHaveLength(2);
   expect(fetch).not.toHaveBeenCalled();
+});
+
+test.each([
+  ["/", { "/api/posts": [] }],
+  ["/?tag=a", { "/api/posts": [] }],
+  ["/posts/hello", { "/api/posts/hello": { slug: "hello", title: "hello", excerpt: null, tags: [], draft: false, html: "<p>body</p>" } }],
+  ["/timeline", { "/api/timeline": { entries: [], next_cursor: null } }],
+  ["/code/demo", { "/api/code/demo": { name: "demo", files: ["hello.py"], readme_html: '<h2 class="readme-h1">demo</h2>' } }],
+  ["/code/demo/hello.py", { "/api/code/demo": { name: "demo", files: ["hello.py"], readme_html: null },  "/api/code/demo/file/hello.py": { path: "hello.py", html: '<span class="k">pass</span>\\n' } }],
+  ["/does-not-exist", { "not-found": "not found" }],
+  ["/posts/nope", { "not-found": "post not found" }],
+  ["/code/nope", { "not-found": "project not found" }],
+  ["/code/demo/nope.py", { "not-found": "file not found" }],
+  ["/admin", { "/api/posts": [] }],
+  ["/admin/settings", { "not-found": "not found" }],
+])("%s renders one level-1 heading", async (path, preload) => {
+  history.replaceState(null, "", path);
+  document.body.innerHTML = `<script id="preload" type="application/json">${JSON.stringify(preload)}</script><div id="root"></div>`;
+  vi.stubGlobal("fetch", vi.fn(() => Promise.resolve({ ok: true, status: 200, headers: new Headers(), json: () => Promise.resolve({ authenticated: false }) })));
+  const { default: App } = await import("./App");
+  await act(async () => {
+    root = createRoot(document.getElementById("root")!);
+    root.render(<App />);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  });
+  const headings = [...document.querySelectorAll('h1, [role="heading"]')].filter(
+    (heading) => heading.tagName === "H1" || heading.getAttribute("aria-level") === "1",
+  );
+  expect(headings).toHaveLength(1);
+  if (path === "/posts/hello") {
+    const h1 = headings[0];
+    expect(h1.querySelector("a")).toBeNull();
+    expect(document.querySelector('a[aria-label="back"]')).not.toBeNull();
+  }
+  if (path === "/code/demo") expect(document.querySelector(".readme-body h1")).toBeNull();
 });

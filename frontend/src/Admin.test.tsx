@@ -373,13 +373,91 @@ test("post is disabled while an image is uploading", async () => {
   const box = input('[aria-label="new entry"]', "waiting");
   pick([png("slow")]);
   await flush();
-  expect(document.querySelector(".attachment [role=status]")?.textContent).toBe("uploading");
   expect(postButton().getAttribute("aria-disabled")).toBe("true");
   submit(box.form!);
   await flush();
   expect(fetch.mock.calls.filter(([url]) => url === "/api/admin/timeline")).toHaveLength(0);
   release();
   await flush();
-  expect(document.querySelector(".attachment [role=status]")).toBeNull();
   expect(postButton().getAttribute("aria-disabled")).toBe("false");
+});
+
+test("a visible uploading line sits in a status region that exists before the upload starts", async () => {
+  previews();
+  let release!: () => void;
+  await render(mediaFetch(() => new Promise((resolve) => (release = () => resolve(ok({ id: "late", width: 1, height: 1 }))))));
+  // A live region only announces changes if it is already in the page.
+  const status = document.querySelector('.attachments [role="status"]');
+  expect(status, "status region before any pick").not.toBeNull();
+  expect(status!.textContent).toBe("");
+  expect(status!.classList.contains("sr-only")).toBe(false);
+  pick([png("slow")]);
+  await flush();
+  expect(status!.isConnected).toBe(true);
+  expect(status!.textContent).toBe("uploading");
+  release();
+  await flush();
+  expect(status!.textContent).toBe("");
+});
+
+const removeNames = () => [...document.querySelectorAll(".attachment button")].map((b) => b.getAttribute("aria-label"));
+
+test("remove buttons have unique names by position that renumber after a removal", async () => {
+  previews();
+  await render(mediaFetch());
+  pick([png("a"), png("b"), png("c")]);
+  await flush();
+  expect(removeNames()).toEqual(["remove image 1", "remove image 2", "remove image 3"]);
+  for (const b of document.querySelectorAll(".attachment button")) expect(b.textContent).toBe("remove");
+  act(() => document.querySelector<HTMLButtonElement>('[aria-label="remove image 2"]')!.click());
+  expect(removeNames()).toEqual(["remove image 1", "remove image 2"]);
+  expect([...document.querySelectorAll(".attachment img")].map((img) => img.getAttribute("src"))).toEqual(["blob:preview-0", "blob:preview-2"]);
+});
+
+test("unmounting the composer revokes each live preview exactly once", async () => {
+  const revoked = previews();
+  await render(mediaFetch());
+  pick([png("a"), png("b"), png("c")]);
+  await flush();
+  click("remove");
+  expect(revoked).toEqual(["blob:preview-0"]);
+  act(() => root!.unmount());
+  root = undefined;
+  expect(revoked.sort()).toEqual(["blob:preview-0", "blob:preview-1", "blob:preview-2"]);
+});
+
+test("log out revokes the live previews", async () => {
+  const revoked = previews();
+  await render(mediaFetch());
+  pick([png("a")]);
+  await flush();
+  click("log out");
+  await flush();
+  expect(rows()).toHaveLength(0);
+  expect(revoked).toEqual(["blob:preview-0"]);
+});
+
+test("picking 3 files with 2 rows refuses the whole pick and keeps the message until the next pick", async () => {
+  previews();
+  const fetch = mediaFetch();
+  await render(fetch);
+  pick([png("a"), png("b")]);
+  await flush();
+  const before = [...document.querySelectorAll(".attachment img")].map((img) => img.getAttribute("src"));
+  input(".attachment:first-child input", "kept alt");
+  pick([png("c"), png("d"), png("e")]);
+  await flush();
+  const error = () => document.querySelector("#compose-files-error")?.textContent;
+  expect(error()).toBe("up to 4 images");
+  expect([...document.querySelectorAll(".attachment img")].map((img) => img.getAttribute("src"))).toEqual(before);
+  expect(document.querySelector<HTMLInputElement>(".attachment:first-child input")!.value).toBe("kept alt");
+  expect(fetch.mock.calls.filter(([url]) => url === "/api/admin/media")).toHaveLength(2);
+  // Still shown after other edits; cleared by the next accepted pick.
+  input('[aria-label="new entry"]', "text");
+  click("remove");
+  expect(error()).toBe("up to 4 images");
+  pick([png("f")]);
+  await flush();
+  expect(error()).toBe("");
+  expect(rows()).toHaveLength(2);
 });

@@ -11,19 +11,21 @@ export function useAttachments(onExpired: () => void) {
   const [items, setItems] = useState<Item[]>([]);
   const [error, setError] = useState("");
   const nextKey = useRef(0);
-  // Every live preview URL, so unmount can revoke the ones still shown.
-  const urls = useRef(new Set<string>());
-  useEffect(() => () => urls.current.forEach((url) => URL.revokeObjectURL(url)), []);
+  // The live preview URL of each row, revoked once here, never inside a state updater (StrictMode runs those twice).
+  const urls = useRef(new Map<number, string>());
+  const revoke = (keys: Iterable<number>) => {
+    for (const key of [...keys]) {
+      URL.revokeObjectURL(urls.current.get(key)!);
+      urls.current.delete(key);
+    }
+  };
+  // On unmount (sign-out). A full page load frees the document's blob URLs itself.
+  useEffect(() => () => revoke(urls.current.keys()), []);
 
-  const drop = (key: number) =>
-    setItems((prev) =>
-      prev.filter((item) => {
-        if (item.key !== key) return true;
-        URL.revokeObjectURL(item.url);
-        urls.current.delete(item.url);
-        return false;
-      }),
-    );
+  const drop = (key: number) => {
+    if (urls.current.has(key)) revoke([key]);
+    setItems((prev) => prev.filter((item) => item.key !== key));
+  };
 
   const upload = async (key: number, file: File) => {
     const r = await uploadMedia(file);
@@ -40,13 +42,14 @@ export function useAttachments(onExpired: () => void) {
     if (items.length + files.length > MAX_IMAGES) return setError(`up to ${MAX_IMAGES} images`);
     setError("");
     const added = files.map((file) => ({ key: nextKey.current++, url: URL.createObjectURL(file), id: null, alt: "" }));
-    added.forEach((item) => urls.current.add(item.url));
+    added.forEach((item) => urls.current.set(item.key, item.url));
     setItems((prev) => [...prev, ...added]);
     added.forEach((item, i) => upload(item.key, files[i]));
   };
 
   const clear = () => {
-    items.forEach((item) => drop(item.key));
+    revoke(urls.current.keys());
+    setItems([]);
     setError("");
   };
 
@@ -66,23 +69,22 @@ export function useAttachments(onExpired: () => void) {
 export function Attachments({ state, busy, id }: { state: ReturnType<typeof useAttachments>; busy: boolean; id: string }) {
   return (
     <div className="attachments">
-      {state.items.map((item) => (
+      {state.items.map((item, i) => (
         <div key={item.key} className="attachment">
           <img src={item.url} alt="" />
           <label>
             alt text
             <input value={item.alt} readOnly={busy} onChange={(e) => state.setAlt(item.key, e.target.value)} />
           </label>
-          <span className="admin-actions">
-            {item.id === null && (
-              <span className="muted" role="status">
-                uploading
-              </span>
-            )}
-            <button type="button" className="button" aria-disabled={busy} onClick={() => busy || state.remove(item.key)}>
-              <span>remove</span>
-            </button>
-          </span>
+          <button
+            type="button"
+            className="button"
+            aria-label={`remove image ${i + 1}`}
+            aria-disabled={busy}
+            onClick={() => busy || state.remove(item.key)}
+          >
+            <span>remove</span>
+          </button>
         </div>
       ))}
       <div className="admin-row">
@@ -102,6 +104,10 @@ export function Attachments({ state, busy, id }: { state: ReturnType<typeof useA
         <label htmlFor={`${id}-files`} className="button" aria-disabled={busy}>
           <span>attach images</span>
         </label>
+        {/* Always mounted, so screen readers announce the change. */}
+        <span id={`${id}-files-status`} className="muted" role="status">
+          {state.uploading ? "uploading" : ""}
+        </span>
         <span id={`${id}-files-error`} className="error" role="alert">
           {state.error}
         </span>

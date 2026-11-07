@@ -7,15 +7,15 @@ type Timeline = { entries: Entry[]; next_cursor: number | null };
 type Project = { name: string; files: string[]; readme_html: string | null };
 type CodeFile = { path: string; html?: string; binary?: true };
 
-// shortcut: plain links and pathname matching, no router. Add react-router when there are more pages.
-const slug = location.pathname.match(/^\/posts\/([a-z0-9-]+)\/?$/)?.[1];
-// /code/<project>, /code/<project>/<path>, where the path is a folder or a file.
-// There is no project index: Henry links to code from his posts.
-const code = location.pathname.match(/^\/code\/([a-z0-9-]+)(?:\/(.+?))?\/?$/);
-const timeline = /^\/timeline\/?$/.test(location.pathname);
-const home = /^\/?$/.test(location.pathname);
+// The server matches the URL to a page (backend/routes.py) and sends it in the preload; the client has no route list.
+type Page =
+  | { kind: "home" }
+  | { kind: "timeline" }
+  | { kind: "admin" }
+  | { kind: "post"; slug: string }
+  | { kind: "code"; project: string; path?: string }
+  | { kind: "not-found"; label: string; back: boolean };
 // Private and unlinked; its code is a separate chunk that public pages never load.
-const admin = /^\/admin\/?$/.test(location.pathname);
 const Admin = lazy(() => import("./Admin"));
 // /?tag=<tag> filters the post list.
 const tag = new URLSearchParams(location.search).get("tag");
@@ -24,47 +24,67 @@ const IMAGE = /\.(png|jpe?g|webp|gif|svg)$/i;
 // API responses the server put into the page (backend `preload`), so the first render needs no fetch.
 // null means the server could not load it.
 const preloaded: Record<string, unknown> = JSON.parse(document.getElementById("preload")?.textContent || "{}");
-// The server decides not-found and sends its label; the page then shows only that, with no fetch.
-const notFound = preloaded["not-found"] as string | undefined;
+const page = (preloaded.page as Page | undefined) ?? { kind: "not-found", label: "not found", back: false };
 
 export default function App() {
-  // The server decides not-found; the client has no second route list.
-  if (notFound) return <NotFound label={notFound} />;
-  // Project pages are wider, like a repo browser, so long code lines fit.
-  if (code)
-    return (
-      <main className="wide">
-        <ProjectPage name={code[1]} path={code[2] ? decodeURIComponent(code[2]) : ""} />
-      </main>
-    );
-  return (
-    <main>
-      {admin ? (
-        <Suspense>
-          <Admin />
-        </Suspense>
-      ) : slug ? (
-        <PostPage slug={slug} />
-      ) : timeline ? (
-        <TimelinePage />
-      ) : home ? (
-        <>
+  switch (page.kind) {
+    case "not-found":
+      return <NotFound label={page.label} back={page.back} />;
+    case "code":
+      // Project pages are wider, like a repo browser, so long code lines fit.
+      return (
+        <main className="wide">
+          <ProjectPage name={page.project} path={page.path ?? ""} />
+        </main>
+      );
+    case "admin":
+      return (
+        <Shell>
+          <Suspense>
+            <Admin />
+          </Suspense>
+        </Shell>
+      );
+    case "post":
+      return (
+        <Shell>
+          <PostPage slug={page.slug} />
+        </Shell>
+      );
+    case "timeline":
+      return (
+        <Shell>
+          <TimelinePage />
+        </Shell>
+      );
+    case "home":
+      return (
+        <Shell>
           <h1 className="sr-only">neenerweener</h1>
           <PostList />
-        </>
-      ) : (
-        <PostList />
-      )}
+        </Shell>
+      );
+    default:
+      // A kind this bundle does not know (a newer server) shows not found; `satisfies never` keeps the switch exhaustive.
+      page satisfies never;
+      return <NotFound label="not found" back={false} />;
+  }
+}
+
+function Shell({ children }: { children: ReactNode }) {
+  return (
+    <main>
+      {children}
       <Footer />
     </main>
   );
 }
 
 // Mirrors not_found_page in backend/app.py, so the swap from the server markup is not visible.
-function NotFound({ label }: { label: string }) {
+function NotFound({ label, back }: { label: string; back: boolean }) {
   return (
     <main>
-      {slug ? (
+      {back ? (
         <div className="has-back">
           <Back href="/" />
           <h1 className="muted">{label}</h1>
@@ -83,10 +103,10 @@ function NotFound({ label }: { label: string }) {
 function Footer() {
   return (
     <footer>
-      <a href="/" aria-current={home && !tag ? "page" : undefined}>
+      <a href="/" aria-current={page.kind === "home" && !tag ? "page" : undefined}>
         neenerweener
       </a>
-      <a href="/timeline" aria-current={timeline ? "page" : undefined}>
+      <a href="/timeline" aria-current={page.kind === "timeline" ? "page" : undefined}>
         timeline
       </a>
     </footer>

@@ -1,10 +1,11 @@
 .PHONY: dev test code-sync
 
-# Ctrl-C stops both servers.
+# The backend serves the built frontend, as in production; vite rebuilds it on save (reload the page). Ctrl-C stops both.
 dev:
+	@echo "open http://localhost:8000"
 	@trap 'kill $$(jobs -p) 2>/dev/null' EXIT; \
 	(cd backend && SHOW_DRAFTS=1 uv run uvicorn app:app --reload --no-access-log --no-proxy-headers) & \
-	(cd frontend && pnpm dev) & \
+	(cd frontend && pnpm exec vite build --watch) & \
 	wait
 
 test:

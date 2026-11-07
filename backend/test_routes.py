@@ -1,5 +1,6 @@
 import json
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -120,12 +121,30 @@ def site(tmp_path, monkeypatch):
         monkeypatch.setattr(app, name, value)
     monkeypatch.delenv("SHOW_DRAFTS", raising=False)
 
-    class EmptyStore:
+    class Store:
         def list(self, before, limit):
-            return []
+            return TIMELINE_ROWS
 
-    monkeypatch.setattr(app, "timeline_store", EmptyStore())
+    monkeypatch.setattr(app, "timeline_store", Store())
     return TestClient(app.app)
+
+
+def _image(n: int, width: int, height: int, alt: str = "") -> dict:
+    return {"id": f"00000000-0000-4000-8000-{n:012d}", "width": width, "height": height, "alt": alt}
+
+
+# The timeline row in route_cases.json: a text-only entry and entries with 1 to 4 images. Year 2100, so the
+# compact date always shows the year and the markup does not change at new year.
+TIMELINE_ROWS = [
+    {"id": id_, "body_markdown": f"entry {id_}", "created_at": datetime(2100, 1, 2, 3, 4, 5, tzinfo=timezone.utc), "edited_at": None, "media": media}
+    for id_, media in (
+        (5, [_image(1, 1312, 2048, '<script>alert("x")</script> & a "quote"')]),  # sm width 512.5 rounds half to even
+        (4, [_image(2, 2048, 1536, "left"), _image(3, 640, 480)]),
+        (3, [_image(4, 2048, 1152, "a"), _image(5, 1536, 2048, "b"), _image(6, 800, 800, "c")]),
+        (2, [_image(7, 2048, 1536, "1"), _image(8, 2048, 1536, "2"), _image(9, 2048, 1536, "3"), _image(10, 300, 200, "4")]),
+        (1, []),
+    )
+]
 
 
 @pytest.mark.parametrize("case", CASES, ids=[case["path"] for case in CASES])

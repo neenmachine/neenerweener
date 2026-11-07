@@ -721,8 +721,8 @@ def test_timeline_empty_and_unavailable_are_distinct(tmp_path, monkeypatch):
     [
         ({"entries": [], "next_cursor": 11}, True, "/timeline?before=11"),
         ({"entries": [], "next_cursor": None}, False, None),
-        ({"entries": [{"id": 1, "html": "<p>x</p>", "created_at": "2026-01-01T00:00:00+00:00"}], "next_cursor": 11}, True, "/timeline?before=11"),
-        ({"entries": [{"id": 1, "html": "<p>x</p>", "created_at": "2026-01-01T00:00:00+00:00"}], "next_cursor": None}, False, None),
+        ({"entries": [{"id": 1, "html": "<p>x</p>", "created_at": "2026-01-01T00:00:00+00:00", "media": []}], "next_cursor": 11}, True, "/timeline?before=11"),
+        ({"entries": [{"id": 1, "html": "<p>x</p>", "created_at": "2026-01-01T00:00:00+00:00", "media": []}], "next_cursor": None}, False, None),
     ],
 )
 def test_timeline_markup_pagination_control_matches_cursor(page, has_control, href):
@@ -730,6 +730,44 @@ def test_timeline_markup_pagination_control_matches_cursor(page, has_control, hr
     control = '<div class="load-more"><a href="' + href + '">load more</a></div>' if href else ""
     assert (control != "" and control in markup) is has_control
     assert ('class="load-more"' in markup) is has_control
+
+
+def _image(n: int, width: int = 2048, height: int = 1536, alt: str = "") -> dict:
+    return {"id": f"00000000-0000-4000-8000-{n:012d}", "width": width, "height": height, "alt": alt}
+
+
+@pytest.mark.parametrize("count", [1, 2, 3, 4])
+def test_entry_images_reserve_their_box_and_load_lazily(count):
+    markup = app.media_markup([_image(n, alt=f"photo {n}") for n in range(count)])
+    assert markup.startswith(f'<div class="media media-{count}">')
+    imgs = re.findall(r"<img [^>]*>", markup)
+    assert len(imgs) == count
+    for n, img in enumerate(imgs):
+        base = f"/media/00000000-0000-4000-8000-{n:012d}"
+        assert f'<a href="{base}/lg.webp"><img ' in markup
+        assert f'srcset="{base}/sm.webp 800w, {base}/lg.webp 2048w"' in img
+        assert f'src="{base}/sm.webp"' in img
+        assert 'loading="lazy"' in img and 'decoding="async"' in img
+        assert f'alt="photo {n}"' in img
+        # one image: its own shape, at most 512px tall; a grid cell: the stored size, cropped by CSS
+        assert ('width="683" height="512"' if count == 1 else 'width="2048" height="1536"') in img
+        assert ('sizes="(max-width: 780px) 100vw, 683px"' if count == 1 else 'sizes="(max-width: 780px) 50vw, 371px"') in img
+
+
+def test_entry_image_alt_is_escaped_text_and_empty_alt_stays_empty():
+    markup = app.media_markup([_image(1, alt='<script>alert("x")</script> & "q"'), _image(2)])
+    assert "<script>" not in markup
+    assert 'alt="&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt; &amp; &quot;q&quot;"' in markup
+    assert 'alt="" ' in markup
+    # without alt text the link still has a name
+    assert '<a href="/media/00000000-0000-4000-8000-000000000002/lg.webp" aria-label="open image">' in markup
+
+
+def test_small_image_has_one_srcset_candidate_and_text_only_entry_has_no_media():
+    assert 'srcset="/media/00000000-0000-4000-8000-000000000001/sm.webp 300w" ' in app.media_markup([_image(1, 300, 200)])
+    assert app.media_markup([]) == ""
+    page = {"entries": [{"id": 1, "html": "<p>x</p>", "created_at": "2026-01-01T00:00:00+00:00", "edited_at": None, "media": []}], "next_cursor": None}
+    assert 'class="media' not in app.timeline_markup(page)
 
 
 def test_timeline_timestamp_format_is_utc_and_year_aware():

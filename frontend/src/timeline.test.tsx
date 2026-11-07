@@ -3,6 +3,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import type { Entry } from "./adminApi";
 
 // Counts loads of the composer chunk; the real module still renders. doMock per test, after resetModules,
 // so each test loads it afresh (a hoisted vi.mock factory runs once per file).
@@ -15,12 +16,12 @@ beforeEach(() => {
   });
 });
 
-type Page = { entries: { id: number; html: string; created_at: string; edited_at: null }[]; next_cursor: number | null };
+type Page = { entries: Entry[]; next_cursor: number | null };
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const page = (ids: number[], next_cursor: number | null): Page => ({
-  entries: ids.map((id) => ({ id, html: `<p>entry ${id}</p>`, created_at: "2026-01-02T03:04:05+00:00", edited_at: null })),
+  entries: ids.map((id) => ({ id, html: `<p>entry ${id}</p>`, created_at: "2026-01-02T03:04:05+00:00", edited_at: null, media: [] })),
   next_cursor,
 });
 
@@ -134,7 +135,16 @@ test("an empty last page after an empty page ends on the empty state, with focus
 // The admin compose box: a hint cookie decides whether to check the session; the session decides the composer.
 type Call = [string, RequestInit | undefined];
 const reply = (status: number, body: unknown) => ({ ok: status < 300, status, headers: new Headers(), json: () => Promise.resolve(body) });
-const created = { id: 10, html: "<p>new</p>", created_at: "2026-01-03T00:00:00+00:00", edited_at: null, body_markdown: "new" };
+const photo = (n: number, alt: string) => ({ id: `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`, width: 2048, height: 1536, alt });
+// The create API returns the entry with its images, as /api/timeline does.
+const created = {
+  id: 10,
+  html: "<p>new</p>",
+  created_at: "2026-01-03T00:00:00+00:00",
+  edited_at: null,
+  media: [photo(1, '<script>alert("x")</script>'), photo(2, ""), photo(3, "c")],
+  body_markdown: "new",
+};
 
 async function openAdmin(hint: boolean, handle: (url: string, init?: RequestInit) => unknown, first = page([4], null)) {
   const calls: Call[] = [];
@@ -223,6 +233,13 @@ test("tweet posts with the CSRF token and shows the new entry first, without a r
   expect(init?.body).toBe('{"body_markdown":"new"}');
   expect(init?.headers).toMatchObject({ "Content-Type": "application/json", "X-CSRF-Token": "csrf-secret" });
   expect(ids()).toEqual(["entry-10", "entry-4"]);
+  // The new entry's images use the same markup as the server's: a three-image grid, alt kept as text.
+  const media = document.querySelector("#entry-10 > .media");
+  expect(media?.className).toBe("media media-3");
+  expect([...media!.querySelectorAll("img")].map((img) => img.getAttribute("alt"))).toEqual(['<script>alert("x")</script>', "", "c"]);
+  expect(media!.querySelector("script")).toBeNull();
+  expect(media!.querySelector("a")?.getAttribute("href")).toBe("/media/00000000-0000-4000-8000-000000000001/lg.webp");
+  expect(document.querySelector("#entry-4 > .media")).toBeNull();
   expect(textarea()!.value).toBe("");
   expect(document.activeElement).toBe(textarea());
   expect(location.href).toBe(href);

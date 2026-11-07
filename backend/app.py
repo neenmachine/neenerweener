@@ -66,8 +66,10 @@ from media import (
     MediaConfig,
     MediaNotFound,
     MediaStore,
+    SM_EDGE,
     S3MediaStore,
     UnsupportedImage,
+    fit,
     media_key,
     process_image,
     store_image,
@@ -1164,7 +1166,8 @@ def timeline_markup(page: dict | None) -> str:
             items.append(
                 f'<article class="timeline-entry" id="entry-{entry["id"]}">'
                 f'<div>{entry["html"]}</div>'
-                f'<footer><a href="/timeline#entry-{entry["id"]}" aria-label="{escape(created_full)}">'
+                f'{media_markup(entry["media"])}'
+                f'<footer><a href="#entry-{entry["id"]}" aria-label="{escape(created_full)}">'
                 f'<time datetime="{escape(created_utc)}" title="{escape(created_full)}">{escape(compact_timestamp(created))}</time>'
                 f'</a>{edited}</footer>'
                 "</article>"
@@ -1173,8 +1176,40 @@ def timeline_markup(page: dict | None) -> str:
     if page is not None and page["next_cursor"] is not None:
         cursor = page["next_cursor"]
         content += f'<div class="load-more"><a href="/timeline?before={cursor}">load more</a></div>'
+    if page is not None:
+        content += '<p class="sr-only" role="status"></p>'  # the React page's always-mounted status region
     footer = '<footer><a href="/">neenerweener</a><a href="/timeline" aria-current="page">timeline</a></footer>'
     return f'<main><article><h1>timeline</h1>{content}</article>{footer}</main>'
+
+
+# A single image keeps its shape up to this height (CSS px); 2 to 4 images fill a grid of fixed cell shapes.
+SINGLE_IMAGE_MAX_HEIGHT = 512
+
+
+def media_markup(media: list[dict]) -> str:
+    """An entry's images like a tweet's; EntryMedia in App.tsx renders the same markup."""
+    if not media:
+        return ""
+    items = []
+    for item in media:
+        width, height = item["width"], item["height"]
+        base = f'/media/{escape(item["id"])}'
+        sm_width = fit(width, height, SM_EDGE)[0]
+        srcset = f"{base}/sm.webp {sm_width}w" + (f", {base}/lg.webp {width}w" if sm_width < width else "")
+        if len(media) == 1:
+            # The width and height attributes reserve the box before the image loads, so nothing shifts.
+            if height > SINGLE_IMAGE_MAX_HEIGHT:
+                width, height = max(1, round(width * SINGLE_IMAGE_MAX_HEIGHT / height)), SINGLE_IMAGE_MAX_HEIGHT
+            sizes = f"(max-width: 780px) 100vw, {width}px"
+        else:
+            sizes = "(max-width: 780px) 50vw, 371px"
+        label = "" if item["alt"] else ' aria-label="open image"'
+        items.append(
+            # React writes srcset and src last; the same order here keeps the two markups equal.
+            f'<a href="{base}/lg.webp"{label}><img sizes="{sizes}" width="{width}" height="{height}" '
+            f'alt="{escape(item["alt"])}" loading="lazy" decoding="async" srcset="{srcset}" src="{base}/sm.webp"></a>'
+        )
+    return f'<div class="media media-{len(media)}">{"".join(items)}</div>'
 
 
 def _utc_datetime(value: str) -> datetime:

@@ -29,6 +29,7 @@ from pygments.util import ClassNotFound
 
 from anchors import add_heading_anchors
 from operations import check_readiness, configure_logging, load_schema_heads
+from routes import page_kind
 
 POSTS_DIR = Path(os.environ.get("POSTS_DIR", Path(__file__).parent.parent / "posts"))
 DRAFTS_DIR = Path(os.environ.get("DRAFTS_DIR", Path(__file__).parent.parent / "drafts"))
@@ -172,12 +173,12 @@ async def security_middleware(request: Request, call_next):
     return response
 
 
-@app.get("/healthz")
+@app.api_route("/healthz", methods=["GET", "HEAD"])
 async def healthz():
     return {"status": "ok"}
 
 
-@app.get("/api/timeline")
+@app.api_route("/api/timeline", methods=["GET", "HEAD"])
 def list_timeline(
     before: int | None = Query(default=None, gt=0),
     limit: int = Query(default=20, ge=1, le=20),
@@ -607,7 +608,7 @@ def delete_admin_timeline(
         raise HTTPException(404, "timeline entry not found")
 
 
-@app.get("/readyz")
+@app.api_route("/readyz", methods=["GET", "HEAD"])
 async def readyz(request: Request):
     ready, reason = await check_readiness(
         timeline_store, EXPECTED_SCHEMA_REVISIONS, _admin_config().valid
@@ -726,12 +727,12 @@ def render_post(body: str) -> str:
     return CAPTIONED.sub(r"<figure>\1<figcaption>\2</figcaption></figure>", html)
 
 
-@app.get("/api/posts")
+@app.api_route("/api/posts", methods=["GET", "HEAD"])
 def list_posts():
     return [{k: p[k] for k in ("slug", "date", "title", "excerpt", "tags", "draft")} for p in all_posts()]
 
 
-@app.get("/api/posts/{slug}")
+@app.api_route("/api/posts/{slug}", methods=["GET", "HEAD"])
 def get_post(slug: str):
     for p in all_posts():
         if p["slug"] == slug:
@@ -775,6 +776,18 @@ def project_file(project: str, path: str) -> Path:
     return file
 
 
+def project_files(root: Path) -> list[str]:
+    return sorted(
+        rel for p in root.rglob("*")
+        if contained_file(root, rel := p.relative_to(root).as_posix())
+    )
+
+
+def code_path_exists(project: str, path: str) -> bool:
+    files = project_files(project_root(project))
+    return not path or path in files or any(file.startswith(path + "/") for file in files)
+
+
 def rewrite_readme_link(project: str, url: str, prefix: str) -> str | None:
     target = posixpath.normpath(posixpath.join(".", url))
     if posixpath.isabs(target) or target == ".." or target.startswith("../"):
@@ -802,17 +815,14 @@ def readme_html(project: str, root: Path) -> str | None:
     return md.renderer.render(tokens, md.options, {})
 
 
-@app.get("/api/code/{project}")
+@app.api_route("/api/code/{project}", methods=["GET", "HEAD"])
 def get_project(project: str):
     root = project_root(project)
-    files = sorted(
-        rel for p in root.rglob("*")
-        if contained_file(root, rel := p.relative_to(root).as_posix())
-    )
+    files = project_files(root)
     return {"name": project, "files": files, "readme_html": readme_html(project, root)}
 
 
-@app.get("/api/code/{project}/file/{path:path}")
+@app.api_route("/api/code/{project}/file/{path:path}", methods=["GET", "HEAD"])
 def get_code_file(project: str, path: str):
     file = project_file(project, path)
     data = file.read_bytes()
@@ -846,32 +856,29 @@ app.include_router(discovery_router)
 def frontend(path: str, request: Request):
     if path == "api" or path.startswith("api/"):
         raise HTTPException(404, "not found")
-    headers = {"X-Robots-Tag": "noindex"} if path == "admin" or path.startswith("admin/") else None
+    kind = page_kind(path)
+    headers = {"X-Robots-Tag": "noindex"} if kind and kind[0] == "admin" else None
     root = FRONTEND_DIST.resolve()
     if not root.is_dir():
         raise HTTPException(404, "not found")
     requested = contained_file(root, path)
     if requested:
         if requested.name == "index.html":
-            return HTMLResponse(
-                fill_index(requested.read_text(encoding="utf-8"), {}, {"title": "neenerweener"}, ""),
-                headers=headers,
-            )
+            target = "/" + path[: -len("index.html")]
+            if not target.endswith("/"):
+                target += "/"
+            location = target + (f"?{request.url.query}" if request.url.query else "")
+            return RedirectResponse(location, status_code=301, headers=headers)
         return FileResponse(requested, headers=headers)
     index = contained_file(root, "index.html")
     if not index:
         raise HTTPException(404, "not found")
-    if path.strip("/") == "timeline":
-        before_cursor = timeline_before(request)
-    else:
-        before_cursor = None
-    page = page_data(path, before_cursor)
+    before_cursor = timeline_before(request) if kind and kind[0] == "timeline" else None
+    page = page_data(kind, before_cursor)
     if page is None:
-        return HTMLResponse(
-            fill_index(index.read_text(encoding="utf-8"), {}, {"title": "neenerweener"}, ""),
-            headers=headers,
-        )
-    preload, head, markup, status_code = page
+        preload, head, markup, status_code = not_found_page("not found")
+    else:
+        preload, head, markup, status_code = page
     return HTMLResponse(
         fill_index(index.read_text(encoding="utf-8"), preload, head, markup),
         status_code=status_code,
@@ -888,31 +895,45 @@ def timeline_before(request: Request) -> int | None:
     return int(values[0])
 
 
-def page_data(path: str, before: int | None = None) -> tuple[dict, dict, str, int] | None:
-    """For the home, timeline, and post pages: preload data, head tags, and no-JS markup."""
-    path = path.strip("/")
-    preload: dict = {}
-    head = {"title": "neenerweener"}
-    markup = ""
-    status_code = 200
-    if path == "":
-        preload["/api/posts"] = list_posts()
-    elif path == "timeline":
-        head = {"title": "timeline", "description": "timeline"}
-        preload["/api/timeline"], markup, status_code = timeline_page(before)
-    elif (m := re.fullmatch(r"posts/([a-z0-9-]+)", path)):
-        url = f"/api/posts/{m[1]}"
-        try:
-            post = get_post(m[1])
-        except HTTPException:
-            preload[url] = None
-        else:
-            preload[url] = post
-            head = {"title": post["title"], "description": post["excerpt"] or summary(post["html"])}
-            markup = post_markup(post)
-    else:
+def page_data(kind: tuple[str, ...] | None, before: int | None = None) -> tuple[dict, dict, str, int] | None:
+    """For known public pages: preload data, head tags, and no-JS markup."""
+    if kind is None:
         return None
-    return preload, head, markup, status_code
+    if kind[0] == "home":
+        return {"/api/posts": list_posts()}, {"title": "neenerweener"}, "", 200
+    if kind[0] == "timeline":
+        page, markup, status_code = timeline_page(before)
+        return {"/api/timeline": page}, {"title": "timeline", "description": "timeline"}, markup, status_code
+    if kind[0] == "admin":
+        return {}, {"title": "neenerweener"}, "", 200
+    if kind[0] == "post":
+        return post_page_data(kind[1])
+    return code_page_data(*kind[1:])
+
+
+def post_page_data(slug: str) -> tuple[dict, dict, str, int]:
+    try:
+        post = get_post(slug)
+    except HTTPException:
+        return not_found_page("post not found", back=True)
+    return {f"/api/posts/{slug}": post}, {"title": post["title"], "description": post["excerpt"] or summary(post["html"])}, post_markup(post), 200
+
+
+def code_page_data(project: str, code_path: str) -> tuple[dict, dict, str, int]:
+    try:
+        if not code_path_exists(project, code_path):
+            return not_found_page("file not found")
+    except HTTPException as exc:
+        return not_found_page(str(exc.detail))
+    return {}, {"title": "neenerweener"}, "", 200
+
+
+def not_found_page(label: str, back: bool = False) -> tuple[dict, dict, str, int]:
+    """The one not-found view; the React app reads the label from the preload and renders the same markup."""
+    heading = f'<h1 class="muted">{escape(label)}</h1>'
+    heading = f'<div class="has-back"><a class="back" href="/" aria-label="back">←</a>{heading}</div>' if back else f'{heading}<a href="/">neenerweener</a>'
+    markup = f'<main>{heading}<footer><a href="/">neenerweener</a><a href="/timeline">timeline</a></footer></main>'
+    return {"not-found": label}, {"title": "not found", "robots": "noindex"}, markup, 404
 
 
 def timeline_page(before: int | None) -> tuple[dict | None, str, int]:
@@ -1002,6 +1023,8 @@ def fill_index(index: str, preload: dict, head: dict, markup: str) -> str:
     if head.get("description"):
         tags += [f'<meta name="description" content="{escape(head["description"])}" />',
                  f'<meta property="og:description" content="{escape(head["description"])}" />']
+    if head.get("robots"):
+        tags.append(f'<meta name="robots" content="{escape(head["robots"])}">')
     # "<" escaped so post text cannot close the script tag.
     data = json.dumps(preload).replace("<", "\\u003c")
     tags.append(f'<script id="preload" type="application/json">{data}</script>')

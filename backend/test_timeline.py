@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError
 
 import app
-from timeline import TimelineStore, render_timeline
+from timeline import TimelineStore, render_timeline, validate_timeline_create
 
 
 class FakeStore:
@@ -45,6 +45,15 @@ def test_non_attachment_integrity_errors_are_not_reclassified():
         TimelineStore("unused", engine=Engine()).create("body")
 
 
+def test_store_create_validates_timeline_before_opening_transaction():
+    class Engine:
+        def begin(self):
+            raise AssertionError("validation did not run")
+
+    with pytest.raises(ValueError, match="unsafe link"):
+        TimelineStore("unused", engine=Engine()).create("[bad](javascript:alert(1))")
+
+
 def test_store_close_disposes_engine():
     class Engine:
         def dispose(self):
@@ -67,6 +76,34 @@ def test_timeline_markdown_disables_html_and_images():
 def test_timeline_markdown_rejects_unsafe_links():
     with pytest.raises(ValueError, match='unsafe link'):
         render_timeline('[bad](javascript:alert(1))')
+
+
+@pytest.mark.parametrize(
+    ("body", "alts", "valid"),
+    [
+        ("", [], False),
+        (" \t\n\u00a0\u2003\x1c\u0085", [], False),
+        ("bad\x00body", [], False),
+        ("x" * 10_000, [], True),
+        ("x" * 10_001, [], False),
+        ("[x](javascript:alert(1))", [], False),
+        ("[x](https://example.com)", [], True),
+        ("text", ["a" * 1_000], True),
+        ("text", ["a" * 1_001], False),
+        ("text", ["😀" * 1_000], True),
+        ("text", ["e\u0301" * 500], True),
+        ("text", ["e\u0301" * 501], False),
+        ("text", ["bad\x00alt"], False),
+        ("text\ud800", [], False),
+        ("text", ["bad\ud800alt"], False),
+    ],
+)
+def test_validate_timeline_create(body, alts, valid):
+    if valid:
+        validate_timeline_create(body, alts)
+    else:
+        with pytest.raises(ValueError):
+            validate_timeline_create(body, alts)
 
 
 def test_list_timeline_is_newest_first_and_paginated(monkeypatch):

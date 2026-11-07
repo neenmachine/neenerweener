@@ -29,6 +29,7 @@ from pygments.util import ClassNotFound
 
 from anchors import add_heading_anchors
 from operations import check_readiness, configure_logging, load_schema_heads
+from page_markup import home_markup
 import routes
 
 POSTS_DIR = Path(os.environ.get("POSTS_DIR", Path(__file__).parent.parent / "posts"))
@@ -78,6 +79,7 @@ from timeline import (
     TimelineStoreProtocol,
     serialize_entry,
     validate_timeline_body,
+    validate_timeline_create,
 )
 
 logger = logging.getLogger(__name__)
@@ -545,7 +547,11 @@ def admin_login(payload: LoginRequest, request: Request, response: Response):
         retry = auth_store.retry_after(identity)
         if retry is not None:
             raise HTTPException(429, "too many login attempts", headers={"Retry-After": str(retry)})
-        if not verify_password(payload.password, config.password_hash):
+        try:
+            verified = verify_password(payload.password, config.password_hash)
+        except UnicodeEncodeError:
+            verified = False
+        if not verified:
             retry = auth_store.record_failure(identity)
             if retry is not None:
                 raise HTTPException(429, "too many login attempts", headers={"Retry-After": str(retry)})
@@ -594,12 +600,14 @@ def create_admin_timeline(
     access: Access = Depends(require_timeline_create),
     payload: TimelineCreate = Depends(_timeline_create_body),  # after access: no body is read before auth
 ):
+    attachments = [(attachment.id, attachment.alt) for attachment in payload.attachments]
     try:
-        validate_timeline_body(payload.body_markdown)
+        validate_timeline_create(payload.body_markdown, [alt for _id, alt in attachments])
+    except InvalidAttachment as exc:
+        raise HTTPException(422, "invalid attachment") from exc
     except ValueError as exc:
         raise HTTPException(422, "invalid timeline entry") from exc
     _permit_machine(request, access, "timeline_create", 30)
-    attachments = [(attachment.id, attachment.alt) for attachment in payload.attachments]
     try:
         return _admin_entry(_timeline_storage().create(payload.body_markdown, attachments))
     except InvalidAttachment as exc:
@@ -748,6 +756,10 @@ def parse_date(value) -> str | None:
     return None
 
 
+def _is_scalar_text(value: str) -> bool:
+    return not any("\ud800" <= char <= "\udfff" for char in value)
+
+
 def parse_tags(value) -> list[str] | None:
     """`tags: [a, b]` or `tags: a`, lowercased and deduplicated; None if invalid."""
     if value is None:
@@ -756,6 +768,8 @@ def parse_tags(value) -> list[str] | None:
     if any(item is None or isinstance(item, (list, dict)) for item in items):
         return None
     tags = [t for item in items if (t := str(item).strip().lower())]
+    if any(not _is_scalar_text(tag) for tag in tags):
+        return None
     return list(dict.fromkeys(tags))
 
 
@@ -783,7 +797,7 @@ def load(path: Path, draft: bool = False) -> dict | None:
         title = str(title).strip()
     else:
         title = slug if draft else ""
-    if not title:
+    if not title or not _is_scalar_text(title):
         logger.warning("invalid post metadata in %s", path.name)
         return None
 
@@ -797,6 +811,9 @@ def load(path: Path, draft: bool = False) -> dict | None:
             logger.warning("invalid post metadata in %s", path.name)
             return None
         excerpt = str(excerpt)
+        if not _is_scalar_text(excerpt):
+            logger.warning("invalid post metadata in %s", path.name)
+            return None
     else:
         excerpt = None
     tags = parse_tags(metadata.get("tags"))
@@ -1028,7 +1045,8 @@ def render_page(match: tuple[str, dict[str, str]] | None, request: Request) -> t
 
 
 def home_page(request: Request) -> tuple[dict, dict, str, int]:
-    return {"/api/posts": list_posts()}, {"title": "neenerweener"}, '<main><h1 class="sr-only">neenerweener</h1></main>', 200
+    posts = list_posts()
+    return {"/api/posts": posts}, {"title": "neenerweener"}, home_markup(posts, request.query_params.get("tag")), 200
 
 
 def timeline_page_data(request: Request) -> tuple[dict, dict, str, int]:

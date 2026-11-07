@@ -104,10 +104,11 @@ def test_alembic_has_one_head():
 
     config = Config(str(Path(__file__).with_name('alembic.ini')))
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == ['003_machine_auth']
+    assert script.get_heads() == ['004_media']
     assert script.get_revision('001_timeline').down_revision is None
     assert script.get_revision('002_admin_auth').down_revision == '001_timeline'
     assert script.get_revision('003_machine_auth').down_revision == '002_admin_auth'
+    assert script.get_revision('004_media').down_revision == '003_machine_auth'
 
 
 @pytest.mark.skipif(not os.environ.get('DATABASE_URL'), reason='DATABASE_URL not configured')
@@ -120,6 +121,8 @@ def test_alembic_upgrade_from_empty():
     engine = create_engine(os.environ['DATABASE_URL'])
     try:
         with engine.begin() as connection:
+            connection.exec_driver_sql('DROP TABLE IF EXISTS timeline_entry_media CASCADE')
+            connection.exec_driver_sql('DROP TABLE IF EXISTS media_assets CASCADE')
             connection.exec_driver_sql('DROP TABLE IF EXISTS machine_auth_events CASCADE')
             connection.exec_driver_sql('DROP TABLE IF EXISTS machine_auth_tokens CASCADE')
             connection.exec_driver_sql('DROP TABLE IF EXISTS machine_auth_challenges CASCADE')
@@ -149,7 +152,7 @@ def test_alembic_upgrade_down_up_is_repeatable():
     engine = create_engine(os.environ['DATABASE_URL'])
     try:
         with engine.connect() as connection:
-            assert connection.execute(text('select version_num from alembic_version')).scalar() == '003_machine_auth'
+            assert connection.execute(text('select version_num from alembic_version')).scalar() == '004_media'
     finally:
         engine.dispose()
         app.configure_logging()

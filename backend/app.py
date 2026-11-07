@@ -49,6 +49,7 @@ from auth import (
     verify_password,
 )
 from client_identity import railway_client_ip
+from cache import cache_control
 from machine_auth import (
     MAX_REQUEST_BYTES,
     NAMESPACE,
@@ -193,8 +194,9 @@ async def operational_middleware(request: Request, call_next):
 @app.middleware("http")
 async def security_middleware(request: Request, call_next):
     response = await call_next(request)
-    if request.url.path.startswith(("/api/admin/", "/api/cli/auth/")):
-        response.headers["Cache-Control"] = "no-store"
+    policy = cache_control(request.url.path, response.status_code, response.headers)
+    if policy is not None:
+        response.headers["Cache-Control"] = policy
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["Permissions-Policy"] = "camera=(), geolocation=(), microphone=(), payment=(), usb=()"

@@ -536,13 +536,14 @@ a {
   display: block;
   width: 100%;
   margin-top: 0.25rem;
+  color: var(--fg);
 }
 
 /* The file input is hidden; its label is the visible button and shows the input's keyboard focus. */
 .admin label.button {
   display: inline-grid;
   margin: 0;
-  font-size: 0.9rem;
+  font-size: inherit;
 }
 
 .attachments input:focus-visible + label.button {

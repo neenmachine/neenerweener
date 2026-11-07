@@ -4,5 +4,6 @@ __pycache__/
 node_modules/
 dist/
 .DS_Store
+*.tsbuildinfo
 drafts/
 IDEAS.md

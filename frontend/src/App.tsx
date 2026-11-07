@@ -2,7 +2,8 @@ import { type ReactNode, useEffect, useRef, useState } from "react";
 
 type Summary = { slug: string; title: string; excerpt: string | null; tags: string[]; draft: boolean };
 type Post = Summary & { html: string };
-type Now = { html: string };
+type Entry = { id: number; html: string; created_at: string; edited_at: string | null };
+type Timeline = { entries: Entry[]; next_cursor: number | null };
 type Project = { name: string; files: string[]; readme_html: string | null };
 type CodeFile = { path: string; html?: string; binary?: true };
 
@@ -11,7 +12,7 @@ const slug = location.pathname.match(/^\/posts\/([a-z0-9-]+)\/?$/)?.[1];
 // /code/<project>, /code/<project>/<path>, where the path is a folder or a file.
 // There is no project index: Henry links to code from his posts.
 const code = location.pathname.match(/^\/code\/([a-z0-9-]+)(?:\/(.+?))?\/?$/);
-const now = /^\/now\/?$/.test(location.pathname);
+const timeline = /^\/timeline\/?$/.test(location.pathname);
 // /?tag=<tag> filters the post list.
 const tag = new URLSearchParams(location.search).get("tag");
 const IMAGE = /\.(png|jpe?g|webp|gif|svg)$/i;
@@ -30,43 +31,116 @@ export default function App() {
     );
   return (
     <main>
-      {slug ? <PostPage slug={slug} /> : now ? <NowPage /> : <PostList />}
+      {slug ? <PostPage slug={slug} /> : timeline ? <TimelinePage /> : <PostList />}
       <Footer />
     </main>
   );
 }
 
-// The "now" link shows only once Henry has written pages/now.md.
 function Footer() {
-  const { data } = useApi<Now>("/api/now");
   return (
     <footer>
-      <a href="/" aria-current={!slug && !now && !tag ? "page" : undefined}>
+      <a href="/" aria-current={!slug && !timeline && !tag ? "page" : undefined}>
         neenerweener
       </a>
-      {(data || now) && (
-        <a href="/now" aria-current={now ? "page" : undefined}>
-          now
-        </a>
-      )}
+      <a href="/timeline" aria-current={timeline ? "page" : undefined}>
+        timeline
+      </a>
     </footer>
   );
 }
 
-function NowPage() {
-  const { data, error } = useApi<Now>("/api/now");
+// Newest first. The first page comes from the preload; "load more" fetches older pages by cursor.
+function TimelinePage() {
+  const { data, error } = useApi<Timeline>("/api/timeline");
+  const [older, setOlder] = useState<Timeline[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState(false);
   useEffect(() => {
-    document.title = "now";
+    document.title = "timeline";
   }, []);
-  if (error) return <p className="muted">nothing here yet</p>;
+  useEffect(() => {
+    // Entries render after the page loads, so the browser cannot jump to /timeline#entry-<id> itself.
+    if (data && location.hash) document.getElementById(location.hash.slice(1))?.scrollIntoView();
+  }, [data]);
+  const heading = <h1>timeline</h1>;
+  if (error)
+    return (
+      <article>
+        {heading}
+        <p className="muted">could not load timeline</p>
+      </article>
+    );
   if (!data) return null;
+  const pages = [data, ...older];
+  const cursor = pages[pages.length - 1].next_cursor;
+  const seen = new Set<number>();
+  const entries = pages.flatMap((p) => p.entries).filter((e) => !seen.has(e.id) && !!seen.add(e.id));
+  if (!entries.length)
+    return (
+      <article>
+        {heading}
+        <p className="muted">nothing here yet</p>
+      </article>
+    );
+  const loadMore = () => {
+    if (busy || cursor === null) return;
+    setBusy(true);
+    setFailed(false);
+    fetch(`/api/timeline?before=${cursor}`)
+      .then((r) => (r.ok ? r.json() : Promise.reject()))
+      .then((page: Timeline) => setOlder((prev) => [...prev, page]), () => setFailed(true))
+      .finally(() => setBusy(false));
+  };
   return (
     <article>
-      {/* Henry's own file, rendered server side. */}
-      <div dangerouslySetInnerHTML={{ __html: data.html }} />
+      {heading}
+      {/* Mirrors timeline_markup in backend/app.py, so the swap from the server markup is not visible. */}
+      <div className="timeline">
+        {entries.map((e) => (
+          <article key={e.id} className="timeline-entry" id={`entry-${e.id}`}>
+            {/* Rendered server side from Henry's entry, with raw HTML disabled. */}
+            <div dangerouslySetInnerHTML={{ __html: e.html }} />
+            <footer>
+              <a href={`#entry-${e.id}`}>
+                <time dateTime={e.created_at} title={full(e.created_at)}>
+                  {compact(e.created_at)}
+                </time>
+              </a>
+              {e.edited_at && (
+                <span className="edited" title={full(e.edited_at)}>
+                  edited
+                </span>
+              )}
+            </footer>
+          </article>
+        ))}
+      </div>
+      {cursor !== null && (
+        <div className="load-more">
+          {/* aria-disabled, not disabled, so keyboard focus stays on the button while it loads. */}
+          <button type="button" onClick={loadMore} aria-disabled={busy} aria-busy={busy}>
+            {busy ? "loading" : "load more"}
+          </button>
+          {failed && (
+            <span className="muted" role="status">
+              could not load more
+            </span>
+          )}
+        </div>
+      )}
     </article>
   );
 }
+
+// "nov 7" this year, "nov 7, 2025" before; the full date and time are in the tooltip.
+function compact(iso: string) {
+  const d = new Date(iso);
+  const year = d.getFullYear() === new Date().getFullYear() ? undefined : "numeric";
+  return d.toLocaleDateString("en", { month: "short", day: "numeric", year }).toLowerCase();
+}
+
+const full = (iso: string) => new Date(iso).toLocaleString("en", { dateStyle: "long", timeStyle: "short" });
 
 function Back({ href }: { href: string }) {
   return (

@@ -39,3 +39,5 @@ Everything else: the site, backend, frontend, styling, deployment, demos, toolin
 ## Deploy
 
 Railway builds the root `Dockerfile` on push to `main`. Production has no drafts; `drafts/` is excluded from the image and `SHOW_DRAFTS` is not set.
+
+`RATE_LIMIT_KEY` must be exactly 32 ASCII characters; generate it with `openssl rand -hex 16`.

@@ -115,55 +115,47 @@ def _sensitive_values(payload, bearer):
     return values
 
 
-def _safe_detail(value, sensitive):
-    return (isinstance(value, str) and len(value) <= 120 and "\n" not in value
-            and "\r" not in value and not any(secret in value for secret in sensitive))
+def _safe_server_value(value, sensitive, limit):
+    return (value if isinstance(value, str) and value and len(value) <= limit
+            and not any(ord(char) < 32 or ord(char) == 127 for char in value)
+            and not any(secret in value for secret in sensitive) else None)
+
+
+def _http_error(error, sensitive):
+    if error.code == 422:
+        detail = "server rejected the tweet"
+        try:
+            candidate = _json_response(error).get("detail")
+            detail = _safe_server_value(candidate, sensitive, 120) or detail
+        except CliError:
+            pass
+        return CliError(detail, 4)
+    if error.code == 429:
+        retry = _safe_server_value(error.headers.get("Retry-After"), sensitive, 80)
+        return CliError("request throttled" + (f"; retry after {retry}" if retry else ""), 5)
+    if 300 <= error.code < 400:
+        return CliError("server redirect rejected; retry with the configured server", 1)
+    if error.code >= 500:
+        request_id = _safe_server_value(error.headers.get("X-Request-ID"), sensitive, 80)
+        return CliError("server error; retry" + (f" (request id {request_id})" if request_id else ""), 1)
+    return CliError("authentication failed", 3)
 
 
 def _request(server, path, payload, bearer=None):
     body = json.dumps(payload, separators=(",", ":")).encode()
-    sensitive = _sensitive_values(payload, bearer)
     if len(body) > 65_536:
         raise CliError("request is too large", 2)
-    url = server + path
     headers = {"Content-Type": "application/json", "Accept": "application/json"}
     if bearer:
         headers["Authorization"] = "Bearer " + bearer
-    req = Request(url, data=body, headers=headers, method="POST")
+    request = Request(server + path, data=body, headers=headers, method="POST")
     try:
-        response = OPENER.open(req, timeout=TIMEOUT)
-    except HTTPError as e:
-        # Redirects are rejected by NoRedirect. Read only a bounded body for safe functional errors.
-        retry = e.headers.get("Retry-After")
-        request_id = e.headers.get("X-Request-ID")
-        if e.code == 422:
-            detail = "server rejected the tweet"
-            try:
-                value = _json_response(e)
-                candidate = value.get("detail")
-                if _safe_detail(candidate, sensitive):
-                    detail = candidate
-            except CliError:
-                pass
-            raise CliError(detail, 4)
-        if e.code == 429:
-            suffix = _safe_header(retry)
-            raise CliError("request throttled" + ((f"; retry after {suffix}" if suffix else "")), 5)
-        if 300 <= e.code < 400:
-            raise CliError("server redirect rejected; retry with the configured server", 1)
-        if e.code >= 500:
-            suffix = _safe_header(request_id)
-            raise CliError("server error; retry" + ((f" (request id {suffix})" if suffix else "")), 1)
-        raise CliError("authentication failed", 3)
-    except (URLError, socket.timeout, TimeoutError, OSError) as e:
-        raise CliError("network or TLS error; retry", 1) from e
+        response = OPENER.open(request, timeout=TIMEOUT)
+    except HTTPError as error:
+        raise _http_error(error, _sensitive_values(payload, bearer))
+    except (URLError, socket.timeout, TimeoutError, OSError) as error:
+        raise CliError("network or TLS error; retry", 1) from error
     return _json_response(response)
-
-
-def _safe_header(value):
-    if not value or len(value) > 80 or any(ord(c) < 32 or ord(c) == 127 for c in value):
-        return None
-    return value
 
 
 def _required(data, name, typ):

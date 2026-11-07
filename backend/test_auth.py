@@ -4,6 +4,7 @@ import os
 import secrets
 import subprocess
 import sys
+import uuid
 from datetime import datetime, timedelta, timezone
 
 import app
@@ -27,7 +28,7 @@ from timeline import TimelineStore, timeline_entries
 
 @pytest.fixture(scope="session")
 def admin_password():
-    value = secrets.token_urlsafe(18)
+    value = uuid.uuid4().hex
     return value, hash_password(value)
 
 

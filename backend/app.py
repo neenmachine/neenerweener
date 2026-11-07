@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import os
@@ -8,19 +9,18 @@ import uuid
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timezone
 from html import escape, unescape
-from urllib.parse import quote
 from pathlib import Path
+from urllib.parse import quote
 
 import yaml
-
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
-from pydantic import BaseModel, ConfigDict
 from fastapi.staticfiles import StaticFiles
 from markdown_it import MarkdownIt
 from mdit_py_plugins.dollarmath import dollarmath_plugin
+from pydantic import BaseModel, ConfigDict
 from pygments import highlight as pygments_highlight
 from pygments.formatters import HtmlFormatter
 from pygments.lexers import TextLexer, get_lexer_by_name, get_lexer_for_filename
@@ -37,9 +37,21 @@ FRONTEND_DIST = Path(os.environ.get("FRONTEND_DIST", Path(__file__).parent.paren
 EXPECTED_SCHEMA_REVISIONS = load_schema_heads(Path(__file__).with_name("alembic.ini"))
 FILENAME = re.compile(r"^([a-z0-9-]+)\.md$")
 PROJECT = re.compile(r"[a-z0-9-]+")
-from auth import AuthStore, AdminConfig, CSRF_HEADER, Session, valid_csrf, verify_password
+from auth import (
+    CSRF_HEADER,
+    AdminConfig,
+    AuthStore,
+    Session,
+    valid_csrf,
+    verify_password,
+)
 from operations import check_readiness, configure_logging
-from timeline import TimelineStore, TimelineStoreProtocol, serialize_entry, validate_timeline_body
+from timeline import (
+    TimelineStore,
+    TimelineStoreProtocol,
+    serialize_entry,
+    validate_timeline_body,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -71,9 +83,9 @@ md.core.ruler.after("inline", "heading_anchors", add_heading_anchors)
 async def lifespan(_app):
     yield
     if timeline_store is not None:
-        timeline_store.close()
+        await asyncio.to_thread(timeline_store.close)
     if auth_store is not None:
-        auth_store.close()
+        await asyncio.to_thread(auth_store.close)
 
 
 app = FastAPI(lifespan=lifespan)
@@ -631,7 +643,7 @@ app.include_router(discovery_router)
 def frontend(path: str, request: Request):
     if path == "api" or path.startswith("api/"):
         raise HTTPException(404, "not found")
-    headers = {"X-Robots-Tag": "noindex"} if path.strip("/") == "admin" else None
+    headers = {"X-Robots-Tag": "noindex"} if path == "admin" or path.startswith("admin/") else None
     root = FRONTEND_DIST.resolve()
     if not root.is_dir():
         raise HTTPException(404, "not found")

@@ -31,6 +31,7 @@ FRONTEND_DIST = Path(os.environ.get("FRONTEND_DIST", Path(__file__).parent.paren
 FILENAME = re.compile(r"^([a-z0-9-]+)\.md$")
 PROJECT = re.compile(r"[a-z0-9-]+")
 from anchors import add_heading_anchors
+from images import add_image_loading
 from operations import check_readiness, configure_logging
 from timeline import TimelineStore, TimelineStoreProtocol, serialize_entry
 
@@ -59,6 +60,7 @@ def highlight(code: str, lang: str, _attrs) -> str:
 md = MarkdownIt("commonmark", {"highlight": highlight}).enable(["table", "strikethrough"])
 dollarmath_plugin(md, allow_digits=False)
 md.core.ruler.after("inline", "heading_anchors", add_heading_anchors)
+md.core.ruler.after("inline", "image_loading", add_image_loading)
 
 @asynccontextmanager
 async def lifespan(_app):
@@ -249,7 +251,7 @@ CAPTIONED = re.compile(r'<p>(<img [^>]*?title="([^"]*)"[^>]*>)</p>')
 
 
 def render_post(body: str) -> str:
-    html = md.render(body, {"heading_anchors": True})
+    html = md.render(body, {"heading_anchors": True, "image_loading": "post"})
     return CAPTIONED.sub(r"<figure>\1<figcaption>\2</figcaption></figure>", html)
 
 
@@ -317,7 +319,7 @@ def readme_html(project: str, root: Path) -> str | None:
     readme = contained_file(root, "README.md")
     if not readme:
         return None
-    tokens = md.parse(readme.read_text(encoding="utf-8-sig"))
+    tokens = md.parse(readme.read_text(encoding="utf-8-sig"), {"image_loading": "readme"})
     # Relative README links point into the snapshot: images load raw bytes, links open the code view.
     for token in tokens:
         for child in token.children or []:

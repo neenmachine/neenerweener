@@ -417,5 +417,5 @@ def test_server_rendered_pages(tmp_path, monkeypatch):
 
 def test_image_caption():
     html = app.render_post('![a plot](/images/p.png "the caption")\n\n![no title](/images/q.png)')
-    assert '<figure><img src="/images/p.png" alt="a plot" title="the caption" /><figcaption>the caption</figcaption></figure>' in html
-    assert '<p><img src="/images/q.png" alt="no title" /></p>' in html
+    assert '<figure><img src="/images/p.png" alt="a plot" title="the caption" decoding="async" /><figcaption>the caption</figcaption></figure>' in html
+    assert '<p><img src="/images/q.png" alt="no title" loading="lazy" decoding="async" /></p>' in html

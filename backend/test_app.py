@@ -9,6 +9,19 @@ import pytest
 from fastapi.testclient import TestClient
 
 
+def test_index_html_redirects_to_directory_and_keeps_query(tmp_path, monkeypatch):
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text("<html>app</html>")
+    monkeypatch.setattr(app, "FRONTEND_DIST", dist)
+
+    with TestClient(app.app) as client:
+        assert client.get("/index.html", follow_redirects=False).status_code == 301
+        assert client.get("/index.html", follow_redirects=False).headers["location"] == "/"
+        assert client.head("/index.html", follow_redirects=False).status_code == 301
+        assert client.get("/index.html?tag=x", follow_redirects=False).headers["location"] == "/?tag=x"
+
+
 def test_spa_fallback(tmp_path, monkeypatch):
     dist = tmp_path / "dist"
     (dist / "assets").mkdir(parents=True)

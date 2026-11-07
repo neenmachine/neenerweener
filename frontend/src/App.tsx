@@ -13,7 +13,7 @@ const slug = location.pathname.match(/^\/posts\/([a-z0-9-]+)\/?$/)?.[1];
 // There is no project index: Henry links to code from his posts.
 const code = location.pathname.match(/^\/code\/([a-z0-9-]+)(?:\/(.+?))?\/?$/);
 const timeline = /^\/timeline\/?$/.test(location.pathname);
-const home = /^\/?(?:index\.html)?$/.test(location.pathname);
+const home = /^\/?$/.test(location.pathname);
 // Private and unlinked; its code is a separate chunk that public pages never load.
 const admin = /^\/admin\/?$/.test(location.pathname);
 const Admin = lazy(() => import("./Admin"));

@@ -20,6 +20,7 @@ test("an admin page without not-found preload does not render not found", async 
   history.replaceState(null, "", "/admin");
   document.body.innerHTML = `<script id="preload" type="application/json">${JSON.stringify({ "/api/posts": [] })}</script><div id="root"></div>`;
   vi.stubGlobal("fetch", vi.fn(() => Promise.resolve({ ok: true, status: 200, headers: new Headers(), json: () => Promise.resolve({ authenticated: false }) })));
+  await import("./Admin");
   const { default: App } = await import("./App");
   await act(async () => {
     root = createRoot(document.getElementById("root")!);

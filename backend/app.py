@@ -654,10 +654,11 @@ def frontend(path: str, request: Request):
     requested = contained_file(root, path)
     if requested:
         if requested.name == "index.html":
-            return HTMLResponse(
-                fill_index(requested.read_text(encoding="utf-8"), {}, {"title": "neenerweener"}, ""),
-                headers=headers,
-            )
+            target = "/" + path[: -len("index.html")]
+            if not target.endswith("/"):
+                target += "/"
+            location = target + (f"?{request.url.query}" if request.url.query else "")
+            return RedirectResponse(location, status_code=301, headers=headers)
         return FileResponse(requested, headers=headers)
     index = contained_file(root, "index.html")
     if not index:

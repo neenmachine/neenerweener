@@ -372,12 +372,32 @@ def test_tags(tmp_path, monkeypatch, caplog):
 
 def test_old_now_redirects_and_api_is_gone():
     c = TestClient(app.app)
-    assert c.get("/now", follow_redirects=False).status_code == 301
-    assert c.get("/now", follow_redirects=False).headers["location"] == "/timeline"
+    for path in ("/now", "/now/"):
+        for method in ("get", "head"):
+            response = getattr(c, method)(path, follow_redirects=False)
+            assert response.status_code == 301
+            assert response.headers["location"] == "/timeline"
     assert c.get("/api/now").status_code == 404
 
 
 INDEX = '<html><head><title>neenerweener</title></head><body><div id="root"> </div></body></html>'
+
+
+def test_ssr_timeline_unavailable_is_503(tmp_path, monkeypatch):
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text(INDEX)
+    monkeypatch.setattr(app, "FRONTEND_DIST", dist)
+
+    class BrokenStore:
+        def list(self, before, limit):
+            raise RuntimeError("database password and post body must not leak")
+
+    monkeypatch.setattr(app, "timeline_store", BrokenStore())
+    response = TestClient(app.app).get("/timeline")
+    assert response.status_code == 503
+    assert "could not load timeline" in response.text
+    assert "database password" not in response.text
 
 
 def test_server_rendered_pages(tmp_path, monkeypatch):
@@ -405,6 +425,7 @@ def test_server_rendered_pages(tmp_path, monkeypatch):
     assert page.count("<title>") == 1
     assert '<meta property="og:description" content="First para here." />' in page
     assert '<div id="root"><main><article><h1 class="has-back">' in page
+    assert '<footer><a href="/">neenerweener</a><a href="/timeline">timeline</a></footer>' in page
     assert '<a href="/?tag=a">#a</a>' in page
     preload = page.split('<script id="preload" type="application/json">')[1].split("</script>")[0]
     assert "<" not in preload  # post text cannot close the script tag
@@ -417,7 +438,9 @@ def test_server_rendered_pages(tmp_path, monkeypatch):
     assert '<meta name="description" content="timeline" />' in timeline
     assert 'id="entry-2"' in timeline
     assert 'title="January 2, 2026 at 12:00 AM"' in timeline
+    assert 'datetime="2026-01-02T00:00:00+00:00"' in timeline
     assert '>jan 2<' in timeline
+    assert '<footer><a href="/">neenerweener</a><a href="/timeline" aria-current="page">timeline</a></footer>' in timeline
     assert "first &amp; &lt;safe&gt;" in timeline
     assert '"/api/timeline"' in timeline
     assert "<" not in timeline.split('<script id="preload" type="application/json">')[1].split("</script>")[0]
@@ -457,7 +480,7 @@ def test_timeline_empty_and_unavailable_are_distinct(tmp_path, monkeypatch):
 
     monkeypatch.setattr(app, "timeline_store", BrokenStore())
     broken = TestClient(app.app).get("/timeline")
-    assert broken.status_code == 200
+    assert broken.status_code == 503
     assert "could not load timeline" in broken.text
     assert "database details" not in broken.text
 

@@ -4,6 +4,7 @@ import re
 import threading
 import time
 from datetime import date
+from pathlib import Path
 
 import app
 import pytest
@@ -751,7 +752,35 @@ def test_entry_images_reserve_their_box_and_load_lazily(count):
         assert f'alt="photo {n}"' in img
         # one image: its own shape, at most 512px tall; a grid cell: the stored size, cropped by CSS
         assert ('width="683" height="512"' if count == 1 else 'width="2048" height="1536"') in img
-        assert ('sizes="(max-width: 780px) 100vw, 683px"' if count == 1 else 'sizes="(max-width: 780px) 50vw, 371px"') in img
+        assert ('sizes="(max-width: 722.5px) calc(100vw - 39.5px), 683px"' if count == 1 else f'sizes="{app.GRID_SIZES}"') in img
+
+
+def _css_px(css: str, pattern: str) -> float:
+    match = re.search(pattern, css, re.S)
+    assert match, pattern
+    return float(match.group(1))
+
+
+def test_media_sizes_follow_the_css():
+    """The sizes hints are the widths index.css gives the images; a CSS change that moves them fails here."""
+    css = (Path(__file__).parents[1] / "frontend/src/index.css").read_text()
+    rem = _css_px(css, r":root \{[^}]*font: ([\d.]+)px/")
+    main = re.search(r"\nmain \{([^}]*)\}", css).group(1)
+    page = _css_px(main, r"max-width: ([\d.]+)rem;") * rem
+    padding = 2 * _css_px(main, r"padding: [\d.]+rem ([\d.]+)rem") * rem
+    single_cap = _css_px(css, r"\.media-1 img \{[^}]*max-width: calc\(100% - ([\d.]+)px\)")
+    grid = re.search(r"\.media-4 \{([^}]*)\}", css).group(1)
+    grid_gutter = padding + 2 * _css_px(grid, r"border: ([\d.]+)px") + _css_px(grid, r"gap: ([\d.]+)px;")
+
+    def sizes(media):
+        return re.findall(r'sizes="([^"]*)"', app.media_markup(media))
+
+    gutter = padding + single_cap
+    # a wide image is capped by the column; a narrow (tall) one keeps its own width once the window is wide enough
+    assert sizes([_image(1, 2048, 1152)]) == [f"(max-width: {page:g}px) calc(100vw - {gutter:g}px), {page - gutter:g}px"]
+    assert sizes([_image(1, 1000, 2000)]) == [f"(max-width: {256 + gutter:g}px) calc(100vw - {gutter:g}px), 256px"]
+    cell = f"(max-width: {page:g}px) calc(50vw - {grid_gutter / 2:g}px), {(page - grid_gutter) / 2:g}px"
+    assert sizes([_image(1), _image(2)]) == [cell, cell]
 
 
 def test_entry_image_alt_is_escaped_text_and_empty_alt_stays_empty():

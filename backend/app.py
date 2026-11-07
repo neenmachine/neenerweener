@@ -1181,6 +1181,12 @@ def timeline_markup(page: dict | None) -> str:
 
 # A single image keeps its shape up to this height (CSS px); 2 to 4 images fill a grid of fixed cell shapes.
 SINGLE_IMAGE_MAX_HEIGHT = 512
+# Rendered widths for the sizes hints, from frontend/src/index.css (test_media_sizes_follow_the_css checks them):
+# 1rem is 15px, main is at most 52rem wide with 1.25rem side padding, a single image is capped at 100% - 2px,
+# and the 2 to 4 image grid has a 1px border and a 2px gap between its two columns.
+PAGE_MAX_WIDTH = 52 * 15  # 780: above this the column stops growing
+SINGLE_GUTTER = 2 * 1.25 * 15 + 2  # 39.5: window width minus a single image's widest box
+GRID_SIZES = "(max-width: 780px) calc(50vw - 20.75px), 369.25px"  # (column - 2px border - 2px gap) / 2
 
 
 def media_markup(media: list[dict]) -> str:
@@ -1197,9 +1203,13 @@ def media_markup(media: list[dict]) -> str:
             # The width and height attributes reserve the box before the image loads, so nothing shifts.
             if height > SINGLE_IMAGE_MAX_HEIGHT:
                 width, height = max(1, round(width * SINGLE_IMAGE_MAX_HEIGHT / height)), SINGLE_IMAGE_MAX_HEIGHT
-            sizes = f"(max-width: 780px) 100vw, {width}px"
+            # It shows at min(width, window - gutter), so the window width where the cap starts is the breakpoint.
+            sizes = (
+                f"(max-width: {min(width + SINGLE_GUTTER, PAGE_MAX_WIDTH)}px) calc(100vw - {SINGLE_GUTTER}px), "
+                f"{min(width, PAGE_MAX_WIDTH - SINGLE_GUTTER)}px"
+            )
         else:
-            sizes = "(max-width: 780px) 50vw, 371px"
+            sizes = GRID_SIZES
         label = "" if item["alt"] else ' aria-label="open image"'
         items.append(
             # React writes srcset and src last; the same order here keeps the two markups equal.

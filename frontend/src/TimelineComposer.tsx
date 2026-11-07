@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
-import { type Entry, createTimeline, hasText, LIMIT, length } from "./adminApi";
+import { createTimeline, hasText, LIMIT, length } from "./adminApi";
+import type { Entry } from "./timelineTypes";
 
 // The admin's compose box at the top of /timeline. A lazy chunk: only loaded after the session check says signed in.
 // The "admin" class reuses the /admin form styles.

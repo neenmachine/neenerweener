@@ -3,7 +3,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import type { Entry } from "./adminApi";
+import type { Entry } from "./timelineTypes";
 
 // Counts loads of the composer chunk; the real module still renders. doMock per test, after resetModules,
 // so each test loads it afresh (a hoisted vi.mock factory runs once per file).

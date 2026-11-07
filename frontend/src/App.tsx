@@ -1,6 +1,6 @@
 import { type ComponentType, type MouseEvent, type ReactNode, lazy, Suspense, useEffect, useRef, useState } from "react";
 // Type only: the adminApi code itself stays out of the public chunk.
-import type { Entry, Media } from "./adminApi";
+import type { Entry, Media } from "./timelineTypes";
 
 type Summary = { slug: string; title: string; excerpt: string | null; tags: string[]; draft: boolean };
 type Post = Summary & { html: string };
@@ -273,6 +273,10 @@ function TimelinePage() {
 // Mirror of media.fit and media_markup in the backend; see SINGLE_IMAGE_MAX_HEIGHT there.
 const SM_EDGE = 800;
 const SINGLE_IMAGE_MAX_HEIGHT = 512;
+// Mirror of PAGE_MAX_WIDTH, SINGLE_GUTTER and GRID_SIZES in the backend, which derives them from index.css.
+const PAGE_MAX_WIDTH = 780;
+const SINGLE_GUTTER = 39.5;
+const GRID_SIZES = "(max-width: 780px) calc(50vw - 20.75px), 369.25px";
 // Python's round(): a half goes to the even neighbour, so the numbers match the server markup.
 const round = (x: number) => {
   const r = Math.round(x);
@@ -299,7 +303,12 @@ function EntryMedia({ media }: { media: Media[] }) {
         return (
           <a key={m.id} href={`${base}/lg.webp`} aria-label={m.alt ? undefined : "open image"}>
             <img
-              sizes={media.length === 1 ? `(max-width: 780px) 100vw, ${width}px` : "(max-width: 780px) 50vw, 371px"}
+              sizes={
+                media.length === 1
+                  ? `(max-width: ${Math.min(width + SINGLE_GUTTER, PAGE_MAX_WIDTH)}px) calc(100vw - ${SINGLE_GUTTER}px), ` +
+                    `${Math.min(width, PAGE_MAX_WIDTH - SINGLE_GUTTER)}px`
+                  : GRID_SIZES
+              }
               width={width}
               height={height}
               alt={m.alt}

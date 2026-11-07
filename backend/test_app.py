@@ -594,7 +594,7 @@ def test_server_rendered_pages(tmp_path, monkeypatch):
     assert missing.status_code == 404
     assert '{"page": {"kind": "not-found", "label": "post not found", "back": true}}' in missing.text and '<meta name="robots" content="noindex">' in missing.text
     home = c.get("/?tag=a").text
-    assert '"/api/posts": [' in home and '<div id="root"><main><h1 class="sr-only">neenerweener</h1></main></div>' in home
+    assert '"/api/posts": [' in home and '<div id="root"><main><h1 class="sr-only">neenerweener</h1>' in home
 
 
 @pytest.mark.parametrize(

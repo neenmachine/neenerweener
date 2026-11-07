@@ -34,6 +34,14 @@ from operations import check_readiness, configure_logging, configure_sentry
 logger = logging.getLogger(__name__)
 
 
+def route_template(request: Request) -> str:
+    route = request.scope.get("route")
+    template = getattr(route, "path", None)
+    if isinstance(template, str) and template.startswith("/") and len(template) <= 256:
+        return template
+    return "<unknown>"
+
+
 def highlight(code: str, lang: str, _attrs) -> str:
     if lang == "mermaid":
         return f'<pre class="mermaid">{escape(code)}</pre>'  # the frontend renders these
@@ -76,7 +84,7 @@ async def operational_middleware(request: Request, call_next):
             extra={
                 "request_id": request_id,
                 "method": request.method,
-                "route": request.url.path,
+                "route": route_template(request),
                 "status": status,
                 "duration": round((time.perf_counter() - started) * 1000, 2),
             },

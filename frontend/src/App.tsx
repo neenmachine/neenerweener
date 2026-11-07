@@ -1,8 +1,9 @@
 import { type ComponentType, type MouseEvent, type ReactNode, lazy, Suspense, useEffect, useRef, useState } from "react";
+// Type only: the adminApi code itself stays out of the public chunk.
+import type { Entry, Media } from "./timelineTypes";
 
 type Summary = { slug: string; title: string; excerpt: string | null; tags: string[]; draft: boolean };
 type Post = Summary & { html: string };
-type Entry = { id: number; html: string; created_at: string; edited_at: string | null };
 type Timeline = { entries: Entry[]; next_cursor: number | null };
 type Project = { name: string; files: string[]; readme_html: string | null };
 type CodeFile = { path: string; html?: string; binary?: true };
@@ -230,6 +231,7 @@ function TimelinePage() {
           >
             {/* Rendered server side from Henry's entry, with raw HTML disabled. */}
             <div dangerouslySetInnerHTML={{ __html: e.html }} />
+            <EntryMedia media={e.media} />
             <footer>
               <a href={`#entry-${e.id}`} aria-label={full(e.created_at)}>
                 <time dateTime={new Date(e.created_at).toISOString()} title={full(e.created_at)}>
@@ -265,6 +267,60 @@ function TimelinePage() {
         {status}
       </p>
     </article>
+  );
+}
+
+// Mirror of media.fit and media_markup in the backend; see SINGLE_IMAGE_MAX_HEIGHT there.
+const SM_EDGE = 800;
+const SINGLE_IMAGE_MAX_HEIGHT = 512;
+// Mirror of PAGE_MAX_WIDTH, SINGLE_GUTTER and GRID_SIZES in the backend, which derives them from index.css.
+const PAGE_MAX_WIDTH = 780;
+const SINGLE_GUTTER = 39.5;
+const GRID_SIZES = "(max-width: 780px) calc(50vw - 20.75px), 369.25px";
+// Python's round(): a half goes to the even neighbour, so the numbers match the server markup.
+const round = (x: number) => {
+  const r = Math.round(x);
+  return r - x === 0.5 && r % 2 ? r - 1 : r;
+};
+const smWidth = (width: number, height: number) => {
+  const scale = SM_EDGE / Math.max(width, height);
+  return scale >= 1 ? width : Math.max(1, round(width * scale));
+};
+
+// An entry's images like a tweet's: one keeps its shape, 2 to 4 fill a fixed grid, so nothing shifts on load.
+function EntryMedia({ media }: { media: Media[] }) {
+  if (!media.length) return null;
+  return (
+    <div className={`media media-${media.length}`}>
+      {media.map((m) => {
+        const base = `/media/${m.id}`;
+        const sm = smWidth(m.width, m.height);
+        let { width, height } = m;
+        if (media.length === 1 && height > SINGLE_IMAGE_MAX_HEIGHT) {
+          width = Math.max(1, round((width * SINGLE_IMAGE_MAX_HEIGHT) / height));
+          height = SINGLE_IMAGE_MAX_HEIGHT;
+        }
+        return (
+          <a key={m.id} href={`${base}/lg.webp`} aria-label={m.alt ? undefined : "open image"}>
+            <img
+              sizes={
+                media.length === 1
+                  ? `(max-width: ${Math.min(width + SINGLE_GUTTER, PAGE_MAX_WIDTH)}px) calc(100vw - ${SINGLE_GUTTER}px), ` +
+                    `${Math.min(width, PAGE_MAX_WIDTH - SINGLE_GUTTER)}px`
+                  : GRID_SIZES
+              }
+              width={width}
+              height={height}
+              alt={m.alt}
+              loading="lazy"
+              decoding="async"
+              srcSet={`${base}/sm.webp ${sm}w` + (sm < m.width ? `, ${base}/lg.webp ${m.width}w` : "")}
+              src={`${base}/sm.webp`}
+            />
+          </a>
+        );
+      })}
+    </div>
   );
 }
 

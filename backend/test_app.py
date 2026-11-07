@@ -4,6 +4,7 @@ import re
 import threading
 import time
 from datetime import date
+from pathlib import Path
 
 import app
 import pytest
@@ -721,8 +722,8 @@ def test_timeline_empty_and_unavailable_are_distinct(tmp_path, monkeypatch):
     [
         ({"entries": [], "next_cursor": 11}, True, "/timeline?before=11"),
         ({"entries": [], "next_cursor": None}, False, None),
-        ({"entries": [{"id": 1, "html": "<p>x</p>", "created_at": "2026-01-01T00:00:00+00:00"}], "next_cursor": 11}, True, "/timeline?before=11"),
-        ({"entries": [{"id": 1, "html": "<p>x</p>", "created_at": "2026-01-01T00:00:00+00:00"}], "next_cursor": None}, False, None),
+        ({"entries": [{"id": 1, "html": "<p>x</p>", "created_at": "2026-01-01T00:00:00+00:00", "media": []}], "next_cursor": 11}, True, "/timeline?before=11"),
+        ({"entries": [{"id": 1, "html": "<p>x</p>", "created_at": "2026-01-01T00:00:00+00:00", "media": []}], "next_cursor": None}, False, None),
     ],
 )
 def test_timeline_markup_pagination_control_matches_cursor(page, has_control, href):
@@ -730,6 +731,72 @@ def test_timeline_markup_pagination_control_matches_cursor(page, has_control, hr
     control = '<div class="load-more"><a href="' + href + '">load more</a></div>' if href else ""
     assert (control != "" and control in markup) is has_control
     assert ('class="load-more"' in markup) is has_control
+
+
+def _image(n: int, width: int = 2048, height: int = 1536, alt: str = "") -> dict:
+    return {"id": f"00000000-0000-4000-8000-{n:012d}", "width": width, "height": height, "alt": alt}
+
+
+@pytest.mark.parametrize("count", [1, 2, 3, 4])
+def test_entry_images_reserve_their_box_and_load_lazily(count):
+    markup = app.media_markup([_image(n, alt=f"photo {n}") for n in range(count)])
+    assert markup.startswith(f'<div class="media media-{count}">')
+    imgs = re.findall(r"<img [^>]*>", markup)
+    assert len(imgs) == count
+    for n, img in enumerate(imgs):
+        base = f"/media/00000000-0000-4000-8000-{n:012d}"
+        assert f'<a href="{base}/lg.webp"><img ' in markup
+        assert f'srcset="{base}/sm.webp 800w, {base}/lg.webp 2048w"' in img
+        assert f'src="{base}/sm.webp"' in img
+        assert 'loading="lazy"' in img and 'decoding="async"' in img
+        assert f'alt="photo {n}"' in img
+        # one image: its own shape, at most 512px tall; a grid cell: the stored size, cropped by CSS
+        assert ('width="683" height="512"' if count == 1 else 'width="2048" height="1536"') in img
+        assert ('sizes="(max-width: 722.5px) calc(100vw - 39.5px), 683px"' if count == 1 else f'sizes="{app.GRID_SIZES}"') in img
+
+
+def _css_px(css: str, pattern: str) -> float:
+    match = re.search(pattern, css, re.S)
+    assert match, pattern
+    return float(match.group(1))
+
+
+def test_media_sizes_follow_the_css():
+    """The sizes hints are the widths index.css gives the images; a CSS change that moves them fails here."""
+    css = (Path(__file__).parents[1] / "frontend/src/index.css").read_text()
+    rem = _css_px(css, r":root \{[^}]*font: ([\d.]+)px/")
+    main = re.search(r"\nmain \{([^}]*)\}", css).group(1)
+    page = _css_px(main, r"max-width: ([\d.]+)rem;") * rem
+    padding = 2 * _css_px(main, r"padding: [\d.]+rem ([\d.]+)rem") * rem
+    single_cap = _css_px(css, r"\.media-1 img \{[^}]*max-width: calc\(100% - ([\d.]+)px\)")
+    grid = re.search(r"\.media-4 \{([^}]*)\}", css).group(1)
+    grid_gutter = padding + 2 * _css_px(grid, r"border: ([\d.]+)px") + _css_px(grid, r"gap: ([\d.]+)px;")
+
+    def sizes(media):
+        return re.findall(r'sizes="([^"]*)"', app.media_markup(media))
+
+    gutter = padding + single_cap
+    # a wide image is capped by the column; a narrow (tall) one keeps its own width once the window is wide enough
+    assert sizes([_image(1, 2048, 1152)]) == [f"(max-width: {page:g}px) calc(100vw - {gutter:g}px), {page - gutter:g}px"]
+    assert sizes([_image(1, 1000, 2000)]) == [f"(max-width: {256 + gutter:g}px) calc(100vw - {gutter:g}px), 256px"]
+    cell = f"(max-width: {page:g}px) calc(50vw - {grid_gutter / 2:g}px), {(page - grid_gutter) / 2:g}px"
+    assert sizes([_image(1), _image(2)]) == [cell, cell]
+
+
+def test_entry_image_alt_is_escaped_text_and_empty_alt_stays_empty():
+    markup = app.media_markup([_image(1, alt='<script>alert("x")</script> & "q"'), _image(2)])
+    assert "<script>" not in markup
+    assert 'alt="&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt; &amp; &quot;q&quot;"' in markup
+    assert 'alt="" ' in markup
+    # without alt text the link still has a name
+    assert '<a href="/media/00000000-0000-4000-8000-000000000002/lg.webp" aria-label="open image">' in markup
+
+
+def test_small_image_has_one_srcset_candidate_and_text_only_entry_has_no_media():
+    assert 'srcset="/media/00000000-0000-4000-8000-000000000001/sm.webp 300w" ' in app.media_markup([_image(1, 300, 200)])
+    assert app.media_markup([]) == ""
+    page = {"entries": [{"id": 1, "html": "<p>x</p>", "created_at": "2026-01-01T00:00:00+00:00", "edited_at": None, "media": []}], "next_cursor": None}
+    assert 'class="media' not in app.timeline_markup(page)
 
 
 def test_timeline_timestamp_format_is_utc_and_year_aware():

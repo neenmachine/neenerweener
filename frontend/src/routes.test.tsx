@@ -26,7 +26,9 @@ async function render(path: string, preload: object, fetched: Record<string, unk
   );
   vi.stubGlobal("fetch", fetch);
   history.replaceState(null, "", path);
-  document.body.innerHTML = `<script id="preload" type="application/json">${JSON.stringify(preload)}</script><div id="root"></div>`;
+  // Escaped like the server's preload, so data holding "</script>" stays inside the script.
+  const json = JSON.stringify(preload).replace(/</g, "\\u003c");
+  document.body.innerHTML = `<script id="preload" type="application/json">${json}</script><div id="root"></div>`;
   await import("./Admin"); // the lazy chunk, loaded up front so the admin page renders within the wait
   const { default: App } = await import("./App");
   await act(async () => {

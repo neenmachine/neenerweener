@@ -461,7 +461,7 @@ def code_page_data(project: str, code_path: str) -> tuple[dict, dict, str, int]:
 
 def not_found_page(label: str, back: bool = False) -> tuple[dict, dict, str, int]:
     heading = f'<div class="has-back"><a class="back" href="/" aria-label="back">←</a><h1 class="muted">{escape(label)}</h1></div>' if back else f'<h1 class="muted">{escape(label)}</h1>'
-    markup = f'<main>{heading}<a href="/">neenerweener</a><footer><a href="/">neenerweener</a><a href="/timeline">timeline</a></footer></main>' 
+    markup = f'<main>{heading}<a href="/">neenerweener</a><footer><a href="/">neenerweener</a><a href="/timeline">timeline</a></footer></main>'
     return {"not-found": True}, {"title": "not found", "robots": "noindex"}, markup, 404
 
 

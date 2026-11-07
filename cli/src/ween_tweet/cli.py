@@ -371,6 +371,10 @@ def _upload(server, data, bearer):
 
 
 def _post_validation_error(text, alts):
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        return "invalid text"
     if "\0" in text:
         return "invalid text"
     if not text.strip():
@@ -378,6 +382,11 @@ def _post_validation_error(text, alts):
     if len(text) > 10_000:
         return "text is too long (max 10000 characters)"
     if any(len(alt) > 1000 or "\0" in alt for alt in alts):
+        return "invalid alt text"
+    try:
+        for alt in alts:
+            alt.encode("utf-8")
+    except UnicodeEncodeError:
         return "invalid alt text"
     return None
 

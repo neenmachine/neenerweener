@@ -577,6 +577,16 @@ class CliTests(unittest.TestCase):
         self.assertEqual((result, stderr), (0, ""))
         self.assertEqual(calls[-1][0].data, b'{"body_markdown":"hello"}')
 
+    def test_tweet_surfaces_server_content_rejection_through_main(self):
+        error = cli.HTTPError("https://s.example/api/admin/timeline", 422, "", {}, None)
+        error.read = lambda n=-1: b'{"detail":"invalid timeline entry"}'
+        result, stderr, _, calls = self.run_attachment_cli(
+            ["[x](javascript:alert(1))"], self.auth_responses() + [error],
+        )
+        self.assertEqual(result, 4)
+        self.assertEqual(stderr, "tweet: invalid timeline entry\n")
+        self.assertEqual(calls[-1][0].data, b'{"body_markdown":"[x](javascript:alert(1))"}')
+
     def test_tweet_rejects_invalid_text_and_alt_before_authentication(self):
         image = self.image("image.jpg")
         cases = [
@@ -587,8 +597,10 @@ class CliTests(unittest.TestCase):
             (["\u2003"], "text must not be empty"),
             (["x" * 10001], "text is too long (max 10000 characters)"),
             (["bad\0text"], "invalid text"),
+            (["bad\ud800text"], "invalid text"),
             (["hello", "--attach", str(image), "--alt", "x" * 1001], "invalid alt text"),
             (["hello", "--attach", str(image), "--alt", "bad\0alt"], "invalid alt text"),
+            (["hello", "--attach", str(image), "--alt", "bad\ud800alt"], "invalid alt text"),
         ]
         for args, message in cases:
             with self.subTest(message=message):

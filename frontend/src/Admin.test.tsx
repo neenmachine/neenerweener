@@ -461,3 +461,24 @@ test("picking 3 files with 2 rows refuses the whole pick and keeps the message u
   expect(error()).toBe("");
   expect(rows()).toHaveLength(2);
 });
+
+test("a late upload response cannot restore a removed row or enter the payload", async () => {
+  const revoked = previews();
+  let release!: () => void;
+  const fetch = mediaFetch(() => new Promise((resolve) => (release = () => resolve(ok({ id: "late-id", width: 1, height: 1 })))));
+  await render(fetch);
+  pick([png("slow")]);
+  await flush();
+  click("remove");
+  expect(rows()).toHaveLength(0);
+  expect(revoked).toEqual(["blob:preview-0"]);
+  release();
+  await flush();
+  expect(rows()).toHaveLength(0);
+  expect(revoked).toEqual(["blob:preview-0"]);
+  input('[aria-label="new entry"]', "after remove");
+  click("post");
+  await flush();
+  const post = fetch.mock.calls.find(([url]) => url === "/api/admin/timeline");
+  expect(JSON.parse(post?.[1]?.body as string)).toEqual({ body_markdown: "after remove" });
+});

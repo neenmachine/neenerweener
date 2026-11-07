@@ -255,7 +255,7 @@ test("a server error shows inline and keeps the draft; two submits in one task p
   submit();
   await settle();
   expect(calls.filter(([url]) => url === "/api/admin/timeline")).toHaveLength(1);
-  expect(document.querySelector("form [role=alert]")?.textContent).toBe("invalid timeline entry");
+  expect(document.querySelector("#compose-error")?.textContent).toBe("invalid timeline entry");
   expect(textarea()!.value).toBe("draft");
   expect(ids()).toEqual(["entry-4"]);
 });
@@ -286,7 +286,7 @@ test.each([
   const posts = calls.filter(([url]) => url === "/api/admin/timeline");
   expect(posts).toHaveLength(1);
   expect(posts[0][1]?.body).toBe(JSON.stringify({ body_markdown: body }));
-  expect(document.querySelector("form [role=alert]")?.textContent).toBe(detail);
+  expect(document.querySelector("#compose-error")?.textContent).toBe(detail);
   expect(textarea()!.value).toBe(body);
 });
 
@@ -319,4 +319,122 @@ test("load more after a tweet uses the preload cursor, appends the older page an
   expect(ids()).toEqual(["entry-10", "entry-9", "entry-8", "entry-7"]);
   // The composer has its own status region ("posted"); the page's comes last.
   expect([...document.querySelectorAll('[role="status"]')].at(-1)?.textContent).toBe("1 more loaded, end of timeline");
+});
+
+// Attaching images in the composer: the shared upload module, generated in-memory files only.
+const png = (name: string) => new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47, name.length])], name, { type: "image/png" });
+function previews() {
+  let n = 0;
+  const revoked: string[] = [];
+  URL.createObjectURL = vi.fn(() => `blob:preview-${n++}`);
+  URL.revokeObjectURL = vi.fn((url: string) => void revoked.push(url));
+  return revoked;
+}
+const pick = (files: File[]) =>
+  act(() => {
+    const field = document.querySelector<HTMLInputElement>("#compose-files")!;
+    Object.defineProperty(field, "files", { value: files, configurable: true });
+    field.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+const rows = () => document.querySelectorAll("form .attachment");
+const alt = (n: number, value: string) =>
+  act(() => {
+    const el = document.querySelectorAll<HTMLInputElement>("form .attachment input")[n];
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(el, value);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+// Uploads answer id-0, id-1, ... unless upload() says otherwise.
+const withMedia =
+  (create: () => unknown = () => reply(201, created), upload: (n: number) => unknown = (n) => reply(201, { id: `id-${n}`, width: 4, height: 3 })) => {
+    let n = 0;
+    return (url: string) => (url === "/api/admin/media" ? upload(n++) : url === "/api/admin/timeline" ? create() : signedIn(url));
+  };
+
+test("attached images upload with the CSRF token, go in the create payload in order with alt, and the entry shows them first", { timeout: 5000 }, async () => {
+  const revoked = previews();
+  const calls = await openAdmin(true, withMedia());
+  await showsComposer();
+  expect(document.querySelector('label[for="compose-files"]')?.textContent).toBe("attach images");
+  const files = [png("a.png"), png("bb.png")];
+  pick(files);
+  await settle();
+  const uploads = calls.filter(([url]) => url === "/api/admin/media");
+  expect(uploads.map(([, init]) => init?.body)).toEqual(files);
+  for (const [, init] of uploads) expect(init?.headers).toMatchObject({ "X-CSRF-Token": "csrf-secret", "Content-Type": "image/png" });
+  expect(rows()).toHaveLength(2);
+  alt(1, "second");
+  type("new");
+  submit();
+  await settle();
+  const post = calls.find(([url]) => url === "/api/admin/timeline");
+  expect(JSON.parse(post?.[1]?.body as string)).toEqual({
+    body_markdown: "new",
+    attachments: [
+      { id: "id-0", alt: "" },
+      { id: "id-1", alt: "second" },
+    ],
+  });
+  expect(ids()).toEqual(["entry-10", "entry-4"]);
+  expect(document.querySelector("#entry-10 > .media")?.className).toBe("media media-3");
+  // The form is empty again and the previews are freed.
+  expect(rows()).toHaveLength(0);
+  expect(revoked).toEqual(["blob:preview-0", "blob:preview-1"]);
+});
+
+test("tweet is off while an image uploads and on once it is done", { timeout: 5000 }, async () => {
+  previews();
+  let release!: () => void;
+  const calls = await openAdmin(
+    true,
+    withMedia(undefined, () => new Promise((resolve) => (release = () => resolve(reply(201, { id: "id-0", width: 4, height: 3 }))))),
+  );
+  await showsComposer();
+  type("new");
+  expect(document.querySelector('label[for="compose-files"]')?.textContent).toBe("attach images");
+  pick([png("slow")]);
+  await settle();
+  expect(document.querySelector("#compose-files-status")?.textContent).toBe("uploading");
+  expect(tweet()!.getAttribute("aria-disabled")).toBe("true");
+  submit();
+  await settle();
+  expect(calls.filter(([url]) => url === "/api/admin/timeline")).toHaveLength(0);
+  release();
+  await settle();
+  expect(tweet()!.getAttribute("aria-disabled")).toBe("false");
+});
+
+test("a create failure shows the server's detail and keeps the text, the images and their alt", { timeout: 5000 }, async () => {
+  const revoked = previews();
+  await openAdmin(true, withMedia(() => reply(422, { detail: "unknown image" })));
+  await showsComposer();
+  expect(document.querySelector('label[for="compose-files"]')?.textContent).toBe("attach images");
+  pick([png("a")]);
+  await settle();
+  alt(0, "kept alt");
+  type("draft");
+  submit();
+  await settle();
+  expect(document.querySelector("#compose-error")?.textContent).toBe("unknown image");
+  expect(textarea()!.value).toBe("draft");
+  expect(rows()).toHaveLength(1);
+  expect(document.querySelector<HTMLInputElement>("form .attachment input")!.value).toBe("kept alt");
+  expect(revoked).toEqual([]);
+  expect(ids()).toEqual(["entry-4"]);
+});
+
+test("an upload failure shows the server's detail; a 401 on upload removes the composer and the hint", { timeout: 5000 }, async () => {
+  previews();
+  let status = 413;
+  await openAdmin(true, withMedia(undefined, () => reply(status, { detail: "image too large" })));
+  await showsComposer();
+  expect(document.querySelector('label[for="compose-files"]')?.textContent).toBe("attach images");
+  pick([png("big")]);
+  await settle();
+  expect(document.querySelector("#compose-files-error")?.textContent).toBe("image too large");
+  expect(rows()).toHaveLength(0);
+  status = 401;
+  pick([png("a")]);
+  await settle();
+  expect(textarea()).toBeNull();
+  expect(document.cookie).not.toContain("admin_hint");
 });

@@ -71,6 +71,7 @@ def sitemap() -> Response:
             SubElement(url, "lastmod").text = lastmod
 
     add("/")
+    add("/timeline")
     for post in (post for post in app.all_posts() if not post["draft"]):
         add(f"/posts/{post['slug']}", post["date"])
     for project in sorted(path.name for path in app.CODE_DIR.iterdir() if path.is_dir() and app.PROJECT.fullmatch(path.name)):

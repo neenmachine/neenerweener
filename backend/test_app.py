@@ -91,10 +91,14 @@ def test_only_admin_page_has_no_javascript_notice(tmp_path, monkeypatch):
             assert response.status_code == 200
             page = response.text
             assert "<title>admin</title>" in page
-            noscript = re.search(r"<noscript>(.*?)</noscript>", page, re.S)[1]
-            assert '<p class="muted">the admin panel needs JavaScript</p>' in noscript
-            assert "<h1>admin</h1>" in noscript
-            assert '<footer><a href="/">neenerweener</a><a href="/timeline">timeline</a></footer>' in noscript
+            assert response.headers["X-Robots-Tag"] == "noindex"
+            # The shell is visible with JavaScript on too (it is the first paint); only the notice is noscript.
+            noscripts = re.findall(r"<noscript>(.*?)</noscript>", page, re.S)
+            assert noscripts == ['<p class="muted">the admin panel needs JavaScript</p>']
+            visible = re.sub(r"<noscript>.*?</noscript>", "", page, flags=re.S)
+            assert visible.count("<h1") == page.count("<h1") == 1
+            assert '<article class="admin"><div class="admin-head"><h1>admin</h1></div>' in visible
+            assert '<footer><a href="/">neenerweener</a><a href="/timeline">timeline</a></footer>' in visible
         for path in ("/", "/timeline", "/posts/hello"):
             page = client.get(path)
             assert page.status_code in (200, 503)  # 503: /timeline has no database in tests

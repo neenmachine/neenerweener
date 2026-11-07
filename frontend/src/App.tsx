@@ -40,7 +40,14 @@ export default function App() {
     case "admin":
       return (
         <Shell>
-          <Suspense>
+          {/* The shell Admin renders first, so the page never shows the footer alone while the chunk loads. */}
+          <Suspense
+            fallback={
+              <article className="admin">
+                <AdminHead />
+              </article>
+            }
+          >
             <Admin />
           </Suspense>
         </Shell>
@@ -69,6 +76,17 @@ export default function App() {
       page satisfies never;
       return <NotFound label="not found" back={false} />;
   }
+}
+
+// The admin heading, here in the main chunk so the Suspense fallback does not need the Admin chunk.
+// Mirrors ADMIN_SHELL in backend/app.py.
+export function AdminHead({ children }: { children?: ReactNode }) {
+  return (
+    <div className="admin-head">
+      <h1>admin</h1>
+      {children}
+    </div>
+  );
 }
 
 function Shell({ children }: { children: ReactNode }) {

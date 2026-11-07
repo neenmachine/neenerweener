@@ -52,7 +52,7 @@ def mix(a, b, weight):
 
 def code_backgrounds(v):
     """Every surface syntax tokens sit on: the page (file view), the `pre` block, and a highlighted file line."""
-    pre = re.search(r"\npre \{[^}]*background: color-mix\(in srgb, var\(--fg\) (\d+)%, transparent\)", CSS)
+    pre = re.search(r"\npre \{[^}]*--code-bg: color-mix\(in srgb, var\(--fg\) (\d+)%, var\(--bg\)\)", CSS)
     hl = re.search(r"\.code tr\.hl td \{\s*background: color-mix\(in srgb, (#[0-9a-f]{6}) (\d+)%, var\(--bg\)\)", CSS)
     return {
         "page": v["bg"],
@@ -88,3 +88,39 @@ def test_heading_anchor_glyph_meets_wcag_aa(dark):
     color = re.search(r"\bcolor: var\(--([\w-]+)\);", rules[0]).group(1)
     ratio = contrast(v[color], v["bg"])
     assert ratio >= 4.5, (color, ratio)
+
+
+def code_surface_props(selector):
+    """`--code-bg` and `--code-edge` of one scroll box, as colors for each scheme."""
+    rule = re.search(r"\n" + re.escape(selector) + r" \{([^}]*)\}", CSS).group(1)
+    props = dict(re.findall(r"--(code-bg|code-edge): ([^;]+);", rule))
+    return lambda v: {
+        k: v["bg"] if val == "var(--bg)" else mix(v["fg"], v["bg"], int(re.fullmatch(r"color-mix\(in srgb, var\(--fg\) (\d+)%, var\(--bg\)\)", val).group(1)) / 100)
+        for k, val in props.items()
+    }
+
+
+@pytest.mark.parametrize("dark", [False, True], ids=["light", "dark"])
+@pytest.mark.parametrize("selector", ["pre", ".scroll"])
+def test_scroll_cue_fades_between_checked_code_surfaces(selector, dark):
+    # Text scrolls under the edge fade, so the fade may only blend between surfaces whose syntax contrast is
+    # already checked above (page and pre); every blend of the two stays between their luminances.
+    assert "no-repeat local" in CSS and "no-repeat scroll" in CSS
+    v = scheme_vars(dark)
+    props = code_surface_props(selector)(v)
+    checked = {code_backgrounds(v)["page"], code_backgrounds(v)["pre"]}
+    assert props.keys() == {"code-bg", "code-edge"}, props
+    assert props["code-bg"] != props["code-edge"], props  # a visible cue
+    assert set(props.values()) <= checked, (props, checked)
+
+
+def test_mobile_back_arrow_hangs_in_its_own_column():
+    # Below 760px the arrow sits inline before the title: it gets a fixed column the title is indented by,
+    # so the gap is constant and a wrapped title's second line lines up with its first.
+    narrow = re.search(r"@media \(max-width: 760px\) \{\s*\.has-back \{([^}]*)\}\s*\.back \{([^}]*)\}", CSS)
+    assert narrow, "no narrow-screen .has-back/.back rules"
+    has_back, back = narrow.groups()
+    # The column clears the ~0.9em glyph with a gap and is a 24px tap target even on small text.
+    assert "--back-col: max(1.5em, 24px);" in has_back and "padding-left: var(--back-col);" in has_back, has_back
+    assert "width: var(--back-col);" in back and "margin: 0 0 0 calc(-1 * var(--back-col));" in back, back
+    assert "min-height: 24px;" in back, back

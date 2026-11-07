@@ -376,7 +376,7 @@ def test_csp_blocks_inline_script_without_breaking_preload(monkeypatch, tmp_path
         None,
         "Zq9shortRLK",
         "deadbeefZq9" + "0" * 53,  # `openssl rand -hex 32` shape: 64 hex-like characters
-        "\u00f1" * 14 + "Zq9w",  # non-ASCII, 32 UTF-8 bytes
+        "\u00f1" * 16 + "Zq9",  # non-ASCII, 35 UTF-8 bytes
     ],
     ids=["missing", "too-short", "64-hex", "non-ascii"],
 )

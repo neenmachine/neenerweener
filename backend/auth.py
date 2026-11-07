@@ -166,9 +166,10 @@ RATE_LIMIT_KEY_ERROR = (
 
 
 def _decode_rate_limit_key(value: str | None) -> bytes | None:
-    if value is None or not value.isascii() or len(value) != 32:
+    if value is None:
         return None
-    return value.encode("ascii")
+    encoded = value.encode("utf-8")
+    return encoded if len(encoded) == 32 else None
 
 
 @dataclass(frozen=True)

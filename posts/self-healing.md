@@ -46,7 +46,7 @@ now imagine this: it doesnt matter anymore. you have an agent constantly monitor
 
 an alert comes in, its your issue. two messages go out: one to your coding orchestrator, one to your messaging agent. you get a message: 
 
-> "Customer X is facing issue Y in prod. Issue Y was introduced when feature Z was introduced."
+> "Customer X is facing issue Y in prod. Issue Y was introduced when feature Z was introduced because of A, B, C."
 
 there are so many sources of data that are high signal produced from different sources every single day, and they become so much more valuable when connected.
 

@@ -40,7 +40,7 @@ def database_engine(database_url: str, **kwargs) -> Engine:
 
 class TimelineStoreProtocol(Protocol):
     def list(self, before: int | None, limit: int) -> list[dict]: ...
-    def ping(self) -> None: ...
+    def schema_revisions(self) -> frozenset[str]: ...
     def close(self) -> None: ...
 
 
@@ -80,9 +80,10 @@ class TimelineStore:
             rows = connection.execute(query).mappings().all()
         return [dict(row) for row in rows]
 
-    def ping(self) -> None:
+    def schema_revisions(self) -> frozenset[str]:
         with self.engine.connect() as connection:
-            connection.execute(text("SELECT 1"))
+            rows = connection.execute(text("SELECT version_num FROM alembic_version"))
+            return frozenset(rows.scalars())
 
     def close(self) -> None:
         self.engine.dispose()

@@ -1,4 +1,4 @@
-import { type MouseEvent, type ReactNode, useEffect, useRef, useState } from "react";
+import { type MouseEvent, type ReactNode, lazy, Suspense, useEffect, useRef, useState } from "react";
 
 type Summary = { slug: string; title: string; excerpt: string | null; tags: string[]; draft: boolean };
 type Post = Summary & { html: string };
@@ -13,6 +13,9 @@ const slug = location.pathname.match(/^\/posts\/([a-z0-9-]+)\/?$/)?.[1];
 // There is no project index: Henry links to code from his posts.
 const code = location.pathname.match(/^\/code\/([a-z0-9-]+)(?:\/(.+?))?\/?$/);
 const timeline = /^\/timeline\/?$/.test(location.pathname);
+// Private and unlinked; its code is a separate chunk that public pages never load.
+const admin = /^\/admin\/?$/.test(location.pathname);
+const Admin = lazy(() => import("./Admin"));
 // /?tag=<tag> filters the post list.
 const tag = new URLSearchParams(location.search).get("tag");
 const IMAGE = /\.(png|jpe?g|webp|gif|svg)$/i;
@@ -31,7 +34,17 @@ export default function App() {
     );
   return (
     <main>
-      {slug ? <PostPage slug={slug} /> : timeline ? <TimelinePage /> : <PostList />}
+      {admin ? (
+        <Suspense>
+          <Admin />
+        </Suspense>
+      ) : slug ? (
+        <PostPage slug={slug} />
+      ) : timeline ? (
+        <TimelinePage />
+      ) : (
+        <PostList />
+      )}
       <Footer />
     </main>
   );
@@ -40,7 +53,7 @@ export default function App() {
 function Footer() {
   return (
     <footer>
-      <a href="/" aria-current={!slug && !timeline && !tag ? "page" : undefined}>
+      <a href="/" aria-current={!slug && !timeline && !admin && !tag ? "page" : undefined}>
         neenerweener
       </a>
       <a href="/timeline" aria-current={timeline ? "page" : undefined}>
@@ -182,13 +195,13 @@ function TimelinePage() {
 }
 
 // "nov 7" this year, "nov 7, 2025" before; the full date and time are in the tooltip.
-function compact(iso: string) {
+export function compact(iso: string) {
   const d = new Date(iso);
   const year = d.getUTCFullYear() === new Date().getUTCFullYear() ? undefined : "numeric";
   return d.toLocaleDateString("en", { month: "short", day: "numeric", year, timeZone: "UTC" }).toLowerCase();
 }
 
-const full = (iso: string) => new Date(iso).toLocaleString("en", { dateStyle: "long", timeStyle: "short", timeZone: "UTC" });
+export const full = (iso: string) => new Date(iso).toLocaleString("en", { dateStyle: "long", timeStyle: "short", timeZone: "UTC" });
 
 function Back({ href }: { href: string }) {
   return (

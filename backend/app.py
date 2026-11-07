@@ -28,7 +28,6 @@ from pygments.util import ClassNotFound
 
 from anchors import add_heading_anchors
 from operations import check_readiness, configure_logging, load_schema_heads
-from timeline import TimelineStore, TimelineStoreProtocol, serialize_entry
 
 POSTS_DIR = Path(os.environ.get("POSTS_DIR", Path(__file__).parent.parent / "posts"))
 DRAFTS_DIR = Path(os.environ.get("DRAFTS_DIR", Path(__file__).parent.parent / "drafts"))
@@ -45,13 +44,7 @@ from auth import (
     valid_csrf,
     verify_password,
 )
-from operations import check_readiness, configure_logging
-from timeline import (
-    TimelineStore,
-    TimelineStoreProtocol,
-    serialize_entry,
-    validate_timeline_body,
-)
+from timeline import TimelineStore, TimelineStoreProtocol, serialize_entry, validate_timeline_body
 
 logger = logging.getLogger(__name__)
 

@@ -1,3 +1,4 @@
+import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -123,6 +124,7 @@ def test_alembic_upgrade_from_empty():
             connection.exec_driver_sql('DROP TABLE IF EXISTS timeline_entries CASCADE')
             connection.exec_driver_sql('DROP TABLE IF EXISTS alembic_version')
         command.upgrade(config, 'head')
+        assert not logging.getLogger("app").disabled
         assert 'timeline_entries' in inspect(engine).get_table_names()
     finally:
         engine.dispose()

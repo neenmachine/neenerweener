@@ -6,7 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app
-from timeline import render_timeline
+from timeline import TimelineStore, render_timeline
 
 
 class FakeStore:
@@ -17,6 +17,17 @@ class FakeStore:
     def list(self, before, limit):
         self.calls.append((before, limit))
         return self.rows
+
+
+def test_store_close_disposes_engine():
+    class Engine:
+        def dispose(self):
+            self.disposed = True
+
+    engine = Engine()
+    store = TimelineStore("unused", engine=engine)
+    store.close()
+    assert engine.disposed is True
 
 
 def test_timeline_markdown_disables_html_and_images():

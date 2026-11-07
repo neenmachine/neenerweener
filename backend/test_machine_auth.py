@@ -480,6 +480,14 @@ def test_machine_schema_indexes_and_query_plans(machine_app):
     assert {"ix_machine_auth_tokens_expires_at", "ix_machine_auth_tokens_key_fingerprint"} <= indexes["machine_auth_tokens"]
     assert len(indexes["machine_auth_events"]) == 3
     with store.engine.begin() as connection:
+        connection.execute(insert(machine_auth_events), [
+            {"event": "timeline_create", "fingerprint_key": index.to_bytes(32, "big"), "ip_key": None}
+            for index in range(501)
+        ] + [
+            {"event": "challenge", "ip_key": index.to_bytes(32, "big"), "fingerprint_key": None}
+            for index in range(501)
+        ])
+        connection.execute(text("ANALYZE machine_auth_events"))
         connection.execute(text("SET LOCAL enable_seqscan = off"))
         ip_plan = "\n".join(row[0] for row in connection.execute(text(
             "EXPLAIN SELECT * FROM machine_auth_events WHERE ip_key = decode(repeat('00', 32), 'hex') AND event = 'challenge' AND occurred_at > now() - INTERVAL '15 minutes' ORDER BY ip_key, event, occurred_at"

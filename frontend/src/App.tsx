@@ -1,4 +1,4 @@
-import { type MouseEvent, type ReactNode, lazy, Suspense, useEffect, useRef, useState } from "react";
+import { type ComponentType, type MouseEvent, type ReactNode, lazy, Suspense, useEffect, useRef, useState } from "react";
 
 type Summary = { slug: string; title: string; excerpt: string | null; tags: string[]; draft: boolean };
 type Post = Summary & { html: string };
@@ -138,6 +138,8 @@ function Footer() {
 function TimelinePage() {
   const { data, error } = useApi<Timeline>("/api/timeline");
   const [older, setOlder] = useState<Timeline[]>([]);
+  // Entries the admin posted from this page; the preload and the cursor stay as the server sent them.
+  const [created, setCreated] = useState<Entry[]>([]);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
   // What the always-mounted status region says, so screen readers hear loading, failure and progress.
@@ -180,7 +182,7 @@ function TimelinePage() {
   const pages = [data, ...older];
   const cursor = pages[pages.length - 1].next_cursor;
   const seen = new Set<number>();
-  const entries = pages.flatMap((p) => p.entries).filter((e) => !seen.has(e.id) && !!seen.add(e.id));
+  const entries = [...created, ...pages.flatMap((p) => p.entries)].filter((e) => !seen.has(e.id) && !!seen.add(e.id));
   const loadMore = (event: MouseEvent<HTMLAnchorElement>) => {
     event.preventDefault();
     if (inFlight.current || cursor === null) return;
@@ -211,6 +213,7 @@ function TimelinePage() {
   return (
     <article>
       {heading}
+      <Compose onCreated={(e) => setCreated((prev) => [e, ...prev])} />
       {/* A page can be empty and still have older entries (the server skips bad rows); only the end is empty. */}
       {!entries.length && cursor === null && (
         <p className="muted" tabIndex={-1} ref={empty}>
@@ -263,6 +266,28 @@ function TimelinePage() {
       </p>
     </article>
   );
+}
+
+type ComposerProps = { onCreated: (entry: Entry) => void; onExpired: () => void };
+
+// The admin's compose box, or nothing. The server sends the same page to everyone; a non-secret hint cookie
+// (set at login) says whether to check the session, so visitors pay no request. Only a signed-in session
+// loads the composer chunk; the real auth is the session cookie and CSRF token on the create request.
+function Compose({ onCreated }: { onCreated: (entry: Entry) => void }) {
+  const [Composer, setComposer] = useState<ComponentType<ComposerProps> | null>(null);
+  useEffect(() => {
+    if (!/(^|;\s*)admin_hint=1(;|$)/.test(document.cookie)) return;
+    let live = true;
+    import("./adminApi")
+      .then((api) => api.checkSession())
+      .then((r) => (r.ok && r.data.authenticated ? import("./TimelineComposer") : undefined))
+      .then((m) => live && m && setComposer(() => m.default))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
+  return Composer && <Composer onCreated={onCreated} onExpired={() => setComposer(null)} />;
 }
 
 // "nov 7" this year, "nov 7, 2025" before; the full date and time are in the tooltip.

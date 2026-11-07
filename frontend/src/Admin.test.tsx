@@ -215,6 +215,7 @@ test("a failed delete stays armed and shows the server detail", async () => {
   });
   await render(fetch);
   click("delete");
+  expect(document.activeElement).toBe(named("cancel delete entry 42"));
   act(() => document.querySelector<HTMLButtonElement>("#entry-42 .button.danger")!.click());
   await flush();
   expect(document.querySelector("#entry-42 .button.danger")?.getAttribute("aria-busy")).toBe("false");
@@ -624,6 +625,8 @@ test("an entry with 4 images refuses a fifth in the editor", async () => {
   expect(document.querySelector("#edit-42-files-error")?.textContent).toBe("up to 4 images");
   expect(fetch.mock.calls.filter(([url]) => url === "/api/admin/media")).toEqual([]);
   expect(editRows()).toHaveLength(4);
+});
+
 test("a late upload response cannot restore a removed row or enter the payload", async () => {
   const revoked = previews();
   let release!: () => void;

@@ -23,16 +23,18 @@ from pygments.formatters import HtmlFormatter
 from pygments.lexers import TextLexer, get_lexer_by_name, get_lexer_for_filename
 from pygments.util import ClassNotFound
 
+from anchors import add_heading_anchors
+from operations import check_readiness, configure_logging, load_schema_heads
+from timeline import TimelineStore, TimelineStoreProtocol, serialize_entry
+
 POSTS_DIR = Path(os.environ.get("POSTS_DIR", Path(__file__).parent.parent / "posts"))
 PAGES_DIR = Path(os.environ.get("PAGES_DIR", Path(__file__).parent.parent / "pages"))
 DRAFTS_DIR = Path(os.environ.get("DRAFTS_DIR", Path(__file__).parent.parent / "drafts"))
 CODE_DIR = Path(os.environ.get("CODE_DIR", Path(__file__).parent.parent / "code"))
 FRONTEND_DIST = Path(os.environ.get("FRONTEND_DIST", Path(__file__).parent.parent / "frontend" / "dist"))
+EXPECTED_SCHEMA_REVISIONS = load_schema_heads(Path(__file__).with_name("alembic.ini"))
 FILENAME = re.compile(r"^([a-z0-9-]+)\.md$")
 PROJECT = re.compile(r"[a-z0-9-]+")
-from anchors import add_heading_anchors
-from operations import check_readiness, configure_logging
-from timeline import TimelineStore, TimelineStoreProtocol, serialize_entry
 
 logger = logging.getLogger(__name__)
 
@@ -140,7 +142,7 @@ def list_timeline(
 
 @app.get("/readyz")
 async def readyz():
-    ready, reason = await check_readiness(timeline_store)
+    ready, reason = await check_readiness(timeline_store, EXPECTED_SCHEMA_REVISIONS)
     if not ready:
         return JSONResponse({"status": "not_ready", "reason": reason or "dependency unavailable"}, status_code=503)
     return {"status": "ok"}

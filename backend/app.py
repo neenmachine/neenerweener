@@ -908,10 +908,13 @@ def page_data(kind: tuple[str, ...] | None, before: int | None = None) -> tuple[
         page, markup, status_code = timeline_page(before)
         return {"/api/timeline": page}, {"title": "timeline", "description": "timeline"}, markup, status_code
     if kind[0] == "admin":
-        return {}, {"title": "neenerweener"}, "", 200
+        return {}, {"title": "neenerweener"}, ADMIN_NOSCRIPT, 200
     if kind[0] == "post":
         return post_page_data(kind[1])
     return code_page_data(*kind[1:])
+
+
+ADMIN_NOSCRIPT = '<noscript><main><p class="muted">the admin panel needs JavaScript</p></main></noscript>'
 
 
 def post_page_data(slug: str) -> tuple[dict, dict, str, int]:

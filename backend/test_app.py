@@ -68,6 +68,27 @@ def test_admin_spa_is_noindex_and_public_pages_do_not_link_to_it(tmp_path, monke
             assert 'href="/admin"' not in public.text
 
 
+def test_only_admin_page_has_no_javascript_notice(tmp_path, monkeypatch):
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text('<html><head></head><body><div id="root"></div></body></html>')
+    posts = tmp_path / "posts"
+    posts.mkdir()
+    (posts / "hello.md").write_text("---\ntitle: Hi\ndate: 2026-01-01\n---\nbody\n")
+    monkeypatch.setattr(app, "FRONTEND_DIST", dist)
+    monkeypatch.setattr(app, "POSTS_DIR", posts)
+    notice = "<noscript><main><p class=\"muted\">the admin panel needs JavaScript</p></main></noscript>"
+
+    with TestClient(app.app) as client:
+        for path in ("/admin", "/admin/"):
+            assert notice in client.get(path).text
+        for path in ("/", "/timeline", "/posts/hello"):
+            page = client.get(path)
+            assert page.status_code in (200, 503)  # 503: /timeline has no database in tests
+            assert "<noscript" not in page.text
+            assert "the admin panel" not in page.text
+
+
 def test_lifespan_closes_stores_sequentially_off_event_loop(monkeypatch):
     close_calls = []
 

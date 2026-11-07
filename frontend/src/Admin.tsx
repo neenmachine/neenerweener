@@ -1,9 +1,10 @@
 import { type ReactNode, type Ref, type RefObject, useEffect, useRef, useState } from "react";
-import { AdminHead, compact, full } from "./App";
+import { AdminHead, compact, EntryMedia, full } from "./App";
 import {
   type AdminEntry,
   type Result,
   checkSession,
+  createTimeline,
   hasText,
   LIMIT,
   length,
@@ -11,6 +12,7 @@ import {
   logout as signOut,
   request,
 } from "./adminApi";
+import { Attachments, useAttachments } from "./attachments";
 import type { Entry } from "./timelineTypes";
 
 // The private /admin page: a password form, then compose, edit and delete for timeline entries.
@@ -108,7 +110,7 @@ export default function Admin() {
       )}
       {mounted && (
         <div hidden={auth !== "in"}>
-          <Manager send={send} />
+          <Manager send={send} expire={expire} />
         </div>
       )}
     </article>
@@ -214,7 +216,7 @@ function Login({ session, notice }: { session: () => Promise<boolean>; notice: s
   );
 }
 
-function Manager({ send }: { send: Send }) {
+function Manager({ send, expire }: { send: Send; expire: () => void }) {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [cursor, setCursor] = useState<number | null>(null);
   const [list, setList] = useState<"loading" | "ok" | "failed">("loading");
@@ -224,6 +226,7 @@ function Manager({ send }: { send: Send }) {
   const [posting, setPosting] = useState(false);
   const [postError, setPostError] = useState("");
   const [status, setStatus] = useState("");
+  const images = useAttachments(expire);
   const inFlight = useRef(false);
   const moreFlight = useRef(false);
   const listRef = useRef<HTMLDivElement>(null);
@@ -270,16 +273,17 @@ function Manager({ send }: { send: Send }) {
   };
 
   const post = async () => {
-    if (inFlight.current) return;
+    if (inFlight.current || images.uploading) return;
     inFlight.current = true;
     setPosting(true);
     setPostError("");
-    const r = await send<AdminEntry>("POST", "/api/admin/timeline", { body_markdown: draft });
+    const r = await createTimeline(draft, images.payload());
     inFlight.current = false;
     setPosting(false);
-    if (!r.ok) return setPostError(r.message);
+    if (!r.ok) return r.status === 401 ? expire() : setPostError(r.message);
     setEntries((prev) => [r.data, ...prev]);
     setDraft("");
+    images.clear();
     setStatus("posted");
     compose.current?.focus();
   };
@@ -302,8 +306,9 @@ function Manager({ send }: { send: Send }) {
         busy={posting}
         error={postError}
         onSubmit={post}
+        attachments={<Attachments state={images} busy={posting} id="compose" />}
       >
-        <Button type="submit" busy={posting} off={!hasText(draft)} label="post" busyLabel="posting" />
+        <Button type="submit" busy={posting} off={!hasText(draft) || images.uploading} label="post" busyLabel="posting" />
       </Editor>
       {list === "loading" && <p className="muted">loading</p>}
       {list === "failed" && (
@@ -356,6 +361,7 @@ function Editor({
   error,
   onSubmit,
   onCancel,
+  attachments,
   children,
 }: {
   id: string;
@@ -367,6 +373,7 @@ function Editor({
   error: string;
   onSubmit: () => void;
   onCancel?: () => void;
+  attachments?: ReactNode;
   children: ReactNode;
 }) {
   const n = length(text);
@@ -398,6 +405,7 @@ function Editor({
           }
         }}
       />
+      {attachments}
       <div className="admin-row">
         <span id={`${id}-count`} className={n > LIMIT ? "count error" : "count muted"}>
           {n.toLocaleString("en")} / {LIMIT.toLocaleString("en")}
@@ -510,6 +518,7 @@ function Row({
         // Rendered server side from Henry's entry, with raw HTML disabled.
         <div dangerouslySetInnerHTML={{ __html: entry.html }} />
       )}
+      <EntryMedia media={entry.media} />
       <footer>
         <a href={`/timeline#entry-${entry.id}`} aria-label={full(entry.created_at)}>
           <time dateTime={new Date(entry.created_at).toISOString()} title={full(entry.created_at)}>

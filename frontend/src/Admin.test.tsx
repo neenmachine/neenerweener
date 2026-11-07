@@ -5,8 +5,9 @@ import { afterEach, expect, test, vi } from "vitest";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-type Entry = { id: number; html: string; created_at: string; edited_at: string | null };
-const entry = (id: number, body = `entry ${id}`): Entry => ({ id, html: `<p>${body}</p>`, created_at: "2026-01-02T03:04:05Z", edited_at: null });
+type Media = { id: string; width: number; height: number; alt: string };
+type Entry = { id: number; html: string; created_at: string; edited_at: string | null; media: Media[] };
+const entry = (id: number, body = `entry ${id}`, media: Media[] = []): Entry => ({ id, html: `<p>${body}</p>`, created_at: "2026-01-02T03:04:05Z", edited_at: null, media });
 const ok = (body: unknown, headers = new Headers()) => ({ ok: true, status: 200, headers, json: () => Promise.resolve(body) });
 const bad = (status: number, detail: unknown, headers = new Headers()) => ({ ok: false, status, headers, json: () => Promise.resolve({ detail }) });
 const session = { authenticated: true, csrf_token: "csrf" };
@@ -243,4 +244,220 @@ test("retry after a 503 hides the loading line again for 400 ms", { timeout: 500
   } finally {
     vi.useRealTimers();
   }
+});
+
+// Attachments: generated in-memory files only.
+const png = (name: string) => new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47, name.length])], name, { type: "image/png" });
+function previews() {
+  let n = 0;
+  const revoked: string[] = [];
+  URL.createObjectURL = vi.fn(() => `blob:preview-${n++}`);
+  URL.revokeObjectURL = vi.fn((url: string) => void revoked.push(url));
+  return revoked;
+}
+const fileInput = () => {
+  const field = document.querySelector<HTMLInputElement>("#compose-files");
+  expect(field, "the compose form's file input").not.toBeNull();
+  return field!;
+};
+const pick = (files: File[]) =>
+  act(() => {
+    const field = fileInput();
+    Object.defineProperty(field, "files", { value: files, configurable: true });
+    field.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+const rows = () => document.querySelectorAll(".attachment");
+const postButton = () => [...document.querySelectorAll("button")].find((b) => b.textContent?.startsWith("post"))!;
+function mediaFetch(upload: (file: File, n: number) => Promise<unknown> = (_, n) => Promise.resolve(ok({ id: `id-${n}`, width: 4, height: 3 }))) {
+  let n = 0;
+  return vi.fn(async (url: string, init?: RequestInit) => {
+    if (url === "/api/admin/session") return ok(session);
+    if (url === "/api/timeline") return ok({ entries: [], next_cursor: null });
+    if (url === "/api/admin/media") return upload(init?.body as File, n++);
+    if (url === "/api/admin/timeline") return ok({ ...json(9, "with images"), media: [{ id: "id-0", width: 4, height: 3, alt: "a red square" }] });
+    return ok({});
+  });
+}
+
+test("the file input has a visible label and picking 2 files uploads 2 raw bodies with the CSRF header", async () => {
+  previews();
+  const fetch = mediaFetch();
+  await render(fetch);
+  const field = fileInput();
+  expect(document.querySelector(`label[for="${field.id}"]`)?.textContent).toBe("attach images");
+  expect(field.disabled).toBe(false);
+  const files = [png("a.png"), png("bb.png")];
+  pick(files);
+  await flush();
+  const uploads = fetch.mock.calls.filter(([url]) => url === "/api/admin/media");
+  expect(uploads.map(([, init]) => init?.body)).toEqual(files);
+  for (const [, init] of uploads) {
+    expect(init?.method).toBe("POST");
+    expect(init?.headers).toEqual(expect.objectContaining({ "X-CSRF-Token": "csrf", "Content-Type": "image/png" }));
+  }
+  expect(rows()).toHaveLength(2);
+  expect([...document.querySelectorAll(".attachment img")].map((img) => img.getAttribute("src"))).toEqual(["blob:preview-0", "blob:preview-1"]);
+});
+
+test("a fifth image shows up to 4 images and uploads nothing more", async () => {
+  previews();
+  const fetch = mediaFetch();
+  await render(fetch);
+  pick([png("1"), png("2"), png("3"), png("4")]);
+  await flush();
+  pick([png("5")]);
+  await flush();
+  expect(rows()).toHaveLength(4);
+  expect(fetch.mock.calls.filter(([url]) => url === "/api/admin/media")).toHaveLength(4);
+  expect(document.querySelector("#compose-files-error")?.textContent).toBe("up to 4 images");
+});
+
+test.each([
+  [413, "request too large"],
+  [422, "unsupported image"],
+])("an upload %s shows the server detail and drops the row", async (status, detail) => {
+  const revoked = previews();
+  await render(mediaFetch(() => Promise.resolve(bad(status, detail))));
+  pick([png("x")]);
+  await flush();
+  expect(document.querySelector("#compose-files-error")?.textContent).toBe(detail);
+  expect(rows()).toHaveLength(0);
+  expect(revoked).toEqual(["blob:preview-0"]);
+});
+
+test("post sends attachments with alt in order, empty alt as an empty string, and revokes the previews", async () => {
+  const revoked = previews();
+  const fetch = mediaFetch();
+  await render(fetch);
+  pick([png("a"), png("b")]);
+  await flush();
+  input(".attachment:first-child input", "a red square");
+  input('[aria-label="new entry"]', "two images");
+  click("post");
+  await flush();
+  const post = fetch.mock.calls.find(([url]) => url === "/api/admin/timeline");
+  expect(JSON.parse(post?.[1]?.body as string)).toEqual({
+    body_markdown: "two images",
+    attachments: [
+      { id: "id-0", alt: "a red square" },
+      { id: "id-1", alt: "" },
+    ],
+  });
+  expect(rows()).toHaveLength(0);
+  expect(revoked.sort()).toEqual(["blob:preview-0", "blob:preview-1"]);
+  // The new entry in the list shows its image.
+  expect(document.querySelector("#entry-9 .media img")?.getAttribute("alt")).toBe("a red square");
+});
+
+test("remove drops a row and revokes its preview", async () => {
+  const revoked = previews();
+  const fetch = mediaFetch();
+  await render(fetch);
+  pick([png("a"), png("b")]);
+  await flush();
+  click("remove");
+  expect(rows()).toHaveLength(1);
+  expect(revoked).toEqual(["blob:preview-0"]);
+  input('[aria-label="new entry"]', "one image");
+  click("post");
+  await flush();
+  const post = fetch.mock.calls.find(([url]) => url === "/api/admin/timeline");
+  expect(JSON.parse(post?.[1]?.body as string).attachments).toEqual([{ id: "id-1", alt: "" }]);
+});
+
+test("post is disabled while an image is uploading", async () => {
+  previews();
+  let release!: () => void;
+  const fetch = mediaFetch(() => new Promise((resolve) => (release = () => resolve(ok({ id: "late", width: 1, height: 1 })))));
+  await render(fetch);
+  const box = input('[aria-label="new entry"]', "waiting");
+  pick([png("slow")]);
+  await flush();
+  expect(postButton().getAttribute("aria-disabled")).toBe("true");
+  submit(box.form!);
+  await flush();
+  expect(fetch.mock.calls.filter(([url]) => url === "/api/admin/timeline")).toHaveLength(0);
+  release();
+  await flush();
+  expect(postButton().getAttribute("aria-disabled")).toBe("false");
+});
+
+test("a visible uploading line sits in a status region that exists before the upload starts", async () => {
+  previews();
+  let release!: () => void;
+  await render(mediaFetch(() => new Promise((resolve) => (release = () => resolve(ok({ id: "late", width: 1, height: 1 }))))));
+  // A live region only announces changes if it is already in the page.
+  const status = document.querySelector('.attachments [role="status"]');
+  expect(status, "status region before any pick").not.toBeNull();
+  expect(status!.textContent).toBe("");
+  expect(status!.classList.contains("sr-only")).toBe(false);
+  pick([png("slow")]);
+  await flush();
+  expect(status!.isConnected).toBe(true);
+  expect(status!.textContent).toBe("uploading");
+  release();
+  await flush();
+  expect(status!.textContent).toBe("");
+});
+
+const removeNames = () => [...document.querySelectorAll(".attachment button")].map((b) => b.getAttribute("aria-label"));
+
+test("remove buttons have unique names by position that renumber after a removal", async () => {
+  previews();
+  await render(mediaFetch());
+  pick([png("a"), png("b"), png("c")]);
+  await flush();
+  expect(removeNames()).toEqual(["remove image 1", "remove image 2", "remove image 3"]);
+  for (const b of document.querySelectorAll(".attachment button")) expect(b.textContent).toBe("remove");
+  act(() => document.querySelector<HTMLButtonElement>('[aria-label="remove image 2"]')!.click());
+  expect(removeNames()).toEqual(["remove image 1", "remove image 2"]);
+  expect([...document.querySelectorAll(".attachment img")].map((img) => img.getAttribute("src"))).toEqual(["blob:preview-0", "blob:preview-2"]);
+});
+
+test("unmounting the composer revokes each live preview exactly once", async () => {
+  const revoked = previews();
+  await render(mediaFetch());
+  pick([png("a"), png("b"), png("c")]);
+  await flush();
+  click("remove");
+  expect(revoked).toEqual(["blob:preview-0"]);
+  act(() => root!.unmount());
+  root = undefined;
+  expect(revoked.sort()).toEqual(["blob:preview-0", "blob:preview-1", "blob:preview-2"]);
+});
+
+test("log out revokes the live previews", async () => {
+  const revoked = previews();
+  await render(mediaFetch());
+  pick([png("a")]);
+  await flush();
+  click("log out");
+  await flush();
+  expect(rows()).toHaveLength(0);
+  expect(revoked).toEqual(["blob:preview-0"]);
+});
+
+test("picking 3 files with 2 rows refuses the whole pick and keeps the message until the next pick", async () => {
+  previews();
+  const fetch = mediaFetch();
+  await render(fetch);
+  pick([png("a"), png("b")]);
+  await flush();
+  const before = [...document.querySelectorAll(".attachment img")].map((img) => img.getAttribute("src"));
+  input(".attachment:first-child input", "kept alt");
+  pick([png("c"), png("d"), png("e")]);
+  await flush();
+  const error = () => document.querySelector("#compose-files-error")?.textContent;
+  expect(error()).toBe("up to 4 images");
+  expect([...document.querySelectorAll(".attachment img")].map((img) => img.getAttribute("src"))).toEqual(before);
+  expect(document.querySelector<HTMLInputElement>(".attachment:first-child input")!.value).toBe("kept alt");
+  expect(fetch.mock.calls.filter(([url]) => url === "/api/admin/media")).toHaveLength(2);
+  // Still shown after other edits; cleared by the next accepted pick.
+  input('[aria-label="new entry"]', "text");
+  click("remove");
+  expect(error()).toBe("up to 4 images");
+  pick([png("f")]);
+  await flush();
+  expect(error()).toBe("");
+  expect(rows()).toHaveLength(2);
 });

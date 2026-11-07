@@ -1,5 +1,5 @@
-import { expect, test } from "vitest";
-import { hasText } from "./adminApi";
+import { expect, test, vi } from "vitest";
+import { checkSession, hasText, request } from "./adminApi";
 
 // Only whitespace-only text is held back, and only characters Python's str.strip() also removes; the server decides the rest.
 test.each([
@@ -31,3 +31,40 @@ test.each([...PYTHON_ISSPACE.map((c) => [hex(c), false, c]), ...PYTHON_KEEPS.map
     expect(hasText(String.fromCodePoint(c))).toBe(expected);
   },
 );
+
+test("a Blob body goes raw with its own type, or application/octet-stream, and the CSRF header", async () => {
+  const calls: RequestInit[] = [];
+  vi.stubGlobal("fetch", vi.fn(async (url: string, init: RequestInit) => {
+    calls.push(init);
+    return url === "/api/admin/session"
+      ? { ok: true, status: 200, headers: new Headers(), json: async () => ({ authenticated: true, csrf_token: "t" }) }
+      : { ok: true, status: 201, headers: new Headers(), json: async () => ({ id: "x", width: 1, height: 1 }) };
+  }));
+  try {
+    await checkSession();
+    const typed = new File(["png"], "a.png", { type: "image/png" });
+    const untyped = new File(["?"], "b");
+    await request("POST", "/api/admin/media", typed);
+    await request("POST", "/api/admin/media", untyped);
+    expect(calls[1]).toMatchObject({ method: "POST", body: typed, headers: { "Content-Type": "image/png", "X-CSRF-Token": "t" } });
+    expect(calls[2]).toMatchObject({ body: untyped, headers: { "Content-Type": "application/octet-stream", "X-CSRF-Token": "t" } });
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+
+// The server's short detail is shown for a too-large body (413) as for a validation error (422).
+test.each([
+  [413, "request too large", "request too large"],
+  [422, "unsupported image", "unsupported image"],
+  [422, [{ msg: "schema" }], "invalid text"],
+  [413, undefined, "something went wrong"],
+])("%s with detail %j shows %s", async (status, detail, message) => {
+  vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status, headers: new Headers(), json: async () => ({ detail }) })));
+  try {
+    const r = await request("POST", "/api/admin/media", {});
+    expect(r).toMatchObject({ ok: false, status, message });
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});

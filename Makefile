@@ -19,7 +19,7 @@ test:
 chunk-guard:
 	@entry=$$(sed -nE 's|.*<script type="module"[^>]* src="/?([^"]+)".*|\1|p' frontend/dist/index.html); \
 	test -n "$$entry" || { echo "no module script in frontend/dist/index.html"; exit 1; }; \
-	if grep -oE 'tweet|new timeline entry|X-CSRF-Token|csrf_token|from"\./(TimelineComposer|adminApi)-' "frontend/dist/$$entry"; then \
+	if grep -oE 'tweet|new timeline entry|attach images|up to 4 images|X-CSRF-Token|csrf_token|from"\./(TimelineComposer|adminApi)-' "frontend/dist/$$entry"; then \
 	  echo "frontend/dist/$$entry carries admin code"; exit 1; fi; \
 	echo "chunk-guard: frontend/dist/$$entry is clean"
 

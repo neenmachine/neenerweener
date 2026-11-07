@@ -287,7 +287,7 @@ const smWidth = (width: number, height: number) => {
 };
 
 // An entry's images like a tweet's: one keeps its shape, 2 to 4 fill a fixed grid, so nothing shifts on load.
-function EntryMedia({ media }: { media: Media[] }) {
+export function EntryMedia({ media }: { media: Media[] }) {
   if (!media.length) return null;
   return (
     <div className={`media media-${media.length}`}>

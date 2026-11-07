@@ -189,3 +189,58 @@ test("429 uses Retry-After and the editor counts 10,000 Unicode code points", as
   expect([...document.querySelectorAll("button")].find((button) => button.textContent === "post")?.getAttribute("aria-disabled")).not.toBe("true");
   expect(box.value).toBe(text);
 });
+
+// Fake timers; the 5 s timeout below guards against a hang if a pending promise never settles.
+async function renderPending(fetch: (url: string) => Promise<unknown>) {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  vi.stubGlobal("fetch", vi.fn(fetch));
+  document.body.innerHTML = '<div id="root"></div>';
+  const { default: Admin } = await import("./Admin");
+  await act(async () => {
+    root = createRoot(document.getElementById("root")!);
+    root.render(<Admin />);
+  });
+}
+const settle = () => act(async () => await Promise.resolve());
+const wait = (ms: number) => act(() => vi.advanceTimersByTime(ms));
+const pending = () => {
+  let resolve!: (r: unknown) => void;
+  return { promise: new Promise((r) => (resolve = r)), resolve: (r: unknown) => resolve(r) };
+};
+
+test("a fast session check shows no loading line; a slow one says loading after 400 ms", { timeout: 5000 }, async () => {
+  try {
+    const check = pending();
+    await renderPending(() => check.promise);
+    expect(document.querySelector("h1")?.textContent).toBe("admin");
+    expect(document.body.textContent).not.toContain("loading");
+    await wait(399);
+    expect(document.body.textContent).not.toContain("loading");
+    await wait(1);
+    expect(document.querySelector('[role="status"]')?.textContent).toBe("loading");
+    await act(async () => check.resolve(ok({ authenticated: false })));
+    await settle();
+    expect(document.querySelector('input[type="password"]')).not.toBeNull();
+    expect(document.body.textContent).not.toContain("loading");
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("retry after a 503 hides the loading line again for 400 ms", { timeout: 5000 }, async () => {
+  try {
+    const retry = pending();
+    let calls = 0;
+    await renderPending(() => (calls++ ? retry.promise : Promise.resolve(bad(503, "unavailable"))));
+    await settle();
+    expect(document.querySelector('[role="alert"]')?.textContent).toBe("unavailable, try again");
+    click("retry");
+    expect(document.body.textContent).not.toContain("loading");
+    await wait(400);
+    expect(document.querySelector('[role="status"]')?.textContent).toBe("loading");
+    await act(async () => retry.resolve(ok({ authenticated: false })));
+    await settle();
+  } finally {
+    vi.useRealTimers();
+  }
+});

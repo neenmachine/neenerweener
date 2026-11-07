@@ -987,15 +987,16 @@ def timeline_before(request: Request) -> int | None:
 
 
 def admin_page(request: Request) -> tuple[dict, dict, str, int]:
-    return {}, {"title": "admin", "robots": "noindex"}, ADMIN_NOSCRIPT, 200
+    return {}, {"title": "admin", "robots": "noindex"}, ADMIN_SHELL, 200
 
 
 # The server footer for pages other than /timeline; Footer in App.tsx renders the same links.
 SITE_FOOTER = '<footer><a href="/">neenerweener</a><a href="/timeline">timeline</a></footer>'
-# Mirrors the Admin shell in Admin.tsx, so the no-JavaScript page keeps the same heading and footer.
-ADMIN_NOSCRIPT = (
-    '<noscript><main><article class="admin"><div class="admin-head"><h1>admin</h1></div>'
-    f'<p class="muted">the admin panel needs JavaScript</p></article>{SITE_FOOTER}</main></noscript>'
+# Mirrors the admin Suspense fallback in App.tsx, so the first paint is already the shell React renders.
+ADMIN_SHELL = (
+    '<main><article class="admin"><div class="admin-head"><h1>admin</h1></div>'
+    '<noscript><p class="muted">the admin panel needs JavaScript</p></noscript></article>'
+    f"{SITE_FOOTER}</main>"
 )
 
 

@@ -476,6 +476,15 @@ def test_timeline_empty_and_unavailable_are_distinct(tmp_path, monkeypatch):
     assert "could not load timeline" in unavailable
     assert "nothing here yet" not in unavailable
 
+    class MalformedPageStore:
+        def list(self, before, limit):
+            return [{"id": 30 - i} for i in range(limit + 1)]
+
+    monkeypatch.setattr(app, "timeline_store", MalformedPageStore())
+    malformed = TestClient(app.app).get("/timeline").text
+    assert '"/api/timeline": {"entries": [], "next_cursor": 11}' in malformed
+    assert "nothing here yet" not in malformed
+
     class BrokenStore:
         def list(self, before, limit):
             raise RuntimeError("database details must not reach the page")

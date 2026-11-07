@@ -413,16 +413,16 @@ def page_data(path: str) -> tuple[dict, dict, str, int] | None:
             first_page = list_timeline(before=None, limit=20)
         except HTTPException:
             preload["/api/timeline"] = None
-            markup = timeline_markup([], unavailable=True)
+            markup = timeline_markup(None)
             status_code = 503
         except Exception:
             logger.warning("timeline unavailable during page render")
             preload["/api/timeline"] = None
-            markup = timeline_markup([], unavailable=True)
+            markup = timeline_markup(None)
             status_code = 503
         else:
             preload["/api/timeline"] = first_page
-            markup = timeline_markup(first_page["entries"])
+            markup = timeline_markup(first_page)
     elif (m := re.fullmatch(r"posts/([a-z0-9-]+)", path)):
         url = f"/api/posts/{m[1]}"
         try:
@@ -446,10 +446,12 @@ def summary(html: str, limit: int = 200) -> str:
     return text if len(text) <= limit else text[: limit - 1].rsplit(" ", 1)[0] + "…"
 
 
-def timeline_markup(entries: list[dict], unavailable: bool = False) -> str:
-    if unavailable:
+def timeline_markup(page: dict | None) -> str:
+    """The first timeline page as the client renders it; None means the timeline is unavailable."""
+    entries = page["entries"] if page else []
+    if page is None:
         content = '<p class="muted">could not load timeline</p>'
-    elif not entries:
+    elif not entries and page["next_cursor"] is None:
         content = '<p class="muted">nothing here yet</p>'
     else:
         items = []

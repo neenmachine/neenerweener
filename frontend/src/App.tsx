@@ -64,6 +64,7 @@ function TimelinePage() {
   const inFlight = useRef(false);
   const button = useRef<HTMLButtonElement>(null);
   const list = useRef<HTMLDivElement>(null);
+  const empty = useRef<HTMLParagraphElement>(null);
   // Index of the entry to focus after the last page removes the focused button.
   const focusAt = useRef<number | null>(null);
   useEffect(() => {
@@ -79,7 +80,8 @@ function TimelinePage() {
   useEffect(() => {
     if (focusAt.current === null) return;
     const links = list.current?.querySelectorAll<HTMLElement>(".timeline-entry > footer > a");
-    links?.[Math.min(focusAt.current, links.length - 1)]?.focus();
+    const link = links?.[Math.min(focusAt.current, links.length - 1)];
+    (link ?? empty.current)?.focus();
     focusAt.current = null;
   }, [older]);
   const heading = <h1>timeline</h1>;
@@ -95,13 +97,6 @@ function TimelinePage() {
   const cursor = pages[pages.length - 1].next_cursor;
   const seen = new Set<number>();
   const entries = pages.flatMap((p) => p.entries).filter((e) => !seen.has(e.id) && !!seen.add(e.id));
-  if (!entries.length)
-    return (
-      <article>
-        {heading}
-        <p className="muted">nothing here yet</p>
-      </article>
-    );
   const loadMore = () => {
     if (inFlight.current || cursor === null) return;
     inFlight.current = true;
@@ -131,6 +126,12 @@ function TimelinePage() {
   return (
     <article>
       {heading}
+      {/* A page can be empty and still have older entries (the server skips bad rows); only the end is empty. */}
+      {!entries.length && cursor === null && (
+        <p className="muted" tabIndex={-1} ref={empty}>
+          nothing here yet
+        </p>
+      )}
       {/* Mirrors timeline_markup in backend/app.py, so the swap from the server markup is not visible. */}
       <div className="timeline" ref={list}>
         {entries.map((e) => (

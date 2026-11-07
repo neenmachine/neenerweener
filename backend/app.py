@@ -12,7 +12,7 @@ from pathlib import Path
 
 import yaml
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from markdown_it import MarkdownIt
@@ -30,6 +30,7 @@ FRONTEND_DIST = Path(os.environ.get("FRONTEND_DIST", Path(__file__).parent.paren
 FILENAME = re.compile(r"^([a-z0-9-]+)\.md$")
 PROJECT = re.compile(r"[a-z0-9-]+")
 from operations import check_readiness, configure_logging, configure_sentry
+from timeline import TimelineStore, TimelineStoreProtocol, serialize_entry
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +60,9 @@ dollarmath_plugin(md, allow_digits=False)
 app = FastAPI()
 configure_logging()
 configure_sentry()
+timeline_store: TimelineStoreProtocol | None = (
+    TimelineStore(os.environ["DATABASE_URL"]) if os.environ.get("DATABASE_URL") else None
+)
 
 
 @app.middleware("http")
@@ -110,6 +114,22 @@ async def security_middleware(request: Request, call_next):
 @app.get("/healthz")
 async def healthz():
     return {"status": "ok"}
+
+
+@app.get("/api/timeline")
+def list_timeline(
+    before: int | None = Query(default=None, gt=0),
+    limit: int = Query(default=20, ge=1, le=20),
+):
+    if timeline_store is None:
+        raise HTTPException(503, "timeline unavailable")
+    rows = timeline_store.list(before, limit)
+    has_next = len(rows) > limit
+    entries = [serialize_entry(row) for row in rows[:limit]]
+    return {
+        "entries": entries,
+        "next_cursor": entries[-1]["id"] if has_next else None,
+    }
 
 
 @app.get("/readyz")

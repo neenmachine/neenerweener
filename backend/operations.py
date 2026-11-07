@@ -4,7 +4,12 @@ import json
 import logging
 import os
 import sys
+import asyncio
 import traceback
+
+from sqlalchemy import text
+
+from timeline import database_engine
 from datetime import datetime, timezone
 from urllib.parse import urlsplit, urlunsplit
 
@@ -41,10 +46,23 @@ def configure_logging() -> None:
 
 
 async def check_readiness() -> tuple[bool, str | None]:
-    """Return readiness without making the pre-database app depend on a database."""
-    if not os.environ.get("DATABASE_URL"):
+    """Return readiness with a bounded database check when configured."""
+    database_url = os.environ.get("DATABASE_URL")
+    if not database_url:
         return True, None
-    # PR 1 replaces this seam with a bounded database SELECT 1.
+
+    def check() -> None:
+        engine = database_engine(database_url, connect_args={"connect_timeout": 2})
+        try:
+            with engine.connect() as connection:
+                connection.execute(text("SELECT 1"))
+        finally:
+            engine.dispose()
+
+    try:
+        await asyncio.wait_for(asyncio.to_thread(check), timeout=3)
+    except Exception:
+        return False, "database unavailable"
     return True, None
 
 

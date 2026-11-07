@@ -394,7 +394,10 @@ def frontend(path: str, request: Request):
     index = contained_file(root, "index.html")
     if not index:
         raise HTTPException(404, "not found")
-    before_cursor = timeline_before(request) if path.strip("/") == "timeline" else None
+    if path.strip("/") == "timeline":
+        before_cursor = timeline_before(request)
+    else:
+        before_cursor = None
     page = page_data(path, before_cursor)
     if page is None:
         return HTMLResponse(fill_index(index.read_text(encoding="utf-8"), {}, {"title": "neenerweener"}, ""))
@@ -404,10 +407,11 @@ def frontend(path: str, request: Request):
 
 def timeline_before(request: Request) -> int | None:
     values = request.query_params.getlist("before")
-    if len(values) != 1 or not values[0].isdigit():
+    if not values:
         return None
-    before = int(values[0])
-    return before if before > 0 else None
+    if len(values) != 1 or not values[0].isdigit() or int(values[0]) <= 0:
+        raise HTTPException(400, "invalid timeline cursor")
+    return int(values[0])
 
 
 def page_data(path: str, before: int | None = None) -> tuple[dict, dict, str, int] | None:

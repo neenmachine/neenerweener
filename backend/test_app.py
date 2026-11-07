@@ -455,20 +455,21 @@ def test_server_rendered_pages(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize(
-    ("query", "expected_id", "next_cursor"),
+    ("query", "expected_id", "next_cursor", "status_code"),
     [
-        ("", 1, 11),
-        ("?before=11", 11, 22),
-        ("?before=nope", 1, 11),
-        ("?before=11&before=22", 1, 11),
-        ("?before=11&before=nope", 1, 11),
-        ("?before=", 1, 11),
-        ("?before=0", 1, 11),
-        ("?before=22", 22, None),
-        ("?before=33", 33, 11),
+        ("", 1, 11, 200),
+        ("?before=11", 11, 22, 200),
+        ("?before=nope", None, None, 400),
+        ("?before=11&before=22", None, None, 400),
+        ("?before=11&before=nope", None, None, 400),
+        ("?before=", None, None, 400),
+        ("?before=0", None, None, 400),
+        ("?before=-1", None, None, 400),
+        ("?before=22", 22, None, 200),
+        ("?before=33", 33, 11, 200),
     ],
 )
-def test_timeline_ssr_and_preload_share_one_initial_page(tmp_path, monkeypatch, query, expected_id, next_cursor):
+def test_timeline_ssr_and_preload_share_one_initial_page(tmp_path, monkeypatch, query, expected_id, next_cursor, status_code):
     dist = tmp_path / "dist"
     dist.mkdir()
     (dist / "index.html").write_text(INDEX)
@@ -486,7 +487,11 @@ def test_timeline_ssr_and_preload_share_one_initial_page(tmp_path, monkeypatch, 
 
     monkeypatch.setattr(app, "timeline_store", Store())
     response = TestClient(app.app).get("/timeline" + query)
-    assert response.status_code == 200
+    assert response.status_code == status_code
+    if status_code == 400:
+        assert response.json() == {"detail": "invalid timeline cursor"}
+        assert 'id="preload"' not in response.text
+        return
     html = response.text
     preload = html.split('<script id="preload" type="application/json">')[1].split("</script>")[0]
     data = __import__("json").loads(preload)

@@ -73,3 +73,18 @@ def test_syntax_token_colors_meet_wcag_aa_on_code_backgrounds(dark):
     }
     failing = {k: round(r, 2) for k, r in ratios.items() if r < 4.5}
     assert not failing, failing
+
+
+ANCHOR_RULE = re.compile(r"article :is\(h2, h3, h4, h5, h6\)[^{]*\.anchor[^{]*\{([^}]*)\}")
+
+
+@pytest.mark.parametrize("dark", [False, True], ids=["light", "dark"])
+def test_heading_anchor_glyph_meets_wcag_aa(dark):
+    # The `#` is text once shown (hover, focus, touch), so it needs 4.5:1 on the page, at full opacity.
+    rules = ANCHOR_RULE.findall(CSS)
+    opacities = {o for rule in rules for o in re.findall(r"opacity: ([\d.]+);", rule)}
+    assert opacities == {"0", "1"}, opacities
+    v = scheme_vars(dark)
+    color = re.search(r"\bcolor: var\(--([\w-]+)\);", rules[0]).group(1)
+    ratio = contrast(v[color], v["bg"])
+    assert ratio >= 4.5, (color, ratio)

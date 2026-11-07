@@ -49,4 +49,4 @@ def add_heading_anchors(state) -> None:
         anchor_text = Token("text", "", 0)
         anchor_text.content = "#"
         anchor_close = Token("link_close", "a", -1)
-        inline.children = [anchor_open, anchor_text, anchor_close, *(inline.children or [])]
+        inline.children = [*(inline.children or []), anchor_open, anchor_text, anchor_close]

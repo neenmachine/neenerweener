@@ -29,7 +29,7 @@ from pygments.util import ClassNotFound
 
 from anchors import add_heading_anchors
 from operations import check_readiness, configure_logging, load_schema_heads
-from routes import page_kind
+import routes
 
 POSTS_DIR = Path(os.environ.get("POSTS_DIR", Path(__file__).parent.parent / "posts"))
 DRAFTS_DIR = Path(os.environ.get("DRAFTS_DIR", Path(__file__).parent.parent / "drafts"))
@@ -1000,34 +1000,40 @@ app.include_router(discovery_router)
 def frontend(path: str, request: Request):
     if path == "api" or path.startswith("api/"):
         raise HTTPException(404, "not found")
-    kind = page_kind(path)
-    headers = {"X-Robots-Tag": "noindex"} if path.strip("/") == "admin" or path.strip("/").startswith("admin/") else None
+    headers = {"X-Robots-Tag": "noindex"} if routes.noindex(path) else None
     root = FRONTEND_DIST.resolve()
-    if not root.is_dir():
-        raise HTTPException(404, "not found")
-    requested = contained_file(root, path)
-    if requested:
-        if requested.name == "index.html":
-            target = "/" + path[: -len("index.html")]
-            if not target.endswith("/"):
-                target += "/"
-            location = target + (f"?{request.url.query}" if request.url.query else "")
-            return RedirectResponse(location, status_code=301, headers=headers)
-        return FileResponse(requested, headers=headers)
     index = contained_file(root, "index.html")
     if not index:
-        raise HTTPException(404, "not found")
-    before_cursor = timeline_before(request) if kind and kind[0] == "timeline" else None
-    page = page_data(kind, before_cursor)
-    if page is None:
-        preload, head, markup, status_code = not_found_page("not found")
-    else:
-        preload, head, markup, status_code = page
-    return HTMLResponse(
-        fill_index(index.read_text(encoding="utf-8"), preload, head, markup),
-        status_code=status_code,
-        headers=headers,
-    )
+        raise HTTPException(404, "not found", headers=headers)
+    # One redirect to the one URL form, files included: extra slashes go, and /index.html is /.
+    target = routes.canonical("/" + path)
+    file = contained_file(root, path)
+    if target != "/" + path or file == index:
+        query = f"?{request.url.query}" if request.url.query else ""
+        return RedirectResponse(quote("/" if file == index else target, safe="/") + query, status_code=301, headers=headers)
+    if file:
+        return FileResponse(file, headers=headers)
+    preload, head, markup, status_code = render_page(routes.match(target), request)
+    return HTMLResponse(fill_index(index.read_text(encoding="utf-8"), preload, head, markup), status_code=status_code, headers=headers)
+
+
+def render_page(match: tuple[str, dict[str, str]] | None, request: Request) -> tuple[dict, dict, str, int]:
+    """Preload data (with the page the React app renders), head tags, no-JS markup and status for a matched path."""
+    if match is None:
+        return not_found_page("not found")
+    kind, params = match
+    preload, head, markup, status_code = RENDERERS[kind](request, **params)
+    # A renderer that answers not-found sets its own page.
+    return {"page": {"kind": kind, **params}} | preload, head, markup, status_code
+
+
+def home_page(request: Request) -> tuple[dict, dict, str, int]:
+    return {"/api/posts": list_posts()}, {"title": "neenerweener"}, '<main><h1 class="sr-only">neenerweener</h1></main>', 200
+
+
+def timeline_page_data(request: Request) -> tuple[dict, dict, str, int]:
+    page, markup, status_code = timeline_page(timeline_before(request))
+    return {"/api/timeline": page}, {"title": "timeline", "description": "timeline"}, markup, status_code
 
 
 def timeline_before(request: Request) -> int | None:
@@ -1039,20 +1045,8 @@ def timeline_before(request: Request) -> int | None:
     return int(values[0])
 
 
-def page_data(kind: tuple[str, ...] | None, before: int | None = None) -> tuple[dict, dict, str, int] | None:
-    """For known public pages: preload data, head tags, and no-JS markup."""
-    if kind is None:
-        return None
-    if kind[0] == "home":
-        return {"/api/posts": list_posts()}, {"title": "neenerweener"}, '<main><h1 class="sr-only">neenerweener</h1></main>', 200
-    if kind[0] == "timeline":
-        page, markup, status_code = timeline_page(before)
-        return {"/api/timeline": page}, {"title": "timeline", "description": "timeline"}, markup, status_code
-    if kind[0] == "admin":
-        return {}, {"title": "admin"}, ADMIN_NOSCRIPT, 200
-    if kind[0] == "post":
-        return post_page_data(kind[1])
-    return code_page_data(*kind[1:])
+def admin_page(request: Request) -> tuple[dict, dict, str, int]:
+    return {}, {"title": "admin", "robots": "noindex"}, ADMIN_NOSCRIPT, 200
 
 
 # The server footer for pages other than /timeline; Footer in App.tsx renders the same links.
@@ -1064,7 +1058,7 @@ ADMIN_NOSCRIPT = (
 )
 
 
-def post_page_data(slug: str) -> tuple[dict, dict, str, int]:
+def post_page_data(request: Request, slug: str) -> tuple[dict, dict, str, int]:
     try:
         post = get_post(slug)
     except HTTPException:
@@ -1072,21 +1066,25 @@ def post_page_data(slug: str) -> tuple[dict, dict, str, int]:
     return {f"/api/posts/{slug}": post}, {"title": post["title"], "description": post["excerpt"] or summary(post["html"])}, post_markup(post), 200
 
 
-def code_page_data(project: str, code_path: str) -> tuple[dict, dict, str, int]:
+def code_page_data(request: Request, project: str, path: str = "") -> tuple[dict, dict, str, int]:
     try:
-        if not code_path_exists(project, code_path):
+        if not code_path_exists(project, path):
             return not_found_page("file not found")
     except HTTPException as exc:
         return not_found_page(str(exc.detail))
     return {}, {"title": "neenerweener"}, "", 200
 
 
+RENDERERS = {"home": home_page, "timeline": timeline_page_data, "admin": admin_page, "post": post_page_data, "code": code_page_data}
+
+
 def not_found_page(label: str, back: bool = False) -> tuple[dict, dict, str, int]:
-    """The one not-found view; the React app reads the label from the preload and renders the same markup."""
+    """The one not-found view; the React app reads it from the preload and renders the same markup."""
     heading = f'<h1 class="muted">{escape(label)}</h1>'
     heading = f'<div class="has-back"><a class="back" href="/" aria-label="back">←</a>{heading}</div>' if back else f'{heading}<a href="/">neenerweener</a>'
     markup = f'<main>{heading}{SITE_FOOTER}</main>'
-    return {"not-found": label}, {"title": "not found", "robots": "noindex"}, markup, 404
+    page = {"kind": "not-found", "label": label, "back": back}
+    return {"page": page}, {"title": "not found", "robots": "noindex"}, markup, 404
 
 
 def timeline_page(before: int | None) -> tuple[dict | None, str, int]:

@@ -24,8 +24,7 @@ test("an admin page without not-found preload does not render not found", async 
   await act(async () => {
     root = createRoot(document.getElementById("root")!);
     root.render(<App />);
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 20));
   });
   expect(document.querySelector("main")?.textContent ?? "").not.toContain("not found");
   expect(document.querySelector('input[type="password"]')).not.toBeNull();

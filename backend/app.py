@@ -26,6 +26,7 @@ from pygments.util import ClassNotFound
 from anchors import add_heading_anchors
 from operations import check_readiness, configure_logging, load_schema_heads
 from timeline import TimelineStore, TimelineStoreProtocol, serialize_entry
+from routes import page_kind
 
 POSTS_DIR = Path(os.environ.get("POSTS_DIR", Path(__file__).parent.parent / "posts"))
 DRAFTS_DIR = Path(os.environ.get("DRAFTS_DIR", Path(__file__).parent.parent / "drafts"))
@@ -118,7 +119,7 @@ async def security_middleware(request: Request, call_next):
     return response
 
 
-@app.get("/healthz")
+@app.api_route("/healthz", methods=["GET", "HEAD"])
 async def healthz():
     return {"status": "ok"}
 
@@ -148,7 +149,7 @@ def list_timeline(
     }
 
 
-@app.get("/readyz")
+@app.api_route("/readyz", methods=["GET", "HEAD"])
 async def readyz():
     ready, reason = await check_readiness(timeline_store, EXPECTED_SCHEMA_REVISIONS)
     if not ready:
@@ -400,8 +401,9 @@ def frontend(path: str, request: Request):
         before_cursor = None
     page = page_data(path, before_cursor)
     if page is None:
-        return HTMLResponse(fill_index(index.read_text(encoding="utf-8"), {}, {"title": "neenerweener"}, ""))
-    preload, head, markup, status_code = page
+        preload, head, markup, status_code = not_found_page("not found")
+    else:
+        preload, head, markup, status_code = page
     return HTMLResponse(fill_index(index.read_text(encoding="utf-8"), preload, head, markup), status_code=status_code)
 
 
@@ -415,30 +417,47 @@ def timeline_before(request: Request) -> int | None:
 
 
 def page_data(path: str, before: int | None = None) -> tuple[dict, dict, str, int] | None:
-    """For the home, timeline, and post pages: preload data, head tags, and no-JS markup."""
-    path = path.strip("/")
-    preload: dict = {}
-    head = {"title": "neenerweener"}
-    markup = ""
-    status_code = 200
-    if path == "":
-        preload["/api/posts"] = list_posts()
-    elif path == "timeline":
-        head = {"title": "timeline", "description": "timeline"}
-        preload["/api/timeline"], markup, status_code = timeline_page(before)
-    elif (m := re.fullmatch(r"posts/([a-z0-9-]+)", path)):
-        url = f"/api/posts/{m[1]}"
-        try:
-            post = get_post(m[1])
-        except HTTPException:
-            preload[url] = None
-        else:
-            preload[url] = post
-            head = {"title": post["title"], "description": post["excerpt"] or summary(post["html"])}
-            markup = post_markup(post)
-    else:
+    """For known public pages: preload data, head tags, and no-JS markup."""
+    kind = page_kind(path)
+    if kind is None:
         return None
-    return preload, head, markup, status_code
+    if kind[0] == "home":
+        return {"/api/posts": list_posts()}, {"title": "neenerweener"}, "", 200
+    if kind[0] == "timeline":
+        page, markup, status_code = timeline_page(before)
+        return {"/api/timeline": page}, {"title": "timeline", "description": "timeline"}, markup, status_code
+    if kind[0] == "now":
+        return None
+    if kind[0] == "post":
+        slug = kind[1]
+        url = f"/api/posts/{slug}"
+        try:
+            post = get_post(slug)
+        except HTTPException:
+            preload, head, markup, status = not_found_page("post not found")
+            preload[url] = None
+            return preload, head, markup, status
+        return {url: post}, {"title": post["title"], "description": post["excerpt"] or summary(post["html"])}, post_markup(post), 200
+    if kind[0] == "code":
+        project, code_path = kind[1:]
+        try:
+            project_root(project)
+            if code_path:
+                # A valid directory is a public folder page; other paths must be files.
+                root = project_root(project)
+                if not contained_file(root, code_path) and not any(
+                    p.is_dir() and p.relative_to(root).as_posix() == code_path for p in root.rglob("*")
+                ):
+                    return not_found_page("file not found")
+        except HTTPException as exc:
+            return not_found_page(str(exc.detail))
+        return {}, {"title": "neenerweener"}, "", 200
+    return None
+
+
+def not_found_page(label: str) -> tuple[dict, dict, str, int]:
+    markup = f'<main><p class="muted">{escape(label)}</p><a href="/">neenerweener</a></main>'
+    return {"not-found": True}, {"title": "not found", "robots": "noindex"}, markup, 404
 
 
 def timeline_page(before: int | None) -> tuple[dict | None, str, int]:
@@ -528,6 +547,8 @@ def fill_index(index: str, preload: dict, head: dict, markup: str) -> str:
     if head.get("description"):
         tags += [f'<meta name="description" content="{escape(head["description"])}" />',
                  f'<meta property="og:description" content="{escape(head["description"])}" />']
+    if head.get("robots"):
+        tags.append(f'<meta name="robots" content="{escape(head["robots"])}">')
     # "<" escaped so post text cannot close the script tag.
     data = json.dumps(preload).replace("<", "\\u003c")
     tags.append(f'<script id="preload" type="application/json">{data}</script>')

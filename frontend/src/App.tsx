@@ -13,6 +13,7 @@ const slug = location.pathname.match(/^\/posts\/([a-z0-9-]+)\/?$/)?.[1];
 // There is no project index: Henry links to code from his posts.
 const code = location.pathname.match(/^\/code\/([a-z0-9-]+)(?:\/(.+?))?\/?$/);
 const timeline = /^\/timeline\/?$/.test(location.pathname);
+const home = /^\/?$/.test(location.pathname);
 // /?tag=<tag> filters the post list.
 const tag = new URLSearchParams(location.search).get("tag");
 const IMAGE = /\.(png|jpe?g|webp|gif|svg)$/i;
@@ -31,9 +32,18 @@ export default function App() {
     );
   return (
     <main>
-      {slug ? <PostPage slug={slug} /> : timeline ? <TimelinePage /> : <PostList />}
+      {slug ? <PostPage slug={slug} /> : timeline ? <TimelinePage /> : home ? <PostList /> : <NotFound />}
       <Footer />
     </main>
+  );
+}
+
+function NotFound() {
+  return (
+    <>
+      <p className="muted">not found</p>
+      <a href="/">neenerweener</a>
+    </>
   );
 }
 

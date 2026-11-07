@@ -1,4 +1,5 @@
 import xml.etree.ElementTree as ET
+from urllib.parse import urlparse
 
 from fastapi.testclient import TestClient
 
@@ -75,6 +76,9 @@ def test_discovery_routes_are_available(tmp_path, monkeypatch):
         "https://www.neenerweener.ca/code/public-project",
     ]
     assert urls[1].findtext("{http://www.sitemaps.org/schemas/sitemap/0.9}lastmod") == "2026-03-28"
+    for url in urls:
+        loc = url.findtext("{http://www.sitemaps.org/schemas/sitemap/0.9}loc")
+        assert client.get(urlparse(loc).path).status_code == 200
     sitemap_head = client.head("/sitemap.xml")
     assert sitemap_head.status_code == 200
     assert sitemap_head.headers["content-type"] == "application/xml; charset=utf-8"
@@ -92,5 +96,5 @@ def test_html_head_advertises_feed(tmp_path, monkeypatch):
 
     for path in ("/", "/index.html", "/code/project", "/posts/missing"):
         response = client.get(path)
-        assert response.status_code == 200
+        assert response.status_code == (404 if path in ("/code/project", "/posts/missing") else 200)
         assert '<link rel="alternate" type="application/atom+xml" href="/feed.xml" title="Atom feed" />' in response.text

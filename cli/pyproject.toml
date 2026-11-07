@@ -5,6 +5,9 @@ description = "Command line client for the Ween timeline"
 requires-python = ">=3.11"
 dependencies = []
 
+[dependency-groups]
+dev = ["pytest>=9.0"]
+
 [project.scripts]
 tweet = "ween_tweet.cli:main"
 

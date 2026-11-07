@@ -54,20 +54,51 @@ class CliTests(unittest.TestCase):
             with self.assertRaisesRegex(cli.CliError, "server error") as cm: cli._request("https://s", "/api/admin/timeline", {"body_markdown":"x"}, "tok")
             self.assertEqual(cm.exception.code, 1); self.assertEqual(op.call_count, 1)
 
-    def test_tweet_errors_never_include_token_signature_or_body(self):
+    def test_tweet_errors_never_include_request_input(self):
         cases = [
-            ({"body_markdown":"UNPUBLISHED_TEXT"}, "tok-123"),
-            ({"challenge_id":"challenge-secret", "signature":"signature-secret"}, None),
+            ({"key_fingerprint":"SHA256:fingerprint-secret"}, None),
+            ({"challenge_id":"challenge-secret"}, None),
+            ({"message":"challenge-message-secret"}, None),
+            ({"signature":"-----BEGIN SSH SIGNATURE-----\nsignature-secret\n-----END SSH SIGNATURE-----"}, None),
+            ({"body_markdown":"UNPUBLISHED_TEXT"}, None),
+            ({"body_markdown":"text"}, "bearer-secret"),
+        ]
+        headers = [
+            (429, "Retry-After", "request throttled"),
+            (500, "X-Request-ID", "server error; retry"),
         ]
         for payload, bearer in cases:
+            secrets = [*payload.values(), *([bearer] if bearer else [])]
+            for status, header, expected in headers:
+                for secret in secrets:
+                    with self.subTest(field=next(iter(payload)), bearer=bool(bearer), header=header):
+                        error = cli.HTTPError("https://s", status, "x", {header: f"prefix-{secret}-suffix"}, None)
+                        with patch.object(cli.OPENER, "open", side_effect=error):
+                            with self.assertRaises(cli.CliError) as cm:
+                                cli._request("https://s", "/api/admin/timeline", payload, bearer)
+                        self.assertEqual(str(cm.exception), expected)
+
             error = cli.HTTPError("https://s", 422, "x", {}, None)
-            error.read = lambda n=-1, payload=payload, bearer=bearer: json.dumps({"detail": "leak " + " ".join([*payload.values(), bearer or ""]) }).encode()
+            error.read = lambda n=-1, secrets=secrets: json.dumps({"detail": "leak " + " ".join(secrets)}).encode()
             with patch.object(cli.OPENER, "open", side_effect=error):
                 with self.assertRaises(cli.CliError) as cm:
                     cli._request("https://s", "/api/admin/timeline", payload, bearer)
-                for secret in [*payload.values(), bearer]:
-                    if secret:
-                        self.assertNotIn(secret, str(cm.exception))
+            self.assertEqual(str(cm.exception), "server rejected the tweet")
+
+    def test_tweet_omits_unsafe_server_headers(self):
+        cases = ["line\nbreak", "null\x00byte", "delete\x7fbyte", "x" * 81]
+        headers = [
+            (429, "Retry-After", "request throttled"),
+            (500, "X-Request-ID", "server error; retry"),
+        ]
+        for status, header, expected in headers:
+            for value in cases:
+                with self.subTest(header=header, value_length=len(value)):
+                    error = cli.HTTPError("https://s", status, "x", {header: value}, None)
+                    with patch.object(cli.OPENER, "open", side_effect=error):
+                        with self.assertRaises(cli.CliError) as cm:
+                            cli._request("https://s", "/path", {"body_markdown":"text"})
+                    self.assertEqual(str(cm.exception), expected)
 
     def test_tweet_rejects_invalid_challenge_and_token_protocol(self):
         valid_challenge = {"challenge_id":"123e4567-e89b-12d3-a456-426614174000", "message":"m", "namespace":cli.NAMESPACE, "expires_at":"2099-01-01T00:00:00Z"}

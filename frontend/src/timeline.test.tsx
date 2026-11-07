@@ -52,7 +52,7 @@ async function open(first: Page, older: Page[]) {
 
 const text = () => document.querySelector("main > article")?.textContent ?? "";
 const status = () => document.querySelector('[role="status"]')?.textContent;
-const button = () => document.querySelector<HTMLButtonElement>(".load-more button");
+const button = () => document.querySelector<HTMLAnchorElement>(".load-more a");
 const ids = () => [...document.querySelectorAll(".timeline-entry")].map((e) => e.id);
 const click = () => {
   expect(button(), "load more button").not.toBeNull();
@@ -63,6 +63,7 @@ test("an empty page with a cursor keeps load more and shows the older entries", 
   const { fetch, release } = await open(page([], 11), [page([5], null)]);
   expect(text()).not.toContain("nothing here yet");
   expect(button()?.textContent ?? "").toContain("load more");
+  expect(button()?.getAttribute("href")).toBe("/timeline?before=11");
   click();
   expect(status()).toBe("loading");
   await release();

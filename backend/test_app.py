@@ -484,6 +484,7 @@ def test_timeline_empty_and_unavailable_are_distinct(tmp_path, monkeypatch):
     malformed = TestClient(app.app).get("/timeline").text
     assert '"/api/timeline": {"entries": [], "next_cursor": 11}' in malformed
     assert "nothing here yet" not in malformed
+    assert '<div class="load-more"><a href="/timeline?before=11">load more</a></div>' in malformed
 
     class BrokenStore:
         def list(self, before, limit):
@@ -494,6 +495,22 @@ def test_timeline_empty_and_unavailable_are_distinct(tmp_path, monkeypatch):
     assert broken.status_code == 503
     assert "could not load timeline" in broken.text
     assert "database details" not in broken.text
+
+
+@pytest.mark.parametrize(
+    ("page", "has_control", "href"),
+    [
+        ({"entries": [], "next_cursor": 11}, True, "/timeline?before=11"),
+        ({"entries": [], "next_cursor": None}, False, None),
+        ({"entries": [{"id": 1, "html": "<p>x</p>", "created_at": "2026-01-01T00:00:00+00:00"}], "next_cursor": 11}, True, "/timeline?before=11"),
+        ({"entries": [{"id": 1, "html": "<p>x</p>", "created_at": "2026-01-01T00:00:00+00:00"}], "next_cursor": None}, False, None),
+    ],
+)
+def test_timeline_markup_pagination_control_matches_cursor(page, has_control, href):
+    markup = app.timeline_markup(page)
+    control = '<div class="load-more"><a href="' + href + '">load more</a></div>' if href else ""
+    assert (control != "" and control in markup) is has_control
+    assert ('class="load-more"' in markup) is has_control
 
 
 def test_timeline_timestamp_format_is_utc_and_year_aware():

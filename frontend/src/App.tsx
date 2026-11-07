@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { type MouseEvent, type ReactNode, useEffect, useRef, useState } from "react";
 
 type Summary = { slug: string; title: string; excerpt: string | null; tags: string[]; draft: boolean };
 type Post = Summary & { html: string };
@@ -52,7 +52,9 @@ function Footer() {
 
 // Newest first. The first page comes from the preload; "load more" fetches older pages by cursor.
 function TimelinePage() {
-  const { data, error } = useApi<Timeline>("/api/timeline");
+  const before = new URLSearchParams(location.search).get("before");
+  const timelineUrl = `/api/timeline${before && /^\d+$/.test(before) && Number(before) > 0 ? `?before=${before}` : ""}`;
+  const { data, error } = useApi<Timeline>(timelineUrl);
   const [older, setOlder] = useState<Timeline[]>([]);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -62,7 +64,7 @@ function TimelinePage() {
   const [hash, setHash] = useState(location.hash);
   // A ref, not state: two activations in the same task both see busy=false.
   const inFlight = useRef(false);
-  const button = useRef<HTMLButtonElement>(null);
+  const button = useRef<HTMLAnchorElement>(null);
   const list = useRef<HTMLDivElement>(null);
   const empty = useRef<HTMLParagraphElement>(null);
   // Index of the entry to focus after the last page removes the focused button.
@@ -97,7 +99,8 @@ function TimelinePage() {
   const cursor = pages[pages.length - 1].next_cursor;
   const seen = new Set<number>();
   const entries = pages.flatMap((p) => p.entries).filter((e) => !seen.has(e.id) && !!seen.add(e.id));
-  const loadMore = () => {
+  const loadMore = (event: MouseEvent<HTMLAnchorElement>) => {
+    event.preventDefault();
     if (inFlight.current || cursor === null) return;
     inFlight.current = true;
     setBusy(true);
@@ -160,11 +163,11 @@ function TimelinePage() {
       {cursor !== null && (
         <div className="load-more">
           {/* aria-disabled, not disabled, so keyboard focus stays on the button while it loads. */}
-          <button type="button" ref={button} onClick={loadMore} aria-disabled={busy} aria-busy={busy}>
+          <a href={`/timeline?before=${cursor}`} ref={button} onClick={loadMore} aria-disabled={busy} aria-busy={busy}>
             {/* Both labels share one grid cell, so the button keeps the width of the longer one. */}
             <span hidden={busy}>load more</span>
             <span hidden={!busy}>loading</span>
-          </button>
+          </a>
           {/* The status region below announces it. */}
           {failed && (
             <span className="muted" aria-hidden="true">

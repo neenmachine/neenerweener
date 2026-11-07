@@ -1,5 +1,5 @@
-import re
 from os import environ
+from urllib.parse import urljoin
 from xml.etree.ElementTree import Element, SubElement, tostring
 
 from fastapi import APIRouter
@@ -29,9 +29,6 @@ def xml_response(root: Element, media_type: str) -> Response:
     )
 
 
-CAPTIONED = re.compile(r'<p>(<img [^>]*?title="([^\"]*)"[^>]*>)</p>')
-
-
 def feed_html(body: str, post_url: str) -> str:
     tokens = app.md.parse(body, {})
     for token in tokens:
@@ -40,12 +37,9 @@ def feed_html(body: str, post_url: str) -> str:
                 value = item.attrGet(attribute)
                 if value is None:
                     continue
-                if value.startswith("/"):
-                    item.attrSet(attribute, f"{origin()}{value}")
-                elif value.startswith("#"):
-                    item.attrSet(attribute, f"{post_url}{value}")
+                item.attrSet(attribute, urljoin(post_url, value))
     html = app.md.renderer.render(tokens, app.md.options, {})
-    return CAPTIONED.sub(r"<figure>\1<figcaption>\2</figcaption></figure>", html)
+    return app.CAPTIONED.sub(r"<figure>\1<figcaption>\2</figcaption></figure>", html)
 
 
 @router.api_route("/feed.xml", methods=["GET", "HEAD"])

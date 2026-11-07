@@ -89,7 +89,9 @@ def test_feed_no_excerpt_entry_is_rendered_html(tmp_path, monkeypatch):
     posts.mkdir()
     (posts / "source.md").write_text(
         "---\ntitle: source\ndate: 2026-03-28\n---\n"
-        "## Heading\n\n*emphasis* [x](/posts/other) [s](#sec)\n\n"
+        "## Heading\n\n*emphasis* [x](/posts/other) [relative](other) [query](?a=1) "
+        "[protocol-relative](//evil.example/x) [secure](https://example.com/x) "
+        "[email](mailto:test@example.com) [s](#sec)\n\n"
         "![a](/images/p.png \"cap\")\n\n```python\nprint('x')\n```"
     )
     monkeypatch.setattr(app, "POSTS_DIR", posts)
@@ -103,6 +105,11 @@ def test_feed_no_excerpt_entry_is_rendered_html(tmp_path, monkeypatch):
     html = content.text
     assert "<em>emphasis</em>" in html
     assert '<a href="https://www.neenerweener.ca/posts/other">x</a>' in html
+    assert '<a href="https://www.neenerweener.ca/posts/other">relative</a>' in html
+    assert '<a href="https://www.neenerweener.ca/posts/source?a=1">query</a>' in html
+    assert '<a href="https://evil.example/x">protocol-relative</a>' in html
+    assert '<a href="https://example.com/x">secure</a>' in html
+    assert '<a href="mailto:test@example.com">email</a>' in html
     assert 'src="https://www.neenerweener.ca/images/p.png"' in html
     assert "<figcaption>cap</figcaption>" in html
     assert 'href="https://www.neenerweener.ca/posts/source#sec"' in html

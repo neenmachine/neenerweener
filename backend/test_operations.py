@@ -16,6 +16,24 @@ from operations import JsonFormatter
 client = TestClient(app.app)
 
 
+def test_readyz_fails_closed_without_database(monkeypatch):
+    monkeypatch.setattr(app, "timeline_store", None)
+    response = client.get("/readyz")
+    assert response.status_code == 503
+    assert response.json() == {"status": "not_ready", "reason": "database unavailable"}
+
+
+def test_readyz_fails_closed_when_database_is_unavailable(monkeypatch):
+    class Unavailable:
+        def ping(self):
+            raise RuntimeError("postgres://secret")
+
+    monkeypatch.setattr(app, "timeline_store", Unavailable())
+    response = client.get("/readyz")
+    assert response.status_code == 503
+    assert "postgres" not in response.text
+
+
 def test_healthz_returns_ok():
     response = client.get("/healthz")
     assert response.status_code == 200

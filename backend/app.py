@@ -1051,7 +1051,9 @@ def frontend(path: str, request: Request):
     if file:
         return FileResponse(file, headers=headers)
     preload, head, markup, status_code = render_page(routes.match(target), request)
-    return HTMLResponse(fill_index(index.read_text(encoding="utf-8"), preload, head, markup), status_code=status_code, headers=headers)
+    if status_code == 404:
+        headers = {"X-Robots-Tag": "noindex"}
+    return HTMLResponse(fill_index(index.read_text(encoding="utf-8"), preload, head, markup, target), status_code=status_code, headers=headers)
 
 
 def render_page(match: tuple[str, dict[str, str]] | None, request: Request) -> tuple[dict, dict, str, int]:
@@ -1100,7 +1102,7 @@ def post_page_data(request: Request, slug: str) -> tuple[dict, dict, str, int]:
         post = get_post(slug)
     except HTTPException:
         return not_found_page("post not found", back=True)
-    return {f"/api/posts/{slug}": post}, {"title": post["title"], "description": post["excerpt"] or summary(post["html"])}, post_markup(post), 200
+    return {f"/api/posts/{slug}": post}, {"title": post["title"], "description": post["excerpt"] or summary(post["html"]), "published": post["date"]}, post_markup(post), 200
 
 
 def code_page_data(request: Request, project: str, path: str = "") -> tuple[dict, dict, str, int]:
@@ -1109,7 +1111,14 @@ def code_page_data(request: Request, project: str, path: str = "") -> tuple[dict
             return not_found_page("file not found")
     except HTTPException as exc:
         return not_found_page(str(exc.detail))
-    return {}, {"title": "neenerweener"}, "", 200
+    root = project_root(project)
+    title = f"{project}" if not path else f"{path} · {project}"
+    readme = readme_html(project, root)
+    description = summary(readme) if readme else None
+    head = {"title": title}
+    if description:
+        head["description"] = description
+    return {}, head, "", 200
 
 
 RENDERERS = {"home": home_page, "timeline": timeline_page_data, "admin": admin_page, "post": post_page_data, "code": code_page_data}
@@ -1246,15 +1255,11 @@ def post_markup(post: dict) -> str:
     )
 
 
-def fill_index(index: str, preload: dict, head: dict, markup: str) -> str:
-    tags = [f"<title>{escape(head['title'])}</title>", f'<meta property="og:title" content="{escape(head["title"])}" />',
-            '<meta property="og:site_name" content="neenerweener" />',
-            '<link rel="alternate" type="application/atom+xml" href="/feed.xml" title="Atom feed" />']
-    if head.get("description"):
-        tags += [f'<meta name="description" content="{escape(head["description"])}" />',
-                 f'<meta property="og:description" content="{escape(head["description"])}" />']
-    if head.get("robots"):
-        tags.append(f'<meta name="robots" content="{escape(head["robots"])}">')
+def fill_index(index: str, preload: dict, head: dict, markup: str, canonical_path: str) -> str:
+    from head import head_tags
+
+    tags = head_tags(preload["page"]["kind"], head, canonical_path)
+    tags += ['<link rel="alternate" type="application/atom+xml" href="/feed.xml" title="Atom feed" />']
     # "<" escaped so post text cannot close the script tag.
     data = json.dumps(preload).replace("<", "\\u003c")
     tags.append(f'<script id="preload" type="application/json">{data}</script>')

@@ -4,23 +4,32 @@ import socket
 import subprocess
 import sys
 import time
+from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from fastapi.testclient import TestClient
-
 import app
+from fastapi.testclient import TestClient
 from operations import JsonFormatter
-
 
 client = TestClient(app.app)
 
 
 def test_readyz_fails_closed_without_database(monkeypatch):
     monkeypatch.setattr(app, "timeline_store", None)
+    monkeypatch.setattr(app, "_admin_config", lambda: type("Config", (), {"valid": True})())
     response = client.get("/readyz")
     assert response.status_code == 503
     assert response.json() == {"status": "not_ready", "reason": "database unavailable"}
+
+
+def test_readyz_reports_invalid_auth_configuration(monkeypatch):
+    monkeypatch.setenv("ADMIN_ORIGIN", "http://127.0.0.1")
+    monkeypatch.setenv("ADMIN_PASSWORD_HASH", "$argon2id$configured")
+    monkeypatch.delenv("RATE_LIMIT_KEY", raising=False)
+    response = client.get("/readyz")
+    assert response.status_code == 503
+    assert response.json() == {"status": "not_ready", "reason": "invalid authentication configuration"}
 
 
 def test_readyz_fails_closed_when_database_is_unavailable(monkeypatch):
@@ -32,6 +41,7 @@ def test_readyz_fails_closed_when_database_is_unavailable(monkeypatch):
             raise RuntimeError("postgres://secret")
 
     monkeypatch.setattr(app, "timeline_store", Unavailable())
+    monkeypatch.setattr(app, "_admin_config", lambda: type("Config", (), {"valid": True})())
     response = client.get("/readyz")
     assert response.status_code == 503
     assert response.json() == {"status": "not_ready", "reason": "database unavailable"}
@@ -159,6 +169,7 @@ def test_uvicorn_writes_only_allowlisted_request_events():
             "--port",
             str(port),
             "--no-access-log",
+            "--no-proxy-headers",
         ],
         cwd=os.path.dirname(__file__),
         stdout=subprocess.PIPE,
@@ -214,6 +225,67 @@ def test_uvicorn_writes_only_allowlisted_request_events():
     for event in events:
         assert set(event) == allowed
         assert event["route"] == "/healthz"
+
+
+def test_real_uvicorn_ignores_forwarded_client_and_disables_access_log(tmp_path):
+    probe = tmp_path / "probe.py"
+    probe.write_text(
+        "async def app(scope, receive, send):\n"
+        "    body = scope['client'][0].encode()\n"
+        "    await send({'type': 'http.response.start', 'status': 200, 'headers': []})\n"
+        "    await send({'type': 'http.response.body', 'body': body})\n"
+    )
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "probe:app",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+            "--no-access-log",
+            "--no-proxy-headers",
+        ],
+        cwd=tmp_path,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    output = ""
+    try:
+        deadline = time.monotonic() + 10
+        while True:
+            try:
+                request = Request(f"http://127.0.0.1:{port}/", headers={"X-Forwarded-For": "203.0.113.9"})
+                with urlopen(request, timeout=1) as response:
+                    assert response.read() == b"127.0.0.1"
+                break
+            except (URLError, OSError):
+                if process.poll() is not None or time.monotonic() >= deadline:
+                    raise AssertionError("uvicorn did not become ready")
+                time.sleep(0.05)
+    finally:
+        process.terminate()
+        try:
+            output = process.communicate(timeout=5)[0]
+        except subprocess.TimeoutExpired:
+            process.kill()
+            output = process.communicate(timeout=5)[0]
+    assert '"GET /' not in output
+    assert "203.0.113.9" not in output
+
+
+def test_server_commands_disable_proxy_headers():
+    root = Path(__file__).parent.parent
+    for filename in ("Dockerfile", "Makefile"):
+        command = (root / filename).read_text(encoding="utf-8")
+        assert "--no-proxy-headers" in command
+        assert "--proxy-headers" not in command.replace("--no-proxy-headers", "")
 
 
 def test_exception_log_has_safe_structured_stack(caplog):

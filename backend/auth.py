@@ -17,15 +17,30 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
 
 from pwdlib import PasswordHash
-from sqlalchemy import BigInteger, Column, DateTime, Index, LargeBinary, Table, Text, delete, func, insert, select, text
+from sqlalchemy import (
+    CheckConstraint,
+    Column,
+    DateTime,
+    Index,
+    Integer,
+    LargeBinary,
+    PrimaryKeyConstraint,
+    Table,
+    Text,
+    delete,
+    func,
+    insert,
+    select,
+    text,
+)
 from sqlalchemy.engine import Engine
-
 from timeline import database_engine, metadata
 
 SESSION_HOURS = 12
 RATE_WINDOW_MINUTES = 15
 IP_FAILURE_LIMIT = 5
-GLOBAL_FAILURE_LIMIT = 30
+ACCOUNT_FAILURE_LIMIT = 30
+GLOBAL_FAILURE_LIMIT = 300
 PRODUCTION_COOKIE = "__Host-ween_session"
 DEVELOPMENT_COOKIE = "ween_session_dev"
 CSRF_HEADER = "X-CSRF-Token"
@@ -45,27 +60,32 @@ Index("ix_admin_sessions_expires_at", admin_sessions.c.expires_at)
 admin_login_failures = Table(
     "admin_login_failures",
     metadata,
-    Column("id", BigInteger, primary_key=True, autoincrement=True),
-    Column("client_ip", Text, nullable=False),
-    Column("occurred_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("bucket_key", LargeBinary(32), nullable=False),
+    Column("bucket_type", Text, nullable=False),
+    Column("window_start", DateTime(timezone=True), nullable=False),
+    Column("failure_count", Integer, nullable=False),
+    PrimaryKeyConstraint("bucket_key", "bucket_type"),
+    CheckConstraint("octet_length(bucket_key) = 32", name="ck_admin_login_failures_bucket_key_length"),
+    CheckConstraint("bucket_type IN ('ip', 'account', 'global')", name="ck_admin_login_failures_bucket_type"),
+    CheckConstraint("failure_count > 0", name="ck_admin_login_failures_count_positive"),
 )
-Index("ix_admin_login_failures_occurred_at", admin_login_failures.c.occurred_at)
-Index("ix_admin_login_failures_client_ip_occurred_at", admin_login_failures.c.client_ip, admin_login_failures.c.occurred_at)
 
 
 @dataclass(frozen=True)
 class AdminConfig:
     password_hash: str | None
+    rate_limit_key: bytes | None
     origin: str | None
     secure_cookie: bool
     cookie_name: str
 
     @classmethod
-    def from_env(cls) -> "AdminConfig":
+    def from_env(cls) -> AdminConfig:
         origin = os.environ.get("ADMIN_ORIGIN")
         secure = _origin_uses_secure_cookie(origin)
         return cls(
             password_hash=os.environ.get("ADMIN_PASSWORD_HASH"),
+            rate_limit_key=_decode_rate_limit_key(os.environ.get("RATE_LIMIT_KEY")),
             origin=origin,
             secure_cookie=secure,
             cookie_name=PRODUCTION_COOKIE if secure else DEVELOPMENT_COOKIE,
@@ -81,7 +101,62 @@ class AdminConfig:
             self.origin_valid
             and self.password_hash
             and self.password_hash.startswith("$argon2id$")
+            and self.rate_limit_key is not None
         )
+
+    def rate_identity(self, raw_headers: list[tuple[bytes, bytes]]) -> RateIdentity | None:
+        if self.rate_limit_key is None:
+            return None
+        return RateIdentity.from_headers(self.rate_limit_key, raw_headers)
+
+
+def _decode_rate_limit_key(value: str | None) -> bytes | None:
+    if value is None:
+        return None
+    encoded = value.encode("utf-8")
+    return encoded if len(encoded) == 32 else None
+
+
+@dataclass(frozen=True)
+class RateIdentity:
+    ip: bytes | None
+    account: bytes
+    global_: bytes
+
+    @classmethod
+    def from_headers(cls, secret: bytes, raw_headers: list[tuple[bytes, bytes]]) -> RateIdentity:
+        canonical_ip = _rightmost_forwarded_ip(raw_headers)
+        return cls(
+            ip=_rate_bucket(secret, b"ip", canonical_ip.encode("ascii")) if canonical_ip else None,
+            account=_rate_bucket(secret, b"account", b"admin"),
+            global_=_rate_bucket(secret, b"global", b"all"),
+        )
+
+    def buckets(self) -> tuple[tuple[str, bytes, int], ...]:
+        buckets = [("account", self.account, ACCOUNT_FAILURE_LIMIT), ("global", self.global_, GLOBAL_FAILURE_LIMIT)]
+        if self.ip is not None:
+            buckets.insert(0, ("ip", self.ip, IP_FAILURE_LIMIT))
+        return tuple(buckets)
+
+
+def _rightmost_forwarded_ip(raw_headers: list[tuple[bytes, bytes]]) -> str | None:
+    final = None
+    for name, value in raw_headers:
+        if name.lower() == b"x-forwarded-for":
+            final = value.split(b",")[-1]
+    if final is None or any(byte < 32 or byte == 127 for byte in final if byte not in (9,)):
+        return None
+    try:
+        candidate = final.decode("ascii").strip(" \t")
+        if not candidate or "%" in candidate:
+            return None
+        return ipaddress.ip_address(candidate).compressed
+    except (UnicodeDecodeError, ValueError):
+        return None
+
+
+def _rate_bucket(secret: bytes, domain: bytes, value: bytes) -> bytes:
+    return hmac.new(secret, b"ween-rate-limit\0" + domain + b"\0" + value, hashlib.sha256).digest()
 
 
 def _is_loopback_http(origin: str) -> bool:
@@ -171,12 +246,16 @@ class AuthStore:
             connect_args={"connect_timeout": 2, "options": "-c statement_timeout=2000"},
         )
 
-    def create_session(self, password_hash: str, client_ip: str) -> tuple[str, Session]:
+    def create_session(self, password_hash: str, identity: RateIdentity) -> tuple[str, Session]:
         token = secrets.token_urlsafe(32)
         csrf_token = csrf_token_for(token)
         expires_at = datetime.now(timezone.utc) + timedelta(hours=SESSION_HOURS)
         with self.engine.begin() as connection:
-            connection.execute(delete(admin_login_failures).where(admin_login_failures.c.client_ip == client_ip))
+            self._lock_failures(connection)
+            cleared = [identity.account]
+            if identity.ip is not None:
+                cleared.append(identity.ip)
+            connection.execute(delete(admin_login_failures).where(admin_login_failures.c.bucket_key.in_(cleared)))
             connection.execute(
                 insert(admin_sessions).values(
                     token_digest=token_digest(token),
@@ -209,18 +288,48 @@ class AuthStore:
         with self.engine.begin() as connection:
             connection.execute(delete(admin_sessions).where(admin_sessions.c.token_digest == token_digest(token)))
 
-    def retry_after(self, client_ip: str) -> int | None:
+    def retry_after(self, identity: RateIdentity) -> int | None:
         with self.engine.begin() as connection:
             self._lock_failures(connection)
-            return self._retry_after(connection, client_ip)
+            now = connection.execute(select(func.now())).scalar_one()
+            return self._retry_after(connection, identity, now)
 
-    def record_failure(self, client_ip: str) -> int | None:
+    def record_failure(self, identity: RateIdentity) -> int | None:
         with self.engine.begin() as connection:
             self._lock_failures(connection)
-            retry = self._retry_after(connection, client_ip)
+            now = connection.execute(select(func.now())).scalar_one()
+            retry = self._retry_after(connection, identity, now)
             if retry is not None:
                 return retry
-            connection.execute(insert(admin_login_failures).values(client_ip=client_ip))
+            window_start = now
+            for bucket_type, bucket_key, _limit in identity.buckets():
+                row = connection.execute(
+                    select(admin_login_failures).where(
+                        admin_login_failures.c.bucket_key == bucket_key,
+                        admin_login_failures.c.bucket_type == bucket_type,
+                    )
+                ).mappings().one_or_none()
+                if row is None:
+                    connection.execute(insert(admin_login_failures).values(
+                        bucket_key=bucket_key,
+                        bucket_type=bucket_type,
+                        window_start=window_start,
+                        failure_count=1,
+                    ))
+                elif row["window_start"] + timedelta(minutes=RATE_WINDOW_MINUTES) > now:
+                    connection.execute(
+                        admin_login_failures.update().where(
+                            admin_login_failures.c.bucket_key == bucket_key,
+                            admin_login_failures.c.bucket_type == bucket_type,
+                        ).values(failure_count=row["failure_count"] + 1)
+                    )
+                else:
+                    connection.execute(
+                        admin_login_failures.update().where(
+                            admin_login_failures.c.bucket_key == bucket_key,
+                            admin_login_failures.c.bucket_type == bucket_type,
+                        ).values(window_start=now, failure_count=1)
+                    )
             return None
 
     @staticmethod
@@ -228,24 +337,23 @@ class AuthStore:
         connection.execute(text("SELECT pg_advisory_xact_lock(843921770)"))
 
     @staticmethod
-    def _retry_after(connection, client_ip: str) -> int | None:
-        cutoff = func.now() - text("INTERVAL '15 minutes'")
-        rows = connection.execute(
-            select(admin_login_failures.c.client_ip, admin_login_failures.c.occurred_at)
-            .where(admin_login_failures.c.occurred_at > cutoff)
-            .order_by(admin_login_failures.c.occurred_at)
-        ).all()
-        ip_rows = [row.occurred_at for row in rows if row.client_ip == client_ip]
-        relevant = None
-        if len(ip_rows) >= IP_FAILURE_LIMIT:
-            relevant = ip_rows[-IP_FAILURE_LIMIT]
-        if len(rows) >= GLOBAL_FAILURE_LIMIT:
-            global_oldest = rows[-GLOBAL_FAILURE_LIMIT].occurred_at
-            relevant = max(relevant, global_oldest) if relevant else global_oldest
-        if relevant is None:
+    def _retry_after(connection, identity: RateIdentity, now: datetime) -> int | None:
+        relevant = []
+        for bucket_type, bucket_key, limit in identity.buckets():
+            row = connection.execute(
+                select(admin_login_failures).where(
+                    admin_login_failures.c.bucket_key == bucket_key,
+                    admin_login_failures.c.bucket_type == bucket_type,
+                )
+            ).mappings().one_or_none()
+            if row is None or row["failure_count"] < limit:
+                continue
+            expires_at = row["window_start"] + timedelta(minutes=RATE_WINDOW_MINUTES)
+            if expires_at > now:
+                relevant.append(expires_at)
+        if not relevant:
             return None
-        remaining = relevant + timedelta(minutes=RATE_WINDOW_MINUTES) - datetime.now(timezone.utc)
-        return max(1, math.ceil(remaining.total_seconds()))
+        return max(1, math.ceil((max(relevant) - now).total_seconds()))
 
     def close(self) -> None:
         self.engine.dispose()

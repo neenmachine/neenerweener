@@ -6,22 +6,22 @@ import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 
-import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy import delete, event, inspect, select, text, update
-from sqlalchemy.exc import IntegrityError
-
 import app
+import pytest
 from auth import (
-    AdminConfig,
-    AuthStore,
     DEVELOPMENT_COOKIE,
     PRODUCTION_COOKIE,
+    AdminConfig,
+    AuthStore,
+    RateIdentity,
     admin_login_failures,
     admin_sessions,
     hash_password,
     main,
 )
+from fastapi.testclient import TestClient
+from sqlalchemy import delete, event, inspect, select, text, update
+from sqlalchemy.exc import IntegrityError
 from timeline import TimelineStore, timeline_entries
 
 
@@ -59,6 +59,7 @@ def configured_app(monkeypatch, admin_password):
         connection.execute(delete(timeline_entries))
     monkeypatch.setenv("ADMIN_ORIGIN", "http://127.0.0.1")
     monkeypatch.setenv("ADMIN_PASSWORD_HASH", password_hash)
+    monkeypatch.setenv("RATE_LIMIT_KEY", "r" * 32)
     monkeypatch.setattr(app, "auth_store", auth_store)
     monkeypatch.setattr(app, "timeline_store", timeline_store)
     yield password, auth_store, timeline_store
@@ -107,6 +108,7 @@ def test_login_requires_exact_origin_before_reading_credentials(monkeypatch, mak
 def test_admin_origin_and_cookie_configuration(monkeypatch, admin_password, origin, valid, secure, cookie):
     monkeypatch.setenv("ADMIN_ORIGIN", origin)
     monkeypatch.setenv("ADMIN_PASSWORD_HASH", admin_password[1])
+    monkeypatch.setenv("RATE_LIMIT_KEY", "r" * 32)
     config = AdminConfig.from_env()
     assert config.valid is valid
     assert config.secure_cookie is secure
@@ -124,6 +126,18 @@ def test_login_rejects_insecure_origin_configuration_as_invalid_credentials(monk
 def test_login_rejects_invalid_hash_configuration_as_invalid_credentials(monkeypatch, configured_app, make_client):
     password, _, _ = configured_app
     monkeypatch.setenv("ADMIN_PASSWORD_HASH", "invalid")
+    response = login(make_client(base_url="http://127.0.0.1"), password)
+    assert response.status_code == 401
+    assert response.json() == {"detail": "invalid credentials"}
+
+
+@pytest.mark.parametrize("key", [None, "x" * 31, "x" * 33])
+def test_login_rejects_missing_or_wrong_size_rate_key(monkeypatch, configured_app, make_client, key):
+    password, _, _ = configured_app
+    if key is None:
+        monkeypatch.delenv("RATE_LIMIT_KEY")
+    else:
+        monkeypatch.setenv("RATE_LIMIT_KEY", key)
     response = login(make_client(base_url="http://127.0.0.1"), password)
     assert response.status_code == 401
     assert response.json() == {"detail": "invalid credentials"}
@@ -302,53 +316,169 @@ def test_admin_schema_errors_are_generic_and_no_store(configured_app, make_clien
         assert response.headers["Cache-Control"] == "no-store"
 
 
-def test_spoofed_forwarding_headers_do_not_evade_ip_limit(configured_app, make_client):
+def rate_identity(ip: str | None = None, key: bytes = b"r" * 32) -> RateIdentity:
+    headers = [] if ip is None else [(b"x-forwarded-for", ip.encode())]
+    return RateIdentity.from_headers(key, headers)
+
+
+def test_rightmost_forwarded_ip_wins_over_malicious_prefix(configured_app, make_client):
     password, _, _ = configured_app
-    client = make_client(base_url="http://127.0.0.1", client=("198.51.100.10", 41000))
+    client = make_client(base_url="http://127.0.0.1")
     for index in range(5):
         response = client.post(
             "/api/admin/login",
-            headers={"Origin": "http://127.0.0.1", "X-Forwarded-For": f"203.0.113.{index}"},
+            headers={
+                "Origin": "http://127.0.0.1",
+                "X-Forwarded-For": f"203.0.113.{index}, 198.51.100.10",
+            },
             json={"password": password + secrets.token_hex(2)},
         )
         assert response.status_code == 401
-    limited = login(client, password + secrets.token_hex(2))
+    limited = client.post(
+        "/api/admin/login",
+        headers={"Origin": "http://127.0.0.1", "X-Forwarded-For": "192.0.2.2, 198.51.100.10"},
+        json={"password": password + secrets.token_hex(2)},
+    )
     assert limited.status_code == 429
     assert limited.headers["Retry-After"].isdigit()
     assert 1 <= int(limited.headers["Retry-After"]) <= 15 * 60
 
 
-def test_successful_login_clears_client_failures(configured_app, make_client):
+def test_changing_rightmost_ip_uses_a_new_ip_bucket(configured_app, make_client):
+    password, _, _ = configured_app
+    client = make_client(base_url="http://127.0.0.1")
+    for _ in range(5):
+        response = client.post(
+            "/api/admin/login",
+            headers={"Origin": "http://127.0.0.1", "X-Forwarded-For": "malicious, 198.51.100.10"},
+            json={"password": password + secrets.token_hex(2)},
+        )
+        assert response.status_code == 401
+    response = client.post(
+        "/api/admin/login",
+        headers={"Origin": "http://127.0.0.1", "X-Forwarded-For": "malicious, 198.51.100.11"},
+        json={"password": password + secrets.token_hex(2)},
+    )
+    assert response.status_code == 401
+
+
+def test_repeated_forwarded_fields_use_final_item():
+    identity = RateIdentity.from_headers(
+        b"r" * 32,
+        [(b"x-forwarded-for", b"192.0.2.1"), (b"X-Forwarded-For", b"bad, 2001:0db8::1")],
+    )
+    assert identity.ip == rate_identity("2001:db8::1").ip
+    assert identity.ip != rate_identity("192.0.2.1").ip
+
+
+@pytest.mark.parametrize(
+    ("value", "canonical"),
+    [
+        ("192.0.2.1", "192.0.2.1"),
+        (" 2001:0db8:0:0::1 ", "2001:db8::1"),
+    ],
+)
+def test_forwarded_ip_is_canonical(value, canonical):
+    assert rate_identity(value).ip == rate_identity(canonical).ip
+
+
+@pytest.mark.parametrize("value", [None, "", "unknown", '"192.0.2.1"', "192.0.2.1:80", "[2001:db8::1]", "fe80::1%eth0", "192.0.2.1\x00"])
+def test_missing_or_malformed_forwarded_ip_skips_only_ip(value):
+    identity = rate_identity(value)
+    assert identity.ip is None
+    assert identity.account is not None
+    assert identity.global_ is not None
+
+
+def test_successful_login_clears_ip_and_account_but_not_global(configured_app, make_client):
     password, auth_store, _ = configured_app
+    identity = rate_identity("198.51.100.8")
     for _ in range(4):
-        assert auth_store.record_failure("testclient") is None
-    assert login(make_client(base_url="http://127.0.0.1"), password).status_code == 204
+        assert auth_store.record_failure(identity) is None
+    client = make_client(base_url="http://127.0.0.1")
+    response = client.post(
+        "/api/admin/login",
+        headers={"Origin": "http://127.0.0.1", "X-Forwarded-For": "198.51.100.8"},
+        json={"password": password},
+    )
+    assert response.status_code == 204
     with auth_store.engine.connect() as connection:
-        remaining = connection.execute(select(admin_login_failures)).all()
-    assert remaining == []
+        remaining = connection.execute(select(admin_login_failures)).mappings().all()
+    assert [row["bucket_type"] for row in remaining] == ["global"]
 
 
-def test_global_login_limit_is_persistent(configured_app):
+def test_account_limit_is_persistent_across_rotating_ips(configured_app):
     _, auth_store, _ = configured_app
     for index in range(30):
-        assert auth_store.record_failure(f"198.51.100.{index}") is None
-    retry = auth_store.retry_after("203.0.113.1")
+        assert auth_store.record_failure(rate_identity(f"198.51.100.{index + 1}")) is None
+    retry = auth_store.retry_after(rate_identity("203.0.113.1"))
     assert isinstance(retry, int)
     assert retry > 0
     restarted = AuthStore(os.environ["DATABASE_URL"])
     try:
-        assert restarted.retry_after("203.0.113.1") is not None
+        assert restarted.retry_after(rate_identity("203.0.113.2")) is not None
     finally:
         restarted.close()
+
+
+def test_account_limit_remains_without_ip(configured_app):
+    _, auth_store, _ = configured_app
+    identity = rate_identity()
+    for _ in range(30):
+        assert auth_store.record_failure(identity) is None
+    assert auth_store.retry_after(identity) is not None
+
+
+def test_retry_after_uses_latest_expiry_from_all_hit_buckets(configured_app):
+    _, auth_store, _ = configured_app
+    identity = rate_identity("198.51.100.12")
+    now = datetime.now(timezone.utc)
+    with auth_store.engine.begin() as connection:
+        connection.execute(delete(admin_login_failures))
+        connection.execute(
+            admin_login_failures.insert(),
+            [
+                {
+                    "bucket_key": identity.ip,
+                    "bucket_type": "ip",
+                    "window_start": now - timedelta(minutes=14),
+                    "failure_count": 5,
+                },
+                {
+                    "bucket_key": identity.account,
+                    "bucket_type": "account",
+                    "window_start": now - timedelta(minutes=1),
+                    "failure_count": 30,
+                },
+            ],
+        )
+    retry = auth_store.retry_after(identity)
+    assert retry is not None
+    assert 13 * 60 <= retry <= 14 * 60 + 1
+
+
+def test_no_raw_identity_is_persisted(configured_app):
+    _, auth_store, _ = configured_app
+    raw_ip = "198.51.100.77"
+    auth_store.record_failure(rate_identity(raw_ip))
+    with auth_store.engine.connect() as connection:
+        rows = connection.execute(select(admin_login_failures)).mappings().all()
+    assert {row["bucket_type"] for row in rows} == {"ip", "account", "global"}
+    assert all(len(row["bucket_key"]) == 32 for row in rows)
+    assert raw_ip.encode() not in b"".join(row["bucket_key"] for row in rows)
+
+
+def test_different_environment_keys_produce_different_buckets():
+    assert rate_identity("192.0.2.1", b"a" * 32) != rate_identity("192.0.2.1", b"b" * 32)
 
 
 def test_duplicate_session_token_rolls_back_without_replacing_existing(configured_app, monkeypatch):
     _, auth_store, _ = configured_app
     generated = secrets.token_urlsafe(32)
     monkeypatch.setattr("auth.secrets.token_urlsafe", lambda _size: generated)
-    auth_store.create_session(os.environ["ADMIN_PASSWORD_HASH"], "198.51.100.31")
+    auth_store.create_session(os.environ["ADMIN_PASSWORD_HASH"], rate_identity("198.51.100.31"))
     with pytest.raises(IntegrityError):
-        auth_store.create_session(os.environ["ADMIN_PASSWORD_HASH"], "198.51.100.32")
+        auth_store.create_session(os.environ["ADMIN_PASSWORD_HASH"], rate_identity("198.51.100.32"))
     with auth_store.engine.connect() as connection:
         assert len(connection.execute(select(admin_sessions)).all()) == 1
 
@@ -356,14 +486,12 @@ def test_duplicate_session_token_rolls_back_without_replacing_existing(configure
 def test_concurrent_session_creation_uses_unique_tokens(configured_app):
     _, auth_store, _ = configured_app
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-        sessions = list(
-            executor.map(
-                lambda index: auth_store.create_session(
-                    os.environ["ADMIN_PASSWORD_HASH"], f"198.51.100.{40 + index}"
-                ),
-                range(4),
-            )
-        )
+        sessions = list(executor.map(
+            lambda index: auth_store.create_session(
+                os.environ["ADMIN_PASSWORD_HASH"], rate_identity(f"198.51.100.{40 + index}")
+            ),
+            range(4),
+        ))
     assert len({token for token, _session in sessions}) == 4
     with auth_store.engine.connect() as connection:
         assert len(connection.execute(select(admin_sessions)).all()) == 4
@@ -371,8 +499,8 @@ def test_concurrent_session_creation_uses_unique_tokens(configured_app):
 
 def test_session_publish_failure_rolls_back_failure_clear(configured_app):
     _, auth_store, _ = configured_app
-    client_ip = "198.51.100.30"
-    assert auth_store.record_failure(client_ip) is None
+    identity = rate_identity("198.51.100.30")
+    assert auth_store.record_failure(identity) is None
 
     def fail_session_insert(_connection, _cursor, statement, _parameters, _context, _many):
         if statement.lstrip().upper().startswith("INSERT INTO ADMIN_SESSIONS"):
@@ -381,22 +509,21 @@ def test_session_publish_failure_rolls_back_failure_clear(configured_app):
     event.listen(auth_store.engine, "before_cursor_execute", fail_session_insert)
     try:
         with pytest.raises(RuntimeError, match="forced database failure"):
-            auth_store.create_session(os.environ["ADMIN_PASSWORD_HASH"], client_ip)
+            auth_store.create_session(os.environ["ADMIN_PASSWORD_HASH"], identity)
     finally:
         event.remove(auth_store.engine, "before_cursor_execute", fail_session_insert)
     with auth_store.engine.connect() as connection:
-        failures = connection.execute(
-            select(admin_login_failures).where(admin_login_failures.c.client_ip == client_ip)
-        ).all()
+        failures = connection.execute(select(admin_login_failures)).all()
         sessions = connection.execute(select(admin_sessions)).all()
-    assert len(failures) == 1
+    assert len(failures) == 3
     assert sessions == []
 
 
 def test_concurrent_failures_cannot_exceed_ip_allowance(configured_app):
     _, auth_store, _ = configured_app
+    identity = rate_identity("198.51.100.20")
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-        results = list(executor.map(lambda _: auth_store.record_failure("198.51.100.20"), range(10)))
+        results = list(executor.map(lambda _: auth_store.record_failure(identity), range(10)))
     assert sum(result is None for result in results) == 5
     assert sum(isinstance(result, int) for result in results) == 5
 
@@ -521,30 +648,24 @@ def test_auth_schema_has_expected_primary_keys_and_indexes():
     inspector = inspect(AuthStore(os.environ["DATABASE_URL"]).engine)
     try:
         assert inspector.get_pk_constraint("admin_sessions")["constrained_columns"] == ["token_digest"]
-        assert inspector.get_pk_constraint("admin_login_failures")["constrained_columns"] == ["id"]
-        indexes = {index["name"]: index["column_names"] for index in inspector.get_indexes("admin_login_failures")}
-        assert indexes == {
-            "ix_admin_login_failures_client_ip_occurred_at": ["client_ip", "occurred_at"],
-            "ix_admin_login_failures_occurred_at": ["occurred_at"],
-        }
+        assert inspector.get_pk_constraint("admin_login_failures")["constrained_columns"] == ["bucket_key", "bucket_type"]
+        assert inspector.get_indexes("admin_login_failures") == []
         with inspector.bind.begin() as connection:
             connection.execute(text("SET LOCAL enable_seqscan = off"))
             failure_plan = "\n".join(
                 row[0]
-                for row in connection.execute(
-                    text(
-                        "EXPLAIN SELECT * FROM admin_login_failures "
-                        "WHERE client_ip = '192.0.2.1' AND occurred_at > now() - INTERVAL '15 minutes'"
-                    )
-                )
+                for row in connection.execute(text(
+                    "EXPLAIN SELECT * FROM admin_login_failures "
+                    "WHERE bucket_key = decode(repeat('00', 32), 'hex') AND bucket_type = 'ip'"
+                ))
             )
             session_plan = "\n".join(
                 row[0]
-                for row in connection.execute(
-                    text("EXPLAIN SELECT * FROM admin_sessions WHERE token_digest = decode(repeat('00', 32), 'hex')")
-                )
+                for row in connection.execute(text(
+                    "EXPLAIN SELECT * FROM admin_sessions WHERE token_digest = decode(repeat('00', 32), 'hex')"
+                ))
             )
-        assert "ix_admin_login_failures_client_ip_occurred_at" in failure_plan
+        assert "admin_login_failures_pkey" in failure_plan
         assert "admin_sessions_pkey" in session_plan
     finally:
         inspector.bind.dispose()

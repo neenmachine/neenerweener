@@ -1,7 +1,7 @@
 """create admin sessions and persistent login throttling"""
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision = "002_admin_auth"
 down_revision = "001_timeline"
@@ -20,15 +20,14 @@ def upgrade() -> None:
     op.create_index("ix_admin_sessions_expires_at", "admin_sessions", ["expires_at"])
     op.create_table(
         "admin_login_failures",
-        sa.Column("id", sa.BigInteger(), sa.Identity(), primary_key=True),
-        sa.Column("client_ip", sa.Text(), nullable=False),
-        sa.Column("occurred_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-    )
-    op.create_index("ix_admin_login_failures_occurred_at", "admin_login_failures", ["occurred_at"])
-    op.create_index(
-        "ix_admin_login_failures_client_ip_occurred_at",
-        "admin_login_failures",
-        ["client_ip", "occurred_at"],
+        sa.Column("bucket_key", sa.LargeBinary(length=32), nullable=False),
+        sa.Column("bucket_type", sa.Text(), nullable=False),
+        sa.Column("window_start", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("failure_count", sa.Integer(), nullable=False),
+        sa.PrimaryKeyConstraint("bucket_key", "bucket_type"),
+        sa.CheckConstraint("octet_length(bucket_key) = 32", name="ck_admin_login_failures_bucket_key_length"),
+        sa.CheckConstraint("bucket_type IN ('ip', 'account', 'global')", name="ck_admin_login_failures_bucket_type"),
+        sa.CheckConstraint("failure_count > 0", name="ck_admin_login_failures_count_positive"),
     )
 
 

@@ -176,11 +176,6 @@ class TimelineMutation(BaseModel):
     body_markdown: str
 
 
-def trusted_client_ip(request: Request) -> str:
-    """Use only the client identity accepted by the ASGI server's trusted-proxy policy."""
-    return request.client.host if request.client else "unknown"
-
-
 def _admin_config() -> AdminConfig:
     return AdminConfig.from_env()
 
@@ -271,19 +266,23 @@ def admin_login(payload: LoginRequest, request: Request, response: Response):
     if not config.origin_valid:
         raise HTTPException(401, "invalid credentials")
     _check_origin(request, config)
+    if not config.valid:
+        raise HTTPException(401, "invalid credentials")
     if auth_store is None:
         raise HTTPException(503, "admin unavailable")
-    client_ip = trusted_client_ip(request)
+    identity = config.rate_identity(request.scope.get("headers", []))
+    if identity is None:
+        raise HTTPException(401, "invalid credentials")
     try:
-        retry = auth_store.retry_after(client_ip)
+        retry = auth_store.retry_after(identity)
         if retry is not None:
             raise HTTPException(429, "too many login attempts", headers={"Retry-After": str(retry)})
         if not verify_password(payload.password, config.password_hash):
-            retry = auth_store.record_failure(client_ip)
+            retry = auth_store.record_failure(identity)
             if retry is not None:
                 raise HTTPException(429, "too many login attempts", headers={"Retry-After": str(retry)})
             raise HTTPException(401, "invalid credentials")
-        token, session = auth_store.create_session(config.password_hash or "", client_ip)
+        token, session = auth_store.create_session(config.password_hash or "", identity)
     except HTTPException:
         raise
     except Exception as exc:
@@ -397,7 +396,9 @@ def delete_admin_timeline(
 
 @app.get("/readyz")
 async def readyz():
-    ready, reason = await check_readiness(timeline_store, EXPECTED_SCHEMA_REVISIONS)
+    ready, reason = await check_readiness(
+        timeline_store, EXPECTED_SCHEMA_REVISIONS, _admin_config().valid
+    )
     if not ready:
         return JSONResponse({"status": "not_ready", "reason": reason or "dependency unavailable"}, status_code=503)
     return {"status": "ok"}

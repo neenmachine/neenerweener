@@ -124,7 +124,7 @@ async def healthz():
     return {"status": "ok"}
 
 
-@app.get("/api/timeline")
+@app.api_route("/api/timeline", methods=["GET", "HEAD"])
 def list_timeline(
     before: int | None = Query(default=None, gt=0),
     limit: int = Query(default=20, ge=1, le=20),
@@ -264,12 +264,12 @@ def render_post(body: str) -> str:
     return CAPTIONED.sub(r"<figure>\1<figcaption>\2</figcaption></figure>", html)
 
 
-@app.get("/api/posts")
+@app.api_route("/api/posts", methods=["GET", "HEAD"])
 def list_posts():
     return [{k: p[k] for k in ("slug", "date", "title", "excerpt", "tags", "draft")} for p in all_posts()]
 
 
-@app.get("/api/posts/{slug}")
+@app.api_route("/api/posts/{slug}", methods=["GET", "HEAD"])
 def get_post(slug: str):
     for p in all_posts():
         if p["slug"] == slug:
@@ -313,6 +313,18 @@ def project_file(project: str, path: str) -> Path:
     return file
 
 
+def project_files(root: Path) -> list[str]:
+    return sorted(
+        rel for p in root.rglob("*")
+        if contained_file(root, rel := p.relative_to(root).as_posix())
+    )
+
+
+def code_path_exists(project: str, path: str) -> bool:
+    files = project_files(project_root(project))
+    return not path or path in files or any(file.startswith(path + "/") for file in files)
+
+
 def rewrite_readme_link(project: str, url: str, prefix: str) -> str | None:
     target = posixpath.normpath(posixpath.join(".", url))
     if posixpath.isabs(target) or target == ".." or target.startswith("../"):
@@ -340,17 +352,14 @@ def readme_html(project: str, root: Path) -> str | None:
     return md.renderer.render(tokens, md.options, {})
 
 
-@app.get("/api/code/{project}")
+@app.api_route("/api/code/{project}", methods=["GET", "HEAD"])
 def get_project(project: str):
     root = project_root(project)
-    files = sorted(
-        rel for p in root.rglob("*")
-        if contained_file(root, rel := p.relative_to(root).as_posix())
-    )
+    files = project_files(root)
     return {"name": project, "files": files, "readme_html": readme_html(project, root)}
 
 
-@app.get("/api/code/{project}/file/{path:path}")
+@app.api_route("/api/code/{project}/file/{path:path}", methods=["GET", "HEAD"])
 def get_code_file(project: str, path: str):
     file = project_file(project, path)
     data = file.read_bytes()
@@ -395,11 +404,9 @@ def frontend(path: str, request: Request):
     index = contained_file(root, "index.html")
     if not index:
         raise HTTPException(404, "not found")
-    if path.strip("/") == "timeline":
-        before_cursor = timeline_before(request)
-    else:
-        before_cursor = None
-    page = page_data(path, before_cursor)
+    kind = page_kind(path)
+    before_cursor = timeline_before(request) if kind and kind[0] == "timeline" else None
+    page = page_data(kind, before_cursor)
     if page is None:
         preload, head, markup, status_code = not_found_page("not found")
     else:
@@ -416,9 +423,8 @@ def timeline_before(request: Request) -> int | None:
     return int(values[0])
 
 
-def page_data(path: str, before: int | None = None) -> tuple[dict, dict, str, int] | None:
+def page_data(kind: tuple[str, ...] | None, before: int | None = None) -> tuple[dict, dict, str, int] | None:
     """For known public pages: preload data, head tags, and no-JS markup."""
-    kind = page_kind(path)
     if kind is None:
         return None
     if kind[0] == "home":
@@ -426,37 +432,35 @@ def page_data(path: str, before: int | None = None) -> tuple[dict, dict, str, in
     if kind[0] == "timeline":
         page, markup, status_code = timeline_page(before)
         return {"/api/timeline": page}, {"title": "timeline", "description": "timeline"}, markup, status_code
-    if kind[0] == "now":
-        return None
     if kind[0] == "post":
-        slug = kind[1]
-        url = f"/api/posts/{slug}"
-        try:
-            post = get_post(slug)
-        except HTTPException:
-            preload, head, markup, status = not_found_page("post not found")
-            preload[url] = None
-            return preload, head, markup, status
-        return {url: post}, {"title": post["title"], "description": post["excerpt"] or summary(post["html"])}, post_markup(post), 200
+        return post_page_data(kind[1])
     if kind[0] == "code":
-        project, code_path = kind[1:]
-        try:
-            project_root(project)
-            if code_path:
-                # A valid directory is a public folder page; other paths must be files.
-                root = project_root(project)
-                if not contained_file(root, code_path) and not any(
-                    p.is_dir() and p.relative_to(root).as_posix() == code_path for p in root.rglob("*")
-                ):
-                    return not_found_page("file not found")
-        except HTTPException as exc:
-            return not_found_page(str(exc.detail))
-        return {}, {"title": "neenerweener"}, "", 200
+        return code_page_data(*kind[1:])
     return None
 
 
+def post_page_data(slug: str) -> tuple[dict, dict, str, int]:
+    url = f"/api/posts/{slug}"
+    try:
+        post = get_post(slug)
+    except HTTPException:
+        preload, head, markup, status = not_found_page("post not found")
+        preload[url] = None
+        return preload, head, markup, status
+    return {url: post}, {"title": post["title"], "description": post["excerpt"] or summary(post["html"])}, post_markup(post), 200
+
+
+def code_page_data(project: str, code_path: str) -> tuple[dict, dict, str, int]:
+    try:
+        if not code_path_exists(project, code_path):
+            return not_found_page("file not found")
+    except HTTPException as exc:
+        return not_found_page(str(exc.detail))
+    return {}, {"title": "neenerweener"}, "", 200
+
+
 def not_found_page(label: str) -> tuple[dict, dict, str, int]:
-    markup = f'<main><p class="muted">{escape(label)}</p><a href="/">neenerweener</a></main>'
+    markup = f'<main><h1 class="muted">{escape(label)}</h1><a href="/">neenerweener</a><footer><a href="/">neenerweener</a><a href="/timeline">timeline</a></footer></main>'
     return {"not-found": True}, {"title": "not found", "robots": "noindex"}, markup, 404
 
 

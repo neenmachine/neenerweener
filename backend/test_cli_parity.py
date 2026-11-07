@@ -42,6 +42,7 @@ def _server_accepts(text: str, alts: tuple[str, ...]) -> bool:
     ("valid", ("😀" * 1_000,)),
     ("valid", ("😀" * 1_001,)),
     ("valid", ("e\u0301" * 500,)),
+    ("valid", ("e\u0301" * 500 + "e",)),
     ("valid", ("bad\0alt",)),
 ])
 def test_cli_and_server_validate_timeline_text_and_alts_the_same(text, alts):

@@ -67,9 +67,9 @@ def test_syntax_token_colors_meet_wcag_aa_on_code_backgrounds(dark):
     tokens = {k: c for k, c in v.items() if k.startswith("syn-")}
     assert {"syn-comment", "syn-keyword", "syn-string", "syn-number", "syn-func"} <= tokens.keys(), tokens
     ratios = {
-        (token, surface): round(contrast(color, bg), 2)
+        (token, surface): contrast(color, bg)
         for token, color in tokens.items()
         for surface, bg in code_backgrounds(v).items()
     }
-    failing = {k: r for k, r in ratios.items() if r < 4.5}
+    failing = {k: round(r, 2) for k, r in ratios.items() if r < 4.5}
     assert not failing, failing

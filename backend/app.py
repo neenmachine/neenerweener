@@ -60,16 +60,21 @@ from machine_auth import (
     Throttled,
 )
 from media import (
+    CONTENT_TYPE,
     MAX_UPLOAD_BYTES,
+    VARIANTS,
     MediaConfig,
+    MediaNotFound,
     MediaStore,
     S3MediaStore,
     UnsupportedImage,
+    media_key,
     process_image,
     store_image,
     sweep,
 )
 from timeline import (
+    InvalidAttachment,
     TimelineStore,
     TimelineStoreProtocol,
     serialize_entry,
@@ -239,6 +244,21 @@ class TimelineMutation(BaseModel):
     body_markdown: str
 
 
+class Attachment(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: uuid.UUID
+    alt: str = ""
+
+
+class TimelineCreate(TimelineMutation):
+    """Attachments are set once at create; an edit (TimelineMutation) cannot change them."""
+
+    attachments: list[Attachment] = []
+
+
+MAX_TIMELINE_JSON_BYTES = 65_536  # body plus four alt texts; matches the CLI's JSON cap
+
+
 class ChallengeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     key_fingerprint: str
@@ -384,10 +404,12 @@ async def _bounded_body(request: Request, limit: int) -> bytes:
     return bytes(chunks)
 
 
-async def _bounded_json(request: Request, model, *, invalid_status: int = 422, invalid_detail: str = "invalid request"):
+async def _bounded_json(
+    request: Request, model, *, invalid_status: int = 422, invalid_detail: str = "invalid request", limit: int = MAX_REQUEST_BYTES
+):
     if request.headers.get("Content-Type", "").split(";", 1)[0].strip().lower() != "application/json":
         raise HTTPException(415, "application/json required")
-    body = await _bounded_body(request, MAX_REQUEST_BYTES)
+    body = await _bounded_body(request, limit)
     try:
         return model.model_validate_json(body)
     except ValidationError as exc:
@@ -563,19 +585,26 @@ def admin_logout(
     _clear_session_cookie(response, config)
 
 
+async def _timeline_create_body(request: Request) -> TimelineCreate:
+    return await _bounded_json(request, TimelineCreate, limit=MAX_TIMELINE_JSON_BYTES)
+
+
 @app.post("/api/admin/timeline", status_code=201)
 def create_admin_timeline(
-    payload: TimelineMutation,
     request: Request,
     access: Access = Depends(require_timeline_create),
+    payload: TimelineCreate = Depends(_timeline_create_body),  # after access: no body is read before auth
 ):
     try:
         validate_timeline_body(payload.body_markdown)
     except ValueError as exc:
         raise HTTPException(422, "invalid timeline entry") from exc
     _permit_machine(request, access, "timeline_create", 30)
+    attachments = [(attachment.id, attachment.alt) for attachment in payload.attachments]
     try:
-        return _admin_entry(_timeline_storage().create(payload.body_markdown))
+        return _admin_entry(_timeline_storage().create(payload.body_markdown, attachments))
+    except InvalidAttachment as exc:
+        raise HTTPException(422, "invalid attachment") from exc
     except HTTPException:
         raise
     except Exception as exc:
@@ -931,6 +960,36 @@ def get_code_file(project: str, path: str):
 def get_code_raw(project: str, path: str):
     # sandbox: a raw SVG or HTML file opened directly cannot run scripts on the site origin.
     return FileResponse(project_file(project, path), headers={"Content-Security-Policy": "sandbox"})
+
+
+@app.api_route("/media/{asset_id}/{variant}", methods=["GET", "HEAD"])
+def get_media(asset_id: str, variant: str, request: Request):
+    # One 404 for every miss (bad id, bad variant, unattached, deleted), so the route is no existence oracle.
+    not_found = HTTPException(404, "not found")
+    name = {f"{v}.webp": v for v in VARIANTS}.get(variant)
+    try:
+        parsed = uuid.UUID(asset_id)
+    except ValueError:
+        raise not_found from None
+    if str(parsed) != asset_id or name is None:  # one canonical URL per object
+        raise not_found
+    store, assets = media_store, timeline_store
+    if store is None or assets is None:
+        raise HTTPException(503, "media unavailable")
+    try:
+        if not assets.is_attached(parsed):
+            raise not_found
+        data = store.get(media_key(parsed, name))
+    except HTTPException:
+        raise
+    except MediaNotFound:
+        raise not_found from None
+    except Exception as exc:
+        logger.warning("media.serve.unavailable: %s", type(exc).__name__)
+        raise HTTPException(503, "media unavailable") from exc
+    headers = {"Cache-Control": "public, max-age=31536000, immutable", "Content-Length": str(len(data))}
+    # shortcut: HEAD still reads the object to know its length; add a store head() if HEAD traffic matters.
+    return Response(b"" if request.method == "HEAD" else data, media_type=CONTENT_TYPE, headers=headers)
 
 
 from discovery import router as discovery_router

@@ -30,6 +30,10 @@ class UnsupportedImage(ValueError):
     pass
 
 
+class MediaNotFound(LookupError):
+    """The bucket has no object at this key; every `MediaStore.get` raises this, not a backend error."""
+
+
 class MediaStore(Protocol):
     def put(self, key: str, data: bytes, content_type: str) -> None: ...
     def get(self, key: str) -> bytes: ...
@@ -93,7 +97,14 @@ class S3MediaStore:
         self.client.put_object(Bucket=self.bucket, Key=key, Body=data, ContentType=content_type)
 
     def get(self, key: str) -> bytes:
-        return self.client.get_object(Bucket=self.bucket, Key=key)["Body"].read()
+        from botocore.exceptions import ClientError
+
+        try:
+            return self.client.get_object(Bucket=self.bucket, Key=key)["Body"].read()
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") in ("NoSuchKey", "404"):
+                raise MediaNotFound(key) from exc
+            raise
 
     def delete(self, key: str) -> None:
         self.client.delete_object(Bucket=self.bucket, Key=key)
@@ -107,7 +118,10 @@ class MemoryMediaStore:
         self.objects[key] = (data, content_type)
 
     def get(self, key: str) -> bytes:
-        return self.objects[key][0]
+        try:
+            return self.objects[key][0]
+        except KeyError as exc:
+            raise MediaNotFound(key) from exc
 
     def delete(self, key: str) -> None:
         self.objects.pop(key, None)

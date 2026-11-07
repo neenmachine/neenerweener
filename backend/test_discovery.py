@@ -37,6 +37,7 @@ def test_discovery_routes_are_available(tmp_path, monkeypatch):
     assert [entry.findtext(f"{{{ATOM}}}title") for entry in entries] == ["a & <title>", "older"]
     assert root.find(f"{{{ATOM}}}id").text == "https://www.neenerweener.ca/feed.xml"
     assert root.find(f"{{{ATOM}}}updated").text == "2026-03-28T00:00:00Z"
+    assert root.find(f"{{{ATOM}}}author/{{{ATOM}}}name").text == "Henry Wang"
     assert root.find(f"{{{ATOM}}}entry/{{{ATOM}}}id").text == "https://www.neenerweener.ca/posts/special"
     assert root.find(f"{{{ATOM}}}entry/{{{ATOM}}}published").text == "2026-03-28T00:00:00Z"
     assert root.find(f"{{{ATOM}}}entry/{{{ATOM}}}updated").text == "2026-03-28T00:00:00Z"
@@ -45,8 +46,10 @@ def test_discovery_routes_are_available(tmp_path, monkeypatch):
     assert b"an &amp; &lt;summary&gt;" in feed.content
     assert "draft" not in feed.text
 
-    assert client.head("/feed.xml").status_code == 200
-    assert client.head("/feed.xml").content == b""
+    feed_head = client.head("/feed.xml")
+    assert feed_head.status_code == 200
+    assert feed_head.headers["cache-control"] == feed.headers["cache-control"]
+    assert feed_head.content == b""
 
     robots = client.get("/robots.txt")
     assert robots.status_code == 200
@@ -56,24 +59,26 @@ def test_discovery_routes_are_available(tmp_path, monkeypatch):
     robots_head = client.head("/robots.txt")
     assert robots_head.status_code == 200
     assert robots_head.headers["content-type"] == "text/plain; charset=utf-8"
+    assert robots_head.headers["cache-control"] == robots.headers["cache-control"]
     assert robots_head.content == b""
 
     sitemap = client.get("/sitemap.xml")
     assert sitemap.status_code == 200
     assert sitemap.headers["content-type"] == "application/xml; charset=utf-8"
+    assert sitemap.headers["cache-control"] == "public, max-age=300"
     sitemap_root = ET.fromstring(sitemap.content)
     urls = sitemap_root.findall("{http://www.sitemaps.org/schemas/sitemap/0.9}url")
     assert [u.findtext("{http://www.sitemaps.org/schemas/sitemap/0.9}loc") for u in urls] == [
         "https://www.neenerweener.ca/",
         "https://www.neenerweener.ca/posts/special",
         "https://www.neenerweener.ca/posts/older",
-        "https://www.neenerweener.ca/timeline",
         "https://www.neenerweener.ca/code/public-project",
     ]
     assert urls[1].findtext("{http://www.sitemaps.org/schemas/sitemap/0.9}lastmod") == "2026-03-28"
     sitemap_head = client.head("/sitemap.xml")
     assert sitemap_head.status_code == 200
     assert sitemap_head.headers["content-type"] == "application/xml; charset=utf-8"
+    assert sitemap_head.headers["cache-control"] == sitemap.headers["cache-control"]
     assert sitemap_head.content == b""
     assert client.get("/sitemap.xml", headers={"host": "evil.example"}).text.find("evil.example") == -1
 

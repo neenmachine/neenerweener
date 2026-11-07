@@ -35,6 +35,8 @@ def feed() -> Response:
     SubElement(root, "title").text = "neenerweener"
     SubElement(root, "id").text = f"{origin()}/feed.xml"
     SubElement(root, "updated").text = atom_date(posts[0]["date"] if posts else "1970-01-01")
+    author = SubElement(root, "author")
+    SubElement(author, "name").text = "Henry Wang"
     SubElement(root, "link", {"rel": "self", "href": f"{origin()}/feed.xml"})
     for post in posts:
         url = f"{origin()}/posts/{post['slug']}"
@@ -71,7 +73,6 @@ def sitemap() -> Response:
     add("/")
     for post in (post for post in app.all_posts() if not post["draft"]):
         add(f"/posts/{post['slug']}", post["date"])
-    add("/timeline")
     for project in sorted(path.name for path in app.CODE_DIR.iterdir() if path.is_dir() and app.PROJECT.fullmatch(path.name)):
         add(f"/code/{project}")
     return xml_response(root, "application/xml; charset=utf-8")

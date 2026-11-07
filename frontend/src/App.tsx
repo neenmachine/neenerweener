@@ -311,7 +311,10 @@ function PostPage({ slug }: { slug: string }) {
   const back = <Back href="/" />;
   if (error)
     return (
-      <h1 className="muted">post not found</h1>
+      <div className="has-back">
+        {back}
+        <h1 className="muted">post not found</h1>
+      </div>
     );
   if (!data) return null;
   return (
@@ -450,7 +453,7 @@ function ProjectPage({ name, path }: { name: string; path: string }) {
     return (
       <>
         {crumbs}
-        <h1 className="muted">project not found</h1>
+        <p className="muted">project not found</p>
         <Footer />
       </>
     );
@@ -472,7 +475,7 @@ function ProjectPage({ name, path }: { name: string; path: string }) {
 
 function Folder({ project, path }: { project: Project; path: string }) {
   const { dirs, files } = children(project.files, path);
-  if (!dirs.length && !files.length) return <><h1 className="muted">file not found</h1><Footer /></>;
+  if (!dirs.length && !files.length) return <><p className="muted">file not found</p><Footer /></>;
   const prefix = path && path + "/";
   return (
     <>
@@ -530,7 +533,7 @@ function FileView({ project, path }: { project: string; path: string }) {
     if (lines) document.getElementById(location.hash.slice(1))?.scrollIntoView();
   }, [data]);
   if (error)
-    return <><h1 className="muted">file not found</h1><Footer /></>;
+    return <><p className="muted">file not found</p><Footer /></>;
   if (!data) return null;
   const raw = `/code-raw/${project}/${encoded}`;
   const copy = () => {

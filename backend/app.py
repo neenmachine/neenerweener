@@ -444,7 +444,7 @@ def post_page_data(slug: str) -> tuple[dict, dict, str, int]:
     try:
         post = get_post(slug)
     except HTTPException:
-        preload, head, markup, status = not_found_page("post not found")
+        preload, head, markup, status = not_found_page("post not found", back=True)
         preload[url] = None
         return preload, head, markup, status
     return {url: post}, {"title": post["title"], "description": post["excerpt"] or summary(post["html"])}, post_markup(post), 200
@@ -459,8 +459,9 @@ def code_page_data(project: str, code_path: str) -> tuple[dict, dict, str, int]:
     return {}, {"title": "neenerweener"}, "", 200
 
 
-def not_found_page(label: str) -> tuple[dict, dict, str, int]:
-    markup = f'<main><h1 class="muted">{escape(label)}</h1><a href="/">neenerweener</a><footer><a href="/">neenerweener</a><a href="/timeline">timeline</a></footer></main>'
+def not_found_page(label: str, back: bool = False) -> tuple[dict, dict, str, int]:
+    heading = f'<div class="has-back"><a class="back" href="/" aria-label="back">←</a><h1 class="muted">{escape(label)}</h1></div>' if back else f'<h1 class="muted">{escape(label)}</h1>'
+    markup = f'<main>{heading}<a href="/">neenerweener</a><footer><a href="/">neenerweener</a><a href="/timeline">timeline</a></footer></main>' 
     return {"not-found": True}, {"title": "not found", "robots": "noindex"}, markup, 404
 
 

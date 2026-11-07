@@ -90,3 +90,4 @@ def test_not_found_pages_have_one_labeled_heading_and_main(client):
         assert response.text.count("<main>") == 1
         assert response.text.count("<h1") == 1
         assert f">{label}</h1>" in response.text
+        assert "back" not in response.text.split("<h1", 1)[1].split("</h1>", 1)[0]

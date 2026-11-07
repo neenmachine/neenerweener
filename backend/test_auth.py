@@ -315,7 +315,8 @@ def test_create_read_edit_same_body_and_hard_delete(configured_app, make_client)
     assert entry["body_markdown"] == "first"
     assert entry["html"] == "<p>first</p>\n"
     assert entry["edited_at"] is None
-    assert set(entry) == {"id", "body_markdown", "html", "created_at", "edited_at"}
+    assert set(entry) == {"id", "body_markdown", "html", "created_at", "edited_at", "media"}
+    assert entry["media"] == []
 
     read = client.get(f"/api/admin/timeline/{entry['id']}")
     assert read.json() == entry

@@ -558,3 +558,301 @@ def test_sweep_removes_expired_unattached_assets_objects_then_row(media_db, monk
     assert remaining == {ids[name] for name in kept} | {uuid.UUID(upload.json()["id"])}
     object_ids = {uuid.UUID(KEY.fullmatch(key)[1]) for key in store.objects}
     assert object_ids == remaining
+
+
+# Attachments (M2): create with images, public read, the /media route, and delete.
+
+
+def attachable(store, created_at=None, detached_at=None, data=b"webp-bytes"):
+    """An uploaded asset row with both objects, as `store_image` leaves it."""
+    asset_id = uuid.uuid4()
+    times = {"created_at": created_at} if created_at else {}
+    with app.timeline_store.engine.begin() as connection:
+        connection.execute(
+            insert(media_assets).values(
+                id=asset_id, width=30, height=20, byte_size=2 * len(data), sha256=b"x", detached_at=detached_at, **times
+            )
+        )
+    for variant in ("lg", "sm"):
+        store.put(f"media/{asset_id}/{variant}.webp", data + variant.encode(), "image/webp")
+    return asset_id
+
+
+@pytest.fixture
+def author(media_db):
+    """A browser admin client for create and delete, without the login dance."""
+    _machine, store = media_db
+    browser = lambda: app.Access(Principal("browser-admin", None))
+    app.app.dependency_overrides[app.require_timeline_create] = browser
+    app.app.dependency_overrides[app.require_browser_mutation] = browser
+    app.app.dependency_overrides[app.require_browser_read] = browser
+    try:
+        yield TestClient(app.app, base_url="http://127.0.0.1"), store
+    finally:
+        app.app.dependency_overrides.clear()
+
+
+def entry_count():
+    with app.timeline_store.engine.connect() as connection:
+        return len(connection.execute(select(timeline_entries.c.id)).all())
+
+
+def create(client, attachments, body="look at this picture i took"):
+    return client.post("/api/admin/timeline", json={"body_markdown": body, "attachments": attachments})
+
+
+def created_id(client, attachments):
+    response = create(client, attachments)
+    assert response.status_code == 201, response.json()
+    return response.json()["id"]
+
+
+def test_create_with_four_attachments_returns_media_in_order_everywhere(author):
+    client, store = author
+    ids = [attachable(store) for _ in range(4)]
+    alts = ["first", "", "third <b>", "fourth"]
+    response = create(client, [{"id": str(i), "alt": alt} for i, alt in zip(ids, alts)][::-1])
+    assert response.status_code == 201
+    expected = [{"id": str(i), "width": 30, "height": 20, "alt": alt} for i, alt in zip(ids, alts)][::-1]
+    assert response.json()["media"] == expected
+    entry_id = response.json()["id"]
+    assert client.get(f"/api/admin/timeline/{entry_id}").json()["media"] == expected
+    public = TestClient(app.app).get("/api/timeline").json()["entries"]
+    assert [(e["id"], e["media"]) for e in public] == [(entry_id, expected)]
+
+
+def test_one_attachment_without_alt_stores_empty_alt(author):
+    client, store = author
+    asset_id = attachable(store)
+    response = create(client, [{"id": str(asset_id)}])
+    assert response.status_code == 201
+    assert response.json()["media"] == [{"id": str(asset_id), "width": 30, "height": 20, "alt": ""}]
+
+
+def test_text_only_create_is_unchanged_for_the_released_cli(media_db):
+    (private, _public, _machine_store, _secret), _store = media_db
+    client = TestClient(app.app, base_url="http://127.0.0.1")
+    _challenge, token = challenge_and_token(client, private)
+    headers = {"Authorization": f"Bearer {token.json()['access_token']}", "Content-Type": "application/json"}
+    created = client.post("/api/admin/timeline", headers=headers, content=b'{"body_markdown": "just text"}')
+    assert created.status_code == 201
+    assert created.json()["html"] == "<p>just text</p>\n"
+    assert created.json().get("media") == []
+    assert TestClient(app.app).get("/api/timeline").json()["entries"][0].get("media") == []
+
+
+@pytest.mark.parametrize(
+    "case", ["five", "duplicate", "unknown", "attached", "detached", "too-old", "alt-too-long"]
+)
+def test_invalid_attachments_are_422_and_create_nothing(author, case):
+    client, store = author
+    now = datetime.now(UTC)
+    fresh = attachable(store)
+    taken = attachable(store)
+    if case == "attached":
+        created_id(client, [{"id": str(taken)}])
+    before = entry_count()
+    attachments = {
+        "five": [{"id": str(attachable(store))} for _ in range(5)],
+        "duplicate": [{"id": str(fresh)}, {"id": str(fresh)}],
+        "unknown": [{"id": str(fresh)}, {"id": str(uuid.uuid4())}],
+        "attached": [{"id": str(fresh)}, {"id": str(taken)}],
+        "detached": [{"id": str(attachable(store, detached_at=now))}],
+        "too-old": [{"id": str(attachable(store, created_at=now - timedelta(hours=23, minutes=5)))}],
+        "alt-too-long": [{"id": str(fresh), "alt": "a" * 1001}],
+    }[case]
+    response = create(client, attachments)
+    assert (response.status_code, response.json()) == (422, {"detail": "invalid attachment"})
+    assert entry_count() == before
+    with app.timeline_store.engine.connect() as connection:
+        attached = connection.execute(select(timeline_entry_media.c.asset_id)).scalars().all()
+        assert attached == ([taken] if case == "attached" else [])
+        assert connection.execute(select(media_assets.c.alt_text).where(media_assets.c.id == fresh)).scalar_one() == ""
+
+
+def test_edit_cannot_change_attachments(author):
+    client, store = author
+    entry_id = client.post("/api/admin/timeline", json={"body_markdown": "x"}).json()["id"]
+    response = client.patch(
+        f"/api/admin/timeline/{entry_id}", json={"body_markdown": "x", "attachments": [{"id": str(attachable(store))}]}
+    )
+    assert (response.status_code, response.json()) == (422, {"detail": "invalid request"})
+
+
+def test_create_json_cap_is_64_kib(author):
+    client, store = author
+    # 10,000 three-byte characters plus four 1,000-character alts: about 42 KB, over the old 16 KiB cap.
+    attachments = [{"id": str(attachable(store)), "alt": "€" * 1000} for _ in range(4)]
+    fits = create(client, attachments, body="€" * 10_000)
+    assert fits.status_code == 201
+    too_large = client.post(
+        "/api/admin/timeline", content=b'{"body_markdown": "' + b"a" * 65_536 + b'"}', headers={"Content-Type": "application/json"}
+    )
+    assert (too_large.status_code, too_large.json()) == (413, {"detail": "request too large"})
+
+
+def test_timeline_page_reads_media_in_one_extra_query(author):
+    from sqlalchemy import event
+
+    client, store = author
+    for count in (0, 1, 2, 4):
+        assert create(client, [{"id": str(attachable(store))} for _ in range(count)]).status_code == 201
+    statements = []
+
+    def record(_conn, _cursor, statement, *_args):
+        statements.append(statement)
+
+    event.listen(app.timeline_store.engine, "before_cursor_execute", record)
+    try:
+        entries = TestClient(app.app).get("/api/timeline").json()["entries"]
+    finally:
+        event.remove(app.timeline_store.engine, "before_cursor_execute", record)
+    assert [len(entry["media"]) for entry in entries] == [4, 2, 1, 0]
+    assert len(statements) == 2, statements  # one for the entries, one for all their media
+
+
+def test_attached_media_is_served_with_immutable_headers(author):
+    client, store = author
+    data = encode(two_tone(), "PNG")
+    asset_id = post(client, data).json()["id"]
+    created_id(client, [{"id": asset_id}])
+    public = TestClient(app.app)
+    for variant in ("lg", "sm"):
+        response = public.get(f"/media/{asset_id}/{variant}.webp")
+        assert response.status_code == 200
+        assert response.content == store.get(f"media/{asset_id}/{variant}.webp")
+        assert response.headers["content-type"] == "image/webp"
+        assert response.headers["content-length"] == str(len(response.content))
+        assert response.headers["cache-control"] == "public, max-age=31536000, immutable"
+        assert response.headers["x-content-type-options"] == "nosniff"
+        head = public.head(f"/media/{asset_id}/{variant}.webp")
+        assert head.status_code == 200 and head.content == b""
+        for name in ("content-type", "content-length", "cache-control"):
+            assert head.headers[name] == response.headers[name]
+
+
+def test_media_misses_all_return_the_same_404(author):
+    client, store = author
+    attached = attachable(store)
+    created_id(client, [{"id": str(attached)}])
+    deleted = attachable(store)
+    deleted_entry = created_id(client, [{"id": str(deleted)}])
+    assert client.delete(f"/api/admin/timeline/{deleted_entry}").status_code == 204
+    public = TestClient(app.app)
+    misses = [
+        f"/media/{attachable(store)}/lg.webp",  # uploaded, never attached
+        f"/media/{deleted}/lg.webp",  # entry deleted
+        f"/media/{uuid.uuid4()}/lg.webp",  # unknown
+        f"/media/{attached}/xl.webp",
+        f"/media/{attached}/lg.png",
+        f"/media/{attached}/lg",
+        f"/media/{str(attached).upper()}/lg.webp",  # one canonical URL per object
+        f"/media/{attached.hex}/lg.webp",
+        "/media/not-a-uuid/lg.webp",
+    ]
+    for path in misses:
+        for method in ("GET", "HEAD"):
+            response = public.request(method, path)
+            assert response.status_code == 404, path
+            if method == "GET":
+                assert response.json() == {"detail": "not found"}, path
+    assert public.get(f"/media/{attached}/lg.webp").status_code == 200
+
+
+def test_media_bucket_errors_are_503_and_missing_objects_404(author, caplog):
+    client, store = author
+    asset_id = attachable(store)
+    created_id(client, [{"id": str(asset_id)}])
+    public = TestClient(app.app)
+
+    def broken_get(_key):
+        raise RuntimeError("https://fake-secret.invalid")
+
+    store.get = broken_get
+    caplog.clear()
+    broken = public.get(f"/media/{asset_id}/lg.webp")
+    assert (broken.status_code, broken.json()) == (503, {"detail": "media unavailable"})
+    assert "fake-secret" not in caplog.text and "fake-secret" not in broken.text
+    del store.get
+    store.objects.clear()
+    assert public.get(f"/media/{asset_id}/lg.webp").json() == {"detail": "not found"}
+
+
+def test_media_route_logs_the_template_once(author, caplog):
+    client, store = author
+    asset_id = attachable(store)
+    created_id(client, [{"id": str(asset_id)}])
+    caplog.set_level(logging.INFO)
+    caplog.clear()
+    assert TestClient(app.app).get(f"/media/{asset_id}/sm.webp").status_code == 200
+    requests = [record for record in caplog.records if record.getMessage() == "request"]
+    assert [(r.method, r.route, r.status) for r in requests] == [("GET", "/media/{asset_id}/{variant}", 200)]
+    assert not [r for r in caplog.records if r.name == "app" and str(asset_id) in r.getMessage() + str(r.__dict__)]
+
+
+def test_delete_detaches_assets_and_the_sweep_waits_seven_days(author):
+    client, store = author
+    ids = [attachable(store) for _ in range(2)]
+    entry_id = created_id(client, [{"id": str(i)} for i in ids])
+    assert client.delete(f"/api/admin/timeline/{entry_id}").status_code == 204
+    timeline: TimelineStore = app.timeline_store
+    with timeline.engine.connect() as connection:
+        assert connection.execute(select(timeline_entry_media)).all() == []
+        detached = connection.execute(select(media_assets.c.detached_at).where(media_assets.c.id.in_(ids))).scalars().all()
+    assert len(detached) == 2 and all(detached)
+
+    from media import sweep
+
+    sweep(timeline, store)
+    assert len(store.objects) == 4, "a fresh delete keeps the bytes for the 7-day grace"
+    with timeline.engine.begin() as connection:
+        connection.execute(update(media_assets).values(detached_at=datetime.now(UTC) - timedelta(days=8)))
+    sweep(timeline, store)
+    assert store.objects == {}
+    with timeline.engine.connect() as connection:
+        assert connection.execute(select(media_assets.c.id)).all() == []
+
+
+def test_unset_media_store_makes_the_route_unavailable(monkeypatch):
+    monkeypatch.setattr(app, "media_store", None)
+    response = TestClient(app.app).get(f"/media/{uuid.uuid4()}/lg.webp")
+    assert (response.status_code, response.json()) == (503, {"detail": "media unavailable"})
+
+
+def test_bucket_store_maps_no_such_key_to_404_and_other_errors_to_503(author, monkeypatch):
+    from botocore.stub import Stubber
+
+    client, memory = author
+    asset_id = attachable(memory)
+    created_id(client, [{"id": str(asset_id)}])
+    bucket = S3MediaStore(MediaConfig(**MEDIA_ENV))
+    monkeypatch.setattr(app, "media_store", bucket)
+    public = TestClient(app.app)
+    with Stubber(bucket.client) as stub:
+        stub.add_client_error("get_object", "NoSuchKey", http_status_code=404)
+        stub.add_client_error("get_object", "AccessDenied", "fake-secret detail", http_status_code=403)
+        missing = public.get(f"/media/{asset_id}/lg.webp")
+        denied = public.get(f"/media/{asset_id}/lg.webp")
+    assert (missing.status_code, missing.json()) == (404, {"detail": "not found"})
+    assert (denied.status_code, denied.json()) == (503, {"detail": "media unavailable"})
+
+
+def test_concurrent_creates_attach_an_asset_once(author):
+    import concurrent.futures
+
+    from timeline import InvalidAttachment
+
+    _client, store = author
+    asset_id = attachable(store)
+    timeline: TimelineStore = app.timeline_store
+
+    def attach(_):
+        try:
+            return timeline.create("race", [(asset_id, "")])["id"]
+        except InvalidAttachment:
+            return None
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+        results = list(executor.map(attach, range(4)))
+    assert sum(result is not None for result in results) == 1
+    assert entry_count() == 1

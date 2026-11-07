@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import uuid
+from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from typing import Protocol
 
@@ -35,7 +36,8 @@ from sqlalchemy import (
     update,
 )
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Connection, Engine
+from sqlalchemy.exc import IntegrityError
 
 metadata = MetaData()
 timeline_entries = Table(
@@ -69,12 +71,19 @@ timeline_entry_media = Table(
     UniqueConstraint("asset_id"),
     CheckConstraint("position BETWEEN 0 AND 3", name="ck_timeline_entry_media_position"),
 )
-# The sweep never deletes the row of an attached asset. It does not protect the objects: an attach that lands
-# between the sweep's object deletes and its row delete leaves a row with no objects. M2 must reject attaching
-# a never-attached asset older than about 23 h, and must set detached_at when an entry is deleted.
+# The sweep never deletes the row of an attached asset, but it deletes objects before the row. Attach therefore
+# refuses never-attached assets older than ATTACH_WINDOW, an hour before the sweep may touch them, and delete
+# sets detached_at so the sweep waits DETACHED_GRACE.
 _unattached = ~exists().where(timeline_entry_media.c.asset_id == media_assets.c.id)
 NEVER_ATTACHED_GRACE = timedelta(hours=24)
+ATTACH_WINDOW = timedelta(hours=23)
 DETACHED_GRACE = timedelta(days=7)
+MAX_ATTACHMENTS = 4
+MAX_ALT_CHARS = 1000
+
+
+class InvalidAttachment(ValueError):
+    """An attachment that is unknown, already attached, detached, expired, or malformed."""
 
 _timeline_md = MarkdownIt("commonmark", {"html": False}).disable("image")
 _UNSAFE_SCHEME = re.compile(r"^(?:javascript|vbscript|data):", re.IGNORECASE)
@@ -97,12 +106,13 @@ def database_engine(database_url: str, **kwargs) -> Engine:
 class TimelineStoreProtocol(Protocol):
     def list(self, before: int | None, limit: int) -> list[dict]: ...
     def get(self, entry_id: int) -> dict | None: ...
-    def create(self, body_markdown: str) -> dict: ...
+    def create(self, body_markdown: str, attachments: Sequence[tuple[uuid.UUID, str]] = ()) -> dict: ...
     def update(self, entry_id: int, body_markdown: str) -> dict | None: ...
     def delete(self, entry_id: int) -> bool: ...
     def create_media_asset(self, asset_id: uuid.UUID, width: int, height: int, byte_size: int, sha256: bytes) -> None: ...
     def expired_media_assets(self, limit: int) -> list[uuid.UUID]: ...
     def delete_media_asset(self, asset_id: uuid.UUID) -> None: ...
+    def is_attached(self, asset_id: uuid.UUID) -> bool: ...
     def schema_revisions(self) -> frozenset[str]: ...
     def ping(self) -> None: ...
     def close(self) -> None: ...
@@ -147,22 +157,50 @@ class TimelineStore:
         if before is not None:
             query = query.where(timeline_entries.c.id < before)
         with self.engine.connect() as connection:
-            rows = connection.execute(query).mappings().all()
-        return [dict(row) for row in rows]
+            rows = [dict(row) for row in connection.execute(query).mappings()]
+            media = media_for(connection, [row["id"] for row in rows])
+        return [{**row, "media": media.get(row["id"], [])} for row in rows]
 
     def get(self, entry_id: int) -> dict | None:
         with self.engine.connect() as connection:
             row = connection.execute(
                 select(timeline_entries).where(timeline_entries.c.id == entry_id)
             ).mappings().one_or_none()
-        return dict(row) if row else None
+            return _with_media(connection, row) if row else None
 
-    def create(self, body_markdown: str) -> dict:
-        with self.engine.begin() as connection:
-            row = connection.execute(
-                insert(timeline_entries).values(body_markdown=body_markdown).returning(timeline_entries)
-            ).mappings().one()
-        return dict(row)
+    def create(self, body_markdown: str, attachments: Sequence[tuple[uuid.UUID, str]] = ()) -> dict:
+        """Insert the entry and attach assets in order, all or nothing."""
+        ids = [asset_id for asset_id, _alt in attachments]
+        if len(ids) > MAX_ATTACHMENTS or len(set(ids)) != len(ids):
+            raise InvalidAttachment
+        if any(len(alt) > MAX_ALT_CHARS for _id, alt in attachments):
+            raise InvalidAttachment
+        try:
+            with self.engine.begin() as connection:
+                if ids:
+                    attachable = connection.execute(
+                        select(media_assets.c.id)
+                        .where(
+                            media_assets.c.id.in_(ids),
+                            media_assets.c.detached_at.is_(None),
+                            media_assets.c.created_at > func.now() - ATTACH_WINDOW,
+                            _unattached,
+                        )
+                        .with_for_update()
+                    ).scalars().all()
+                    if len(attachable) != len(ids):
+                        raise InvalidAttachment
+                row = connection.execute(
+                    insert(timeline_entries).values(body_markdown=body_markdown).returning(timeline_entries)
+                ).mappings().one()
+                for position, (asset_id, alt) in enumerate(attachments):
+                    connection.execute(update(media_assets).where(media_assets.c.id == asset_id).values(alt_text=alt))
+                    connection.execute(
+                        insert(timeline_entry_media).values(entry_id=row["id"], asset_id=asset_id, position=position)
+                    )
+                return _with_media(connection, row)
+        except IntegrityError as exc:  # a concurrent create attached the same asset first
+            raise InvalidAttachment from exc
 
     def update(self, entry_id: int, body_markdown: str) -> dict | None:
         with self.engine.begin() as connection:
@@ -172,17 +210,27 @@ class TimelineStore:
             if current is None:
                 return None
             if current["body_markdown"] == body_markdown:
-                return dict(current)
+                return _with_media(connection, current)
             row = connection.execute(
                 update(timeline_entries)
                 .where(timeline_entries.c.id == entry_id)
                 .values(body_markdown=body_markdown, edited_at=func.now())
                 .returning(timeline_entries)
             ).mappings().one()
-        return dict(row)
+            return _with_media(connection, row)
 
     def delete(self, entry_id: int) -> bool:
         with self.engine.begin() as connection:
+            # Mark the assets first so the sweep keeps their objects for DETACHED_GRACE.
+            connection.execute(
+                update(media_assets)
+                .where(
+                    media_assets.c.id.in_(
+                        select(timeline_entry_media.c.asset_id).where(timeline_entry_media.c.entry_id == entry_id)
+                    )
+                )
+                .values(detached_at=func.now())
+            )
             result = connection.execute(delete(timeline_entries).where(timeline_entries.c.id == entry_id))
         return result.rowcount == 1
 
@@ -216,6 +264,12 @@ class TimelineStore:
         with self.engine.begin() as connection:
             connection.execute(delete(media_assets).where(media_assets.c.id == asset_id, _unattached))
 
+    def is_attached(self, asset_id: uuid.UUID) -> bool:
+        with self.engine.connect() as connection:
+            return connection.execute(
+                select(exists().where(timeline_entry_media.c.asset_id == asset_id))
+            ).scalar_one()
+
     def schema_revisions(self) -> frozenset[str]:
         with self.engine.connect() as connection:
             rows = connection.execute(text("SELECT version_num FROM alembic_version"))
@@ -229,12 +283,39 @@ class TimelineStore:
         self.engine.dispose()
 
 
+def media_for(connection: Connection, entry_ids: Sequence[int]) -> dict[int, list[dict]]:
+    """Attached media per entry in position order, in one query for the whole page."""
+    media: dict[int, list[dict]] = {}
+    if not entry_ids:
+        return media
+    rows = connection.execute(
+        select(
+            timeline_entry_media.c.entry_id,
+            media_assets.c.id,
+            media_assets.c.width,
+            media_assets.c.height,
+            media_assets.c.alt_text,
+        )
+        .join(media_assets, media_assets.c.id == timeline_entry_media.c.asset_id)
+        .where(timeline_entry_media.c.entry_id.in_(entry_ids))
+        .order_by(timeline_entry_media.c.entry_id, timeline_entry_media.c.position)
+    )
+    for entry_id, asset_id, width, height, alt in rows:
+        media.setdefault(entry_id, []).append({"id": str(asset_id), "width": width, "height": height, "alt": alt})
+    return media
+
+
+def _with_media(connection: Connection, row) -> dict:
+    return {**row, "media": media_for(connection, [row["id"]]).get(row["id"], [])}
+
+
 def serialize_entry(entry: dict, *, admin: bool = False) -> dict:
     result = {
         "id": entry["id"],
         "html": render_timeline(entry["body_markdown"]),
         "created_at": _timestamp(entry["created_at"]),
         "edited_at": _timestamp(entry.get("edited_at")),
+        "media": entry["media"],
     }
     if admin:
         result["body_markdown"] = entry["body_markdown"]

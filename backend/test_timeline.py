@@ -46,9 +46,9 @@ def test_timeline_markdown_rejects_unsafe_links():
 
 def test_list_timeline_is_newest_first_and_paginated(monkeypatch):
     rows = [
-        {"id": 8, "body_markdown": "new", "created_at": datetime(2026, 1, 2, tzinfo=timezone.utc), "edited_at": None},
-        {"id": 7, "body_markdown": "old", "created_at": datetime(2026, 1, 1, tzinfo=timezone.utc), "edited_at": None},
-        {"id": 6, "body_markdown": "next", "created_at": datetime(2025, 1, 1, tzinfo=timezone.utc), "edited_at": None},
+        {"id": 8, "body_markdown": "new", "created_at": datetime(2026, 1, 2, tzinfo=timezone.utc), "edited_at": None, "media": []},
+        {"id": 7, "body_markdown": "old", "created_at": datetime(2026, 1, 1, tzinfo=timezone.utc), "edited_at": None, "media": []},
+        {"id": 6, "body_markdown": "next", "created_at": datetime(2025, 1, 1, tzinfo=timezone.utc), "edited_at": None, "media": []},
     ]
     store = FakeStore(rows)
     monkeypatch.setattr(app, "timeline_store", store)
@@ -79,8 +79,8 @@ def test_timeline_is_unavailable_without_database(monkeypatch):
 
 def test_timeline_omits_invalid_entry_without_leaking_body(monkeypatch, caplog):
     rows = [
-        {"id": 8, "body_markdown": "[bad](javascript:alert(1))", "created_at": datetime(2026, 1, 2, tzinfo=timezone.utc), "edited_at": None},
-        {"id": 7, "body_markdown": "valid", "created_at": datetime(2026, 1, 1, tzinfo=timezone.utc), "edited_at": None},
+        {"id": 8, "body_markdown": "[bad](javascript:alert(1))", "created_at": datetime(2026, 1, 2, tzinfo=timezone.utc), "edited_at": None, "media": []},
+        {"id": 7, "body_markdown": "valid", "created_at": datetime(2026, 1, 1, tzinfo=timezone.utc), "edited_at": None, "media": []},
     ]
     monkeypatch.setattr(app, "timeline_store", FakeStore(rows))
     with caplog.at_level("WARNING"):
@@ -94,7 +94,7 @@ def test_timeline_omits_invalid_entry_without_leaking_body(monkeypatch, caplog):
 
 def test_timestamps_are_utc():
     from timeline import serialize_entry
-    entry = serialize_entry({"id": 1, "body_markdown": "x", "created_at": datetime(2026, 1, 2, 5, tzinfo=timezone.utc), "edited_at": None})
+    entry = serialize_entry({"id": 1, "body_markdown": "x", "created_at": datetime(2026, 1, 2, 5, tzinfo=timezone.utc), "edited_at": None, "media": []})
     assert entry["created_at"] == "2026-01-02T05:00:00+00:00"
 
 

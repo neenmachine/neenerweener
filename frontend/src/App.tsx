@@ -323,7 +323,7 @@ function Tags({ tags }: { tags: string[] }) {
     <span className="tags">
       {tags.map((t) => (
         <a key={t} href={`/?tag=${encodeURIComponent(t)}`}>
-          #{t}
+          {`#${t}`}
         </a>
       ))}
     </span>
@@ -345,10 +345,9 @@ function PostList() {
           <a href="/" aria-current={tag ? undefined : "page"}>
             all
           </a>
-          {[...counts].sort(([a], [b]) => a.localeCompare(b)).map(([t, n]) => (
+          {[...counts].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([t, n]) => (
             <a key={t} href={`/?tag=${encodeURIComponent(t)}`} aria-current={t === tag ? "page" : undefined}>
-              #{t}
-              <span className="muted"> {n}</span>
+              {`#${t}`}<span className="muted"> {n}</span>
             </a>
           ))}
         </nav>

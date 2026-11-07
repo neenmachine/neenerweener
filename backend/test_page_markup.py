@@ -1,0 +1,112 @@
+import logging
+import re
+
+import app
+import pytest
+from fastapi.testclient import TestClient
+
+
+def _markup(response):
+    return re.search(r'<div id="root">(.*)</div></body>', response.text, re.S)[1]
+
+
+def test_home_server_renders_posts_and_escapes_content(tmp_path, monkeypatch):
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text('<html><body><div id="root"></div></body></html>')
+    posts = tmp_path / "posts"
+    posts.mkdir()
+    (posts / "one.md").write_text('---\ntitle: "a & <title>"\ndate: 2026-01-01\nexcerpt: "an <excerpt> & more"\ntags: [a, b]\n---\nbody')
+    drafts = tmp_path / "drafts"
+    drafts.mkdir()
+    (drafts / "draft.md").write_text('---\ntitle: Draft\ntags: [b]\n---\ndraft')
+    monkeypatch.setattr(app, "FRONTEND_DIST", dist)
+    monkeypatch.setattr(app, "POSTS_DIR", posts)
+    monkeypatch.setattr(app, "DRAFTS_DIR", drafts)
+    monkeypatch.setenv("SHOW_DRAFTS", "1")
+
+    with TestClient(app.app) as client:
+        markup = _markup(client.get("/"))
+
+    assert '<nav class="tag-filter" aria-label="tags">' in markup
+    assert 'href="/posts/one"' in markup
+    assert 'a &amp; &lt;title&gt;' in markup
+    assert 'an &lt;excerpt&gt; &amp; more' in markup
+    assert 'href="/?tag=a"' in markup and 'href="/?tag=b"' in markup
+    assert '<span class="draft muted">draft</span>' in markup
+    assert '<footer>' in markup
+    assert 'a & <title>' not in markup and 'an <excerpt> & more' not in markup
+
+
+@pytest.mark.parametrize(
+    "invalid_metadata",
+    [
+        'title: "\\uD800"\ntags: [notes]\n',
+        'title: Bad\nexcerpt: "\\uD800"\ntags: [notes]\n',
+        'title: Bad\ntags: ["\\uD800", notes]\n',
+    ],
+    ids=["title", "excerpt", "tag"],
+)
+@pytest.mark.parametrize(
+    "route",
+    ["/", "/?tag=notes", "/posts/<slug>", "/api/posts", "/feed.xml", "/sitemap.xml"],
+)
+def test_routes_skip_posts_with_surrogate_metadata(tmp_path, monkeypatch, caplog, invalid_metadata, route):
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text('<html><body><div id="root"></div></body></html>')
+    posts = tmp_path / "posts"
+    posts.mkdir()
+    (posts / "bad.md").write_text(f"---\n{invalid_metadata}date: 2026-01-02\n---\nbody")
+    (posts / "valid.md").write_text(
+        "---\ntitle: Valid\ndate: 2026-01-01\ntags: [notes]\n---\nvalid body"
+    )
+    monkeypatch.setattr(app, "FRONTEND_DIST", dist)
+    monkeypatch.setattr(app, "POSTS_DIR", posts)
+    monkeypatch.setattr(app, "DRAFTS_DIR", tmp_path / "drafts")
+    monkeypatch.delenv("SHOW_DRAFTS", raising=False)
+
+    with caplog.at_level(logging.WARNING), TestClient(app.app, raise_server_exceptions=False) as client:
+        if route == "/posts/<slug>":
+            response = client.get("/posts/bad")
+            valid_response = client.get("/posts/valid")
+        else:
+            response = client.get(route)
+            valid_response = None
+
+    if route == "/posts/<slug>":
+        assert response.status_code == 404
+        assert valid_response.status_code == 200
+        assert "Valid" in valid_response.text
+    else:
+        assert response.status_code == 200
+        if route == "/api/posts":
+            assert [post["slug"] for post in response.json()] == ["valid"]
+        else:
+            assert "/posts/valid" in response.text
+            assert "/posts/bad" not in response.text
+    assert "invalid post metadata in bad.md" in caplog.messages
+
+
+def test_home_tag_filter_and_unknown_tag(tmp_path, monkeypatch):
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text('<html><body><div id="root"></div></body></html>')
+    posts = tmp_path / "posts"
+    posts.mkdir()
+    (posts / "one.md").write_text('---\ntitle: One\ndate: 2026-01-01\ntags: [a]\n---\nbody')
+    (posts / "two.md").write_text('---\ntitle: Two\ndate: 2025-01-01\ntags: [b]\n---\nbody')
+    monkeypatch.setattr(app, "FRONTEND_DIST", dist)
+    monkeypatch.setattr(app, "POSTS_DIR", posts)
+    monkeypatch.setattr(app, "DRAFTS_DIR", tmp_path / "drafts")
+    monkeypatch.delenv("SHOW_DRAFTS", raising=False)
+
+    with TestClient(app.app) as client:
+        tagged = _markup(client.get("/?tag=a"))
+        missing = _markup(client.get("/?tag=missing"))
+
+    assert 'href="/?tag=a" aria-current="page"' in tagged
+    assert 'href="/posts/one"' in tagged and 'href="/posts/two"' not in tagged
+    assert "no posts with this tag" in missing
+    assert '<ul class="posts"></ul>' in missing
+    assert 'href="/posts/one"' not in missing and 'href="/posts/two"' not in missing

@@ -1,4 +1,5 @@
 import logging
+from datetime import date
 
 import pytest
 from fastapi.testclient import TestClient
@@ -369,16 +370,34 @@ def test_tags(tmp_path, monkeypatch, caplog):
     assert c.get("/api/posts/one").json()["tags"] == ["notes"]
 
 
-def test_now(tmp_path, monkeypatch):
-    monkeypatch.setattr(app, "PAGES_DIR", tmp_path)
+def test_old_now_redirects_and_api_is_gone():
     c = TestClient(app.app)
+    for path in ("/now", "/now/"):
+        for method in ("get", "head"):
+            response = getattr(c, method)(path, follow_redirects=False)
+            assert response.status_code == 301
+            assert response.headers["location"] == "/timeline"
     assert c.get("/api/now").status_code == 404
-
-    (tmp_path / "now.md").write_text("plain body")
-    assert c.get("/api/now").json() == {"html": "<p>plain body</p>\n"}
 
 
 INDEX = '<html><head><title>neenerweener</title></head><body><div id="root"> </div></body></html>'
+
+
+def test_ssr_timeline_unavailable_is_503(tmp_path, monkeypatch):
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text(INDEX)
+    monkeypatch.setattr(app, "FRONTEND_DIST", dist)
+
+    class BrokenStore:
+        def list(self, before, limit):
+            raise RuntimeError("database password and post body must not leak")
+
+    monkeypatch.setattr(app, "timeline_store", BrokenStore())
+    response = TestClient(app.app).get("/timeline")
+    assert response.status_code == 503
+    assert "could not load timeline" in response.text
+    assert "database password" not in response.text
 
 
 def test_server_rendered_pages(tmp_path, monkeypatch):
@@ -393,7 +412,12 @@ def test_server_rendered_pages(tmp_path, monkeypatch):
     (posts / "brief.md").write_text("---\ntitle: Brief\ndate: 2026-01-02\nexcerpt: short one\n---\nbody")
     monkeypatch.setattr(app, "FRONTEND_DIST", dist)
     monkeypatch.setattr(app, "POSTS_DIR", posts)
-    monkeypatch.setattr(app, "PAGES_DIR", tmp_path / "pages")
+    class Store:
+        def list(self, before, limit):
+            from datetime import datetime, timezone
+            return [{"id": 2, "body_markdown": "first & <safe>", "created_at": datetime(2026, 1, 2, tzinfo=timezone.utc), "edited_at": datetime(2026, 1, 3, tzinfo=timezone.utc)}]
+
+    monkeypatch.setattr(app, "timeline_store", Store())
     c = TestClient(app.app)
 
     page = c.get("/posts/hello").text
@@ -401,18 +425,146 @@ def test_server_rendered_pages(tmp_path, monkeypatch):
     assert page.count("<title>") == 1
     assert '<meta property="og:description" content="First para here." />' in page
     assert '<div id="root"><main><article><h1 class="has-back">' in page
+    assert '<footer><a href="/">neenerweener</a><a href="/timeline">timeline</a></footer>' in page
     assert '<a href="/?tag=a">#a</a>' in page
     preload = page.split('<script id="preload" type="application/json">')[1].split("</script>")[0]
     assert "<" not in preload  # post text cannot close the script tag
     data = __import__("json").loads(preload)
     assert data["/api/posts/hello"]["title"] == "Hi & <bye>"
-    assert data["/api/now"] is None
+    assert "/api/now" not in data
+
+    timeline = c.get("/timeline").text
+    assert "<title>timeline</title>" in timeline
+    assert '<meta name="description" content="timeline" />' in timeline
+    assert 'id="entry-2"' in timeline
+    assert 'title="January 2, 2026 at 12:00 AM"' in timeline
+    assert 'datetime="2026-01-02T00:00:00.000Z"' in timeline
+    assert 'aria-label="January 2, 2026 at 12:00 AM"' in timeline
+    assert '<span class="edited" title="January 3, 2026 at 12:00 AM">edited<span class="sr-only"> January 3, 2026 at 12:00 AM</span></span>' in timeline
+    assert '>jan 2<' in timeline
+    assert '<footer><a href="/">neenerweener</a><a href="/timeline" aria-current="page">timeline</a></footer>' in timeline
+    assert "first &amp; &lt;safe&gt;" in timeline
+    assert '"/api/timeline"' in timeline
+    assert "<" not in timeline.split('<script id="preload" type="application/json">')[1].split("</script>")[0]
 
     assert '<meta name="description" content="short one" />' in c.get("/posts/brief").text
     missing = c.get("/posts/nope").text
     assert '"/api/posts/nope": null' in missing and "<title>neenerweener</title>" in missing
     home = c.get("/?tag=a").text
     assert '"/api/posts": [' in home and '<div id="root"></div>' in home
+
+
+@pytest.mark.parametrize(
+    ("query", "expected_id", "next_cursor", "status_code"),
+    [
+        ("", 1, 11, 200),
+        ("?before=11", 11, 22, 200),
+        ("?before=nope", None, None, 400),
+        ("?before=11&before=22", None, None, 400),
+        ("?before=11&before=nope", None, None, 400),
+        ("?before=", None, None, 400),
+        ("?before=0", None, None, 400),
+        ("?before=-1", None, None, 400),
+        ("?before=22", 22, None, 200),
+        ("?before=33", 33, 11, 200),
+    ],
+)
+def test_timeline_ssr_and_preload_share_one_initial_page(tmp_path, monkeypatch, query, expected_id, next_cursor, status_code):
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text(INDEX)
+    monkeypatch.setattr(app, "FRONTEND_DIST", dist)
+
+    class Store:
+        def list(self, before, limit):
+            from datetime import datetime, timezone
+            row_id = before or 1
+            count = 21 if next_cursor is not None else 1
+            rows = [{"id": row_id, "body_markdown": f"entry {row_id}", "created_at": datetime(2026, 1, 1, tzinfo=timezone.utc), "edited_at": None} for _ in range(count)]
+            if next_cursor is not None:
+                rows[19]["id"] = next_cursor
+            return rows
+
+    monkeypatch.setattr(app, "timeline_store", Store())
+    response = TestClient(app.app).get("/timeline" + query)
+    assert response.status_code == status_code
+    if status_code == 400:
+        assert response.json() == {"detail": "invalid timeline cursor"}
+        assert 'id="preload"' not in response.text
+        return
+    html = response.text
+    preload = html.split('<script id="preload" type="application/json">')[1].split("</script>")[0]
+    data = __import__("json").loads(preload)
+    assert set(data) == {"/api/timeline"}
+    assert data["/api/timeline"]["entries"][0]["id"] == expected_id
+    assert f'id="entry-{expected_id}"' in html
+    control = f'<div class="load-more"><a href="/timeline?before={next_cursor}">load more</a></div>'
+    assert (control in html) is (next_cursor is not None)
+
+
+def test_timeline_empty_and_unavailable_are_distinct(tmp_path, monkeypatch):
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text(INDEX)
+    monkeypatch.setattr(app, "FRONTEND_DIST", dist)
+
+    class EmptyStore:
+        def list(self, before, limit):
+            return []
+
+    monkeypatch.setattr(app, "timeline_store", EmptyStore())
+    empty = TestClient(app.app).get("/timeline").text
+    assert '"/api/timeline": {"entries": [], "next_cursor": null}' in empty
+    assert "nothing here yet" in empty
+    assert "could not load timeline" not in empty
+
+    monkeypatch.setattr(app, "timeline_store", None)
+    unavailable = TestClient(app.app).get("/timeline").text
+    assert '"/api/timeline": null' in unavailable
+    assert "could not load timeline" in unavailable
+    assert "nothing here yet" not in unavailable
+
+    class MalformedPageStore:
+        def list(self, before, limit):
+            return [{"id": 30 - i} for i in range(limit + 1)]
+
+    monkeypatch.setattr(app, "timeline_store", MalformedPageStore())
+    malformed = TestClient(app.app).get("/timeline").text
+    assert '"/api/timeline": {"entries": [], "next_cursor": 11}' in malformed
+    assert "nothing here yet" not in malformed
+    assert '<div class="load-more"><a href="/timeline?before=11">load more</a></div>' in malformed
+
+    class BrokenStore:
+        def list(self, before, limit):
+            raise RuntimeError("database details must not reach the page")
+
+    monkeypatch.setattr(app, "timeline_store", BrokenStore())
+    broken = TestClient(app.app).get("/timeline")
+    assert broken.status_code == 503
+    assert "could not load timeline" in broken.text
+    assert "database details" not in broken.text
+
+
+@pytest.mark.parametrize(
+    ("page", "has_control", "href"),
+    [
+        ({"entries": [], "next_cursor": 11}, True, "/timeline?before=11"),
+        ({"entries": [], "next_cursor": None}, False, None),
+        ({"entries": [{"id": 1, "html": "<p>x</p>", "created_at": "2026-01-01T00:00:00+00:00"}], "next_cursor": 11}, True, "/timeline?before=11"),
+        ({"entries": [{"id": 1, "html": "<p>x</p>", "created_at": "2026-01-01T00:00:00+00:00"}], "next_cursor": None}, False, None),
+    ],
+)
+def test_timeline_markup_pagination_control_matches_cursor(page, has_control, href):
+    markup = app.timeline_markup(page)
+    control = '<div class="load-more"><a href="' + href + '">load more</a></div>' if href else ""
+    assert (control != "" and control in markup) is has_control
+    assert ('class="load-more"' in markup) is has_control
+
+
+def test_timeline_timestamp_format_is_utc_and_year_aware():
+    assert app.compact_timestamp("2025-03-01T23:30:00-05:00", date(2026, 11, 7)) == "mar 2, 2025"
+    assert app.compact_timestamp("2026-11-07T00:30:00-05:00", date(2026, 11, 7)) == "nov 7"
+    assert app.full_timestamp("2026-11-07T00:30:00-05:00") == "November 7, 2026 at 5:30 AM"
 
 
 def test_image_caption():

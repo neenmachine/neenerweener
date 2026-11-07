@@ -6,7 +6,7 @@ import re
 import time
 import uuid
 from contextlib import asynccontextmanager
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from html import escape, unescape
 from urllib.parse import quote
 from pathlib import Path
@@ -14,7 +14,7 @@ from pathlib import Path
 import yaml
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from markdown_it import MarkdownIt
 from mdit_py_plugins.dollarmath import dollarmath_plugin
@@ -28,7 +28,6 @@ from operations import check_readiness, configure_logging, load_schema_heads
 from timeline import TimelineStore, TimelineStoreProtocol, serialize_entry
 
 POSTS_DIR = Path(os.environ.get("POSTS_DIR", Path(__file__).parent.parent / "posts"))
-PAGES_DIR = Path(os.environ.get("PAGES_DIR", Path(__file__).parent.parent / "pages"))
 DRAFTS_DIR = Path(os.environ.get("DRAFTS_DIR", Path(__file__).parent.parent / "drafts"))
 CODE_DIR = Path(os.environ.get("CODE_DIR", Path(__file__).parent.parent / "code"))
 FRONTEND_DIST = Path(os.environ.get("FRONTEND_DIST", Path(__file__).parent.parent / "frontend" / "dist"))
@@ -131,12 +130,21 @@ def list_timeline(
 ):
     if timeline_store is None:
         raise HTTPException(503, "timeline unavailable")
-    rows = timeline_store.list(before, limit)
+    try:
+        rows = timeline_store.list(before, limit)
+    except Exception as exc:
+        logger.warning("timeline unavailable: %s", type(exc).__name__)
+        raise HTTPException(503, "timeline unavailable") from exc
     has_next = len(rows) > limit
-    entries = [serialize_entry(row) for row in rows[:limit]]
+    entries = []
+    for row in rows[:limit]:
+        try:
+            entries.append(serialize_entry(row))
+        except Exception as exc:
+            logger.warning("invalid timeline entry id=%s error=%s", row.get("id"), type(exc).__name__)
     return {
         "entries": entries,
-        "next_cursor": entries[-1]["id"] if has_next else None,
+        "next_cursor": rows[limit - 1]["id"] if has_next and rows else None,
     }
 
 
@@ -269,14 +277,10 @@ def get_post(slug: str):
     raise HTTPException(404, "post not found")
 
 
-@app.get("/api/now")
-def get_now():
-    """pages/now.md: plain Markdown, no frontmatter."""
-    try:
-        text = (PAGES_DIR / "now.md").read_text(encoding="utf-8-sig")
-    except (OSError, UnicodeDecodeError):
-        raise HTTPException(404, "not found")
-    return {"html": md.render(text)}
+@app.api_route("/now", methods=["GET", "HEAD"])
+@app.api_route("/now/", methods=["GET", "HEAD"])
+def old_now():
+    return RedirectResponse("/timeline", status_code=301)
 
 
 # check_dir=False: the app still starts when POSTS_DIR has no images folder.
@@ -376,7 +380,7 @@ app.include_router(discovery_router)
 
 
 @app.api_route("/{path:path}", methods=["GET", "HEAD"])
-def frontend(path: str):
+def frontend(path: str, request: Request):
     if path == "api" or path.startswith("api/"):
         raise HTTPException(404, "not found")
     root = FRONTEND_DIST.resolve()
@@ -390,25 +394,38 @@ def frontend(path: str):
     index = contained_file(root, "index.html")
     if not index:
         raise HTTPException(404, "not found")
-    page = page_data(path)
+    if path.strip("/") == "timeline":
+        before_cursor = timeline_before(request)
+    else:
+        before_cursor = None
+    page = page_data(path, before_cursor)
     if page is None:
         return HTMLResponse(fill_index(index.read_text(encoding="utf-8"), {}, {"title": "neenerweener"}, ""))
-    return HTMLResponse(fill_index(index.read_text(encoding="utf-8"), *page))
+    preload, head, markup, status_code = page
+    return HTMLResponse(fill_index(index.read_text(encoding="utf-8"), preload, head, markup), status_code=status_code)
 
 
-def page_data(path: str) -> tuple[dict, dict, str] | None:
-    """For the home, /now and post pages: the API responses the page needs (null for a 404),
-    its <head> tags, and markup shown before the scripts run. None for other pages."""
+def timeline_before(request: Request) -> int | None:
+    values = request.query_params.getlist("before")
+    if not values:
+        return None
+    if len(values) != 1 or not values[0].isdigit() or int(values[0]) <= 0:
+        raise HTTPException(400, "invalid timeline cursor")
+    return int(values[0])
+
+
+def page_data(path: str, before: int | None = None) -> tuple[dict, dict, str, int] | None:
+    """For the home, timeline, and post pages: preload data, head tags, and no-JS markup."""
     path = path.strip("/")
     preload: dict = {}
     head = {"title": "neenerweener"}
     markup = ""
-    try:
-        preload["/api/now"] = get_now()
-    except HTTPException:
-        preload["/api/now"] = None
+    status_code = 200
     if path == "":
         preload["/api/posts"] = list_posts()
+    elif path == "timeline":
+        head = {"title": "timeline", "description": "timeline"}
+        preload["/api/timeline"], markup, status_code = timeline_page(before)
     elif (m := re.fullmatch(r"posts/([a-z0-9-]+)", path)):
         url = f"/api/posts/{m[1]}"
         try:
@@ -419,9 +436,20 @@ def page_data(path: str) -> tuple[dict, dict, str] | None:
             preload[url] = post
             head = {"title": post["title"], "description": post["excerpt"] or summary(post["html"])}
             markup = post_markup(post)
-    elif path != "now":
+    else:
         return None
-    return preload, head, markup
+    return preload, head, markup, status_code
+
+
+def timeline_page(before: int | None) -> tuple[dict | None, str, int]:
+    try:
+        page = list_timeline(before=before, limit=20)
+    except HTTPException:
+        return None, timeline_markup(None), 503
+    except Exception:
+        logger.warning("timeline unavailable during page render")
+        return None, timeline_markup(None), 503
+    return page, timeline_markup(page), 200
 
 
 def summary(html: str, limit: int = 200) -> str:
@@ -432,13 +460,64 @@ def summary(html: str, limit: int = 200) -> str:
     return text if len(text) <= limit else text[: limit - 1].rsplit(" ", 1)[0] + "…"
 
 
+def timeline_markup(page: dict | None) -> str:
+    """The first timeline page as the client renders it; None means the timeline is unavailable."""
+    entries = page["entries"] if page else []
+    if page is None:
+        content = '<p class="muted">could not load timeline</p>'
+    elif not entries and page["next_cursor"] is None:
+        content = '<p class="muted">nothing here yet</p>'
+    else:
+        items = []
+        for entry in entries:
+            edited = (
+                f'<span class="edited" title="{escape(full_timestamp(entry["edited_at"]))}">'
+                f'edited<span class="sr-only"> {escape(full_timestamp(entry["edited_at"]))}</span></span>'
+                if entry.get("edited_at") else ""
+            )
+            created = entry["created_at"]
+            created_utc = _utc_datetime(created).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+            created_full = full_timestamp(created)
+            items.append(
+                f'<article class="timeline-entry" id="entry-{entry["id"]}">'
+                f'<div>{entry["html"]}</div>'
+                f'<footer><a href="/timeline#entry-{entry["id"]}" aria-label="{escape(created_full)}">'
+                f'<time datetime="{escape(created_utc)}" title="{escape(created_full)}">{escape(compact_timestamp(created))}</time>'
+                f'</a>{edited}</footer>'
+                "</article>"
+            )
+        content = f'<div class="timeline">{"".join(items)}</div>'
+    if page is not None and page["next_cursor"] is not None:
+        cursor = page["next_cursor"]
+        content += f'<div class="load-more"><a href="/timeline?before={cursor}">load more</a></div>'
+    footer = '<footer><a href="/">neenerweener</a><a href="/timeline" aria-current="page">timeline</a></footer>'
+    return f'<main><article><h1>timeline</h1>{content}</article>{footer}</main>'
+
+
+def _utc_datetime(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value)
+    return parsed.astimezone(timezone.utc)
+
+
+def compact_timestamp(value: str, today: date | None = None) -> str:
+    current = today or datetime.now(timezone.utc).date()
+    moment = _utc_datetime(value)
+    year = "" if moment.date().year == current.year else f", {moment.year}"
+    return f"{moment.strftime('%b').lower()} {moment.day}{year}"
+
+
+def full_timestamp(value: str) -> str:
+    moment = _utc_datetime(value)
+    return moment.strftime('%B %-d, %Y at %-I:%M %p')
+
+
 def post_markup(post: dict) -> str:
     # Mirrors PostPage in App.tsx so the swap to the React page is not visible.
     tags = "".join(f'<a href="/?tag={quote(t)}">#{escape(t)}</a>' for t in post["tags"])
     return (
         '<main><article><h1 class="has-back"><a class="back" href="/" aria-label="back">←</a>'
         f'{escape(post["title"])}</h1><div class="meta"><span class="tags">{tags}</span></div>'
-        f'<div>{post["html"]}</div></article></main>'
+        f'<div>{post["html"]}</div></article><footer><a href="/">neenerweener</a><a href="/timeline">timeline</a></footer></main>'
     )
 
 

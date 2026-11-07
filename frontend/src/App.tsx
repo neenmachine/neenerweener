@@ -1,8 +1,9 @@
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { type MouseEvent, type ReactNode, useEffect, useRef, useState } from "react";
 
 type Summary = { slug: string; title: string; excerpt: string | null; tags: string[]; draft: boolean };
 type Post = Summary & { html: string };
-type Now = { html: string };
+type Entry = { id: number; html: string; created_at: string; edited_at: string | null };
+type Timeline = { entries: Entry[]; next_cursor: number | null };
 type Project = { name: string; files: string[]; readme_html: string | null };
 type CodeFile = { path: string; html?: string; binary?: true };
 
@@ -11,7 +12,7 @@ const slug = location.pathname.match(/^\/posts\/([a-z0-9-]+)\/?$/)?.[1];
 // /code/<project>, /code/<project>/<path>, where the path is a folder or a file.
 // There is no project index: Henry links to code from his posts.
 const code = location.pathname.match(/^\/code\/([a-z0-9-]+)(?:\/(.+?))?\/?$/);
-const now = /^\/now\/?$/.test(location.pathname);
+const timeline = /^\/timeline\/?$/.test(location.pathname);
 // /?tag=<tag> filters the post list.
 const tag = new URLSearchParams(location.search).get("tag");
 const IMAGE = /\.(png|jpe?g|webp|gif|svg)$/i;
@@ -30,43 +31,164 @@ export default function App() {
     );
   return (
     <main>
-      {slug ? <PostPage slug={slug} /> : now ? <NowPage /> : <PostList />}
+      {slug ? <PostPage slug={slug} /> : timeline ? <TimelinePage /> : <PostList />}
       <Footer />
     </main>
   );
 }
 
-// The "now" link shows only once Henry has written pages/now.md.
 function Footer() {
-  const { data } = useApi<Now>("/api/now");
   return (
     <footer>
-      <a href="/" aria-current={!slug && !now && !tag ? "page" : undefined}>
+      <a href="/" aria-current={!slug && !timeline && !tag ? "page" : undefined}>
         neenerweener
       </a>
-      {(data || now) && (
-        <a href="/now" aria-current={now ? "page" : undefined}>
-          now
-        </a>
-      )}
+      <a href="/timeline" aria-current={timeline ? "page" : undefined}>
+        timeline
+      </a>
     </footer>
   );
 }
 
-function NowPage() {
-  const { data, error } = useApi<Now>("/api/now");
+// Newest first. The first page comes from the preload; "load more" fetches older pages by cursor.
+function TimelinePage() {
+  const { data, error } = useApi<Timeline>("/api/timeline");
+  const [older, setOlder] = useState<Timeline[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState(false);
+  // What the always-mounted status region says, so screen readers hear loading, failure and progress.
+  const [status, setStatus] = useState("");
+  // createRoot replaces the server markup, so the new entry is never the browser's :target; track the hash.
+  const [hash, setHash] = useState(location.hash);
+  // A ref, not state: two activations in the same task both see busy=false.
+  const inFlight = useRef(false);
+  const button = useRef<HTMLAnchorElement>(null);
+  const list = useRef<HTMLDivElement>(null);
+  const empty = useRef<HTMLParagraphElement>(null);
+  // Index of the entry to focus after the last page removes the focused button.
+  const focusAt = useRef<number | null>(null);
   useEffect(() => {
-    document.title = "now";
+    document.title = "timeline";
+    const onHash = () => setHash(location.hash);
+    addEventListener("hashchange", onHash);
+    return () => removeEventListener("hashchange", onHash);
   }, []);
-  if (error) return <p className="muted">nothing here yet</p>;
+  useEffect(() => {
+    // Entries render after the page loads, so the browser cannot jump to /timeline#entry-<id> itself.
+    if (data && location.hash) document.getElementById(location.hash.slice(1))?.scrollIntoView();
+  }, [data]);
+  useEffect(() => {
+    if (focusAt.current === null) return;
+    const links = list.current?.querySelectorAll<HTMLElement>(".timeline-entry > footer > a");
+    const link = links?.[Math.min(focusAt.current, links.length - 1)];
+    (link ?? empty.current)?.focus();
+    focusAt.current = null;
+  }, [older]);
+  const heading = <h1>timeline</h1>;
+  if (error)
+    return (
+      <article>
+        {heading}
+        <p className="muted">could not load timeline</p>
+      </article>
+    );
   if (!data) return null;
+  const pages = [data, ...older];
+  const cursor = pages[pages.length - 1].next_cursor;
+  const seen = new Set<number>();
+  const entries = pages.flatMap((p) => p.entries).filter((e) => !seen.has(e.id) && !!seen.add(e.id));
+  const loadMore = (event: MouseEvent<HTMLAnchorElement>) => {
+    event.preventDefault();
+    if (inFlight.current || cursor === null) return;
+    inFlight.current = true;
+    setBusy(true);
+    setFailed(false);
+    setStatus("loading");
+    fetch(`/api/timeline?before=${cursor}`)
+      .then((r) => (r.ok ? r.json() : Promise.reject()))
+      .then(
+        (page: Timeline) => {
+          const added = page.entries.filter((e) => !seen.has(e.id)).length;
+          // The button goes away with the last page; keep keyboard focus on the new entries, not <body>.
+          if (page.next_cursor === null && document.activeElement === button.current) focusAt.current = entries.length;
+          setOlder((prev) => [...prev, page]);
+          setStatus(page.next_cursor === null ? `${added} more loaded, end of timeline` : `${added} more loaded`);
+        },
+        () => {
+          setFailed(true);
+          setStatus("could not load more");
+        },
+      )
+      .finally(() => {
+        inFlight.current = false;
+        setBusy(false);
+      });
+  };
   return (
     <article>
-      {/* Henry's own file, rendered server side. */}
-      <div dangerouslySetInnerHTML={{ __html: data.html }} />
+      {heading}
+      {/* A page can be empty and still have older entries (the server skips bad rows); only the end is empty. */}
+      {!entries.length && cursor === null && (
+        <p className="muted" tabIndex={-1} ref={empty}>
+          nothing here yet
+        </p>
+      )}
+      {/* Mirrors timeline_markup in backend/app.py, so the swap from the server markup is not visible. */}
+      <div className="timeline" ref={list}>
+        {entries.map((e) => (
+          <article
+            key={e.id}
+            className={hash === `#entry-${e.id}` ? "timeline-entry target" : "timeline-entry"}
+            id={`entry-${e.id}`}
+          >
+            {/* Rendered server side from Henry's entry, with raw HTML disabled. */}
+            <div dangerouslySetInnerHTML={{ __html: e.html }} />
+            <footer>
+              <a href={`#entry-${e.id}`} aria-label={full(e.created_at)}>
+                <time dateTime={new Date(e.created_at).toISOString()} title={full(e.created_at)}>
+                  {compact(e.created_at)}
+                </time>
+              </a>
+              {e.edited_at && (
+                <span className="edited" title={full(e.edited_at)}>
+                  edited<span className="sr-only"> {full(e.edited_at)}</span>
+                </span>
+              )}
+            </footer>
+          </article>
+        ))}
+      </div>
+      {cursor !== null && (
+        <div className="load-more">
+          {/* aria-disabled, not disabled, so keyboard focus stays on the button while it loads. */}
+          <a href={`/timeline?before=${cursor}`} ref={button} onClick={loadMore} aria-disabled={busy} aria-busy={busy}>
+            {/* Both labels share one grid cell, so the button keeps the width of the longer one. */}
+            <span hidden={busy}>load more</span>
+            <span hidden={!busy}>loading</span>
+          </a>
+          {/* The status region below announces it. */}
+          {failed && (
+            <span className="muted" aria-hidden="true">
+              could not load more
+            </span>
+          )}
+        </div>
+      )}
+      <p className="sr-only" role="status">
+        {status}
+      </p>
     </article>
   );
 }
+
+// "nov 7" this year, "nov 7, 2025" before; the full date and time are in the tooltip.
+function compact(iso: string) {
+  const d = new Date(iso);
+  const year = d.getUTCFullYear() === new Date().getUTCFullYear() ? undefined : "numeric";
+  return d.toLocaleDateString("en", { month: "short", day: "numeric", year, timeZone: "UTC" }).toLowerCase();
+}
+
+const full = (iso: string) => new Date(iso).toLocaleString("en", { dateStyle: "long", timeStyle: "short", timeZone: "UTC" });
 
 function Back({ href }: { href: string }) {
   return (

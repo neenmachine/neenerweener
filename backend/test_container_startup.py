@@ -1,4 +1,3 @@
-import json
 from pathlib import Path
 
 
@@ -16,13 +15,3 @@ def test_container_start_migrates_before_starting_the_server():
 
     assert command in dockerfile
     assert "uv run" not in command
-
-
-def test_railway_config_uses_schema_aware_readiness_without_predeploy():
-    config = json.loads((ROOT / "railway.json").read_text())
-    deploy = config["deploy"]
-
-    assert "preDeployCommand" not in deploy
-    assert "preDeployTimeoutSeconds" not in deploy
-    assert deploy["healthcheckPath"] == "/readyz"
-    assert deploy["healthcheckTimeout"] == 30

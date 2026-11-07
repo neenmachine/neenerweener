@@ -541,6 +541,8 @@ class CliTests(unittest.TestCase):
         http_error.read = lambda n=-1: b"{}"
         cases = [
             (http_error, 4, "tweet: server rejected the image\n"),
+            (cli.HTTPError("https://s.example/api/admin/media", 413, "private", {}, None), 4,
+             "tweet: image is too large (max 20 MB)\n"),
             (cli.URLError("private"), 1, "tweet: network or TLS error; retry\n"),
         ]
         for error, exit_code, message in cases:
@@ -575,10 +577,16 @@ class CliTests(unittest.TestCase):
         self.assertEqual((result, stderr), (0, ""))
         self.assertEqual(calls[-1][0].data, b'{"body_markdown":"hello"}')
 
-    def test_tweet_rejects_invalid_alt_and_empty_text_before_authentication(self):
+    def test_tweet_rejects_invalid_text_and_alt_before_authentication(self):
         image = self.image("image.jpg")
         cases = [
             (["", "--attach", str(image)], "text must not be empty"),
+            (["   "], "text must not be empty"),
+            (["\t\n"], "text must not be empty"),
+            (["\u00a0"], "text must not be empty"),
+            (["\u2003"], "text must not be empty"),
+            (["x" * 10001], "text is too long (max 10000 characters)"),
+            (["bad\0text"], "invalid text"),
             (["hello", "--attach", str(image), "--alt", "x" * 1001], "invalid alt text"),
             (["hello", "--attach", str(image), "--alt", "bad\0alt"], "invalid alt text"),
         ]
@@ -588,6 +596,13 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(result, 2)
                 self.assertEqual(stderr, f"tweet: {message}\n")
                 self.assertEqual(calls, [])
+
+    def test_tweet_accepts_text_at_character_limit_through_main(self):
+        result, stderr, _, calls = self.run_attachment_cli(
+            ["x" * 10000], self.auth_responses() + [Response({"id":7})],
+        )
+        self.assertEqual((result, stderr), (0, ""))
+        self.assertEqual(len(json.loads(calls[-1][0].data)["body_markdown"]), 10000)
 
     def test_tweet_key_path_expands_home_in_config_and_default(self):
         home = Path(self.tmp.name)

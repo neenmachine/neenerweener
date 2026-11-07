@@ -201,7 +201,7 @@ def _http_error(error, sensitive, rejected):
             pass
         return ServerValidationError(detail)
     if error.code == 413:
-        return ServerValidationError("image is too large")
+        return ServerValidationError("image is too large (max 20 MB)")
     if error.code == 429:
         retry = _safe_server_value(error.headers.get("Retry-After"), sensitive, 80)
         return ThrottleError("request throttled" + (f"; retry after {retry}" if retry else ""))
@@ -370,15 +370,26 @@ def _upload(server, data, bearer):
     return image_id
 
 
+def _post_validation_error(text, alts):
+    if "\0" in text:
+        return "invalid text"
+    if not text.strip():
+        return "text must not be empty"
+    if len(text) > 10_000:
+        return "text is too long (max 10000 characters)"
+    if any(len(alt) > 1000 or "\0" in alt for alt in alts):
+        return "invalid alt text"
+    return None
+
+
 def post(server, key, text, attachments=(), alts=()):
-    if not text:
-        raise UsageConfigError("text must not be empty")
+    validation_error = _post_validation_error(text, alts)
+    if validation_error:
+        raise UsageConfigError(validation_error)
     if len(attachments) > 4:
         raise UsageConfigError("at most 4 images")
     if alts and len(alts) != len(attachments):
         raise UsageConfigError("give one --alt per --attach, or none")
-    if any(len(alt) > 1000 or "\0" in alt for alt in alts):
-        raise UsageConfigError("invalid alt text")
     image_data = [_image_file(path) for path in attachments]
     fingerprint = _fingerprint(key)
     challenge = _request(server, "/api/cli/auth/challenge", {"key_fingerprint": fingerprint})

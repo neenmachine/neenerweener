@@ -1,4 +1,5 @@
 import xml.etree.ElementTree as ET
+from urllib.parse import urlsplit
 
 from fastapi.testclient import TestClient
 
@@ -71,11 +72,16 @@ def test_discovery_routes_are_available(tmp_path, monkeypatch):
     urls = sitemap_root.findall("{http://www.sitemaps.org/schemas/sitemap/0.9}url")
     assert [u.findtext("{http://www.sitemaps.org/schemas/sitemap/0.9}loc") for u in urls] == [
         "https://www.neenerweener.ca/",
+        "https://www.neenerweener.ca/timeline",
         "https://www.neenerweener.ca/posts/special",
         "https://www.neenerweener.ca/posts/older",
         "https://www.neenerweener.ca/code/public-project",
     ]
-    assert urls[1].findtext("{http://www.sitemaps.org/schemas/sitemap/0.9}lastmod") == "2026-03-28"
+    locs = [u.findtext("{http://www.sitemaps.org/schemas/sitemap/0.9}loc") for u in urls]
+    assert locs.count("https://www.neenerweener.ca/timeline") == 1
+    assert all(path not in loc for path in ("/now", "/admin", "/api/", "/feed.xml", "/robots.txt") for loc in locs)
+    assert urls[1].findtext("{http://www.sitemaps.org/schemas/sitemap/0.9}lastmod") is None
+    assert urls[2].findtext("{http://www.sitemaps.org/schemas/sitemap/0.9}lastmod") == "2026-03-28"
     sitemap_head = client.head("/sitemap.xml")
     assert sitemap_head.status_code == 200
     assert sitemap_head.headers["content-type"] == "application/xml; charset=utf-8"
@@ -146,6 +152,35 @@ def test_feed_raw_html_is_left_untouched(tmp_path, monkeypatch):
     root = ET.fromstring(response.content)
     content = root.find(f"{{{ATOM}}}entry/{{{ATOM}}}content")
     assert content.text == '<p><a href="/raw">raw</a></p>\n'
+
+
+def test_sitemap_locs_resolve(tmp_path, monkeypatch):
+    posts = tmp_path / "posts"
+    posts.mkdir()
+    (posts / "post.md").write_text("---\ntitle: post\ndate: 2026-03-28\n---\nbody")
+    code = tmp_path / "code"
+    (code / "project").mkdir(parents=True)
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text("<html><body>site</body></html>")
+    monkeypatch.setattr(app, "FRONTEND_DIST", dist)
+    monkeypatch.setattr(app, "POSTS_DIR", posts)
+    monkeypatch.setattr(app, "CODE_DIR", code)
+    monkeypatch.setenv("CANONICAL_ORIGIN", "https://www.neenerweener.ca")
+
+    class EmptyStore:
+        def list(self, before, limit):
+            return []
+
+    monkeypatch.setattr(app, "timeline_store", EmptyStore(), raising=False)
+
+    client = TestClient(app.app)
+    root = ET.fromstring(client.get("/sitemap.xml").content)
+    locs = root.findall("{http://www.sitemaps.org/schemas/sitemap/0.9}url/{http://www.sitemaps.org/schemas/sitemap/0.9}loc")
+
+    for loc in locs:
+        response = client.get(urlsplit(loc.text).path, follow_redirects=False)
+        assert response.status_code == 200
 
 
 def test_html_head_advertises_feed(tmp_path, monkeypatch):

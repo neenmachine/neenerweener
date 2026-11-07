@@ -9,7 +9,7 @@ dev:
 
 test:
 	cd backend && uv run pytest -q
-	cd frontend && pnpm build
+	cd frontend && pnpm test && pnpm build
 
 # Snapshot a local git repo into code/<name>/: make code-sync PROJECT=~/path/to/repo [NAME=name]
 code-sync:

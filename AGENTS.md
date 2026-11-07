@@ -16,12 +16,12 @@ Everything else: the site, backend, frontend, styling, deployment, demos, toolin
 
 - `posts/` - Henry's posts as Markdown in `<slug>.md` files. Each file starts with YAML frontmatter, for example `title: ...`, `date: 2026-03-28`, and optional `excerpt: ...` and `tags: [a, b]` (lowercased; the home page filters by `/?tag=<tag>`). Rendering: CommonMark plus tables and strikethrough, `$...$` / `$$...$$` math, raw HTML allowed, code blocks highlighted by Pygments on the server, ` ```mermaid ` blocks drawn in the browser.
 - `posts/images/` - post images, served at `/images/<file>`. Write them as `![alt](/images/<file>)`; `![alt](/images/<file> "caption")` shows the caption below the image.
-- `pages/now.md` - Henry's /now page; plain Markdown, no frontmatter. The header shows a `now` link only when this file exists.
+- `/timeline` - public timeline page backed by `/api/timeline`; `/admin` is reserved for the private admin interface.
 - `drafts/` - local-only draft posts in `<slug>.md` files; YAML frontmatter is optional. Drafts are shown when `SHOW_DRAFTS=1`.
 - `code/<project>/` - snapshots from `make code-sync`; never edit by hand; contents are Henry's. Shown at `/code/<project>/<path>` for linking from posts; there is no project index or nav link.
 - `scripts/code_sync.py` - the snapshot script behind `make code-sync`.
-- `backend/` - FastAPI app (`uv`). Serves posts at `/api/posts` and `/api/posts/{slug}`, the now page at `/api/now`, code at `/api/code/{project}` and raw code files at `/code-raw/<project>/<path>`.
-- Server-rendered pages: for `/`, `/now` and `/posts/<slug>`, the backend fills `index.html` with the page title, description and link-preview tags, the API data the page needs (`<script id="preload">`, read by `useApi`), and for posts the article markup.
+- `backend/` - FastAPI app (`uv`). Serves posts at `/api/posts` and `/api/posts/{slug}`, the timeline at `/api/timeline`, code at `/api/code/{project}` and raw code files at `/code-raw/<project>/<path>`.
+- Server-rendered pages: for `/`, `/timeline` and `/posts/<slug>`, the backend fills `index.html` with the page title, description and link-preview tags, the API data the page needs (`<script id="preload">`, read by `useApi`), and the first timeline or post markup.
 - `frontend/` - React + Vite (`pnpm`). The dev server proxies `/api`, `/images`, and `/code-raw` to the backend on port 8000.
 
 ## Commands

@@ -1,3 +1,4 @@
+import base64
 import contextlib
 import io
 import json
@@ -11,11 +12,18 @@ from unittest.mock import patch
 
 from ween_tweet import cli
 
+
 class Response:
     def __init__(self, data, headers=None):
         self.data = json.dumps(data).encode() if isinstance(data, dict) else data
         self.headers = headers or {}
     def read(self, n=-1): return self.data
+
+
+def signature_bytes():
+    encoded = base64.b64encode(b"SSHSIG\0unit-test-signature").decode()
+    return f"-----BEGIN SSH SIGNATURE-----\n{encoded}\n-----END SSH SIGNATURE-----\n".encode()
+
 
 class CliTests(unittest.TestCase):
     def setUp(self):
@@ -30,21 +38,88 @@ class CliTests(unittest.TestCase):
             self.assertEqual(cli.main(["--server", "https://flag.example", "--key", str(self.key), "text"]), 0)
             post.assert_called_once_with("https://flag.example", self.key, "text")
 
-    def test_tweet_rejects_invalid_utf8_config_without_leaking_file_details(self):
+    def test_tweet_normalizes_config_failures_to_exact_safe_errors(self):
         config = Path(self.tmp.name) / ".config" / "ween" / "config.toml"
         config.parent.mkdir(parents=True)
-        config.write_bytes(b"server = \xff secret-config-content")
-        stderr = io.StringIO()
-        with patch.dict(os.environ, {"HOME": self.tmp.name}, clear=False), contextlib.redirect_stderr(stderr):
-            result = cli.main(["text"])
-        self.assertEqual(result, 2)
-        self.assertEqual(stderr.getvalue(), "tweet: cannot read config\n")
-        self.assertNotIn(str(config), stderr.getvalue())
-        self.assertNotIn("secret-config-content", stderr.getvalue())
+        cases = [
+            (b"server = \xff secret-config-content", None, "tweet: cannot read config\n"),
+            (b"server = [broken", None, "tweet: cannot read config\n"),
+            (b"unknown = 'private-value'", None, "tweet: config contains an unknown key\n"),
+            (b"server = 42", None, "tweet: config values must be strings\n"),
+            (b"server = 'https://ok.example'", OSError("private-path-detail"), "tweet: cannot read config\n"),
+        ]
+        for content, read_error, expected in cases:
+            with self.subTest(content=content[:20], read_error=bool(read_error)):
+                config.write_bytes(content)
+                stderr = io.StringIO()
+                open_patch = patch.object(Path, "open", side_effect=read_error) if read_error else contextlib.nullcontext()
+                with patch.dict(os.environ, {"HOME": self.tmp.name}, clear=False), open_patch, contextlib.redirect_stderr(stderr):
+                    result = cli.main(["text"])
+                self.assertEqual(result, 2)
+                self.assertEqual(stderr.getvalue(), expected)
+                self.assertNotIn(str(config), stderr.getvalue())
+                self.assertNotIn("private", stderr.getvalue())
+                self.assertNotIn("secret-config-content", stderr.getvalue())
+
+    def test_tweet_rejects_malformed_server_urls_and_ports_as_config(self):
+        cases = [
+            "https://example.com:abc",
+            "https://example.com:-1",
+            "https://example.com:0",
+            "https://example.com:65536",
+            "https://example.com:999999999999999999999999",
+            "https://[::1",
+            "https://example.com: 443",
+            "https://example.com:not-a-port/private-input",
+        ]
+        for server in cases:
+            with self.subTest(server=server):
+                stderr = io.StringIO()
+                with patch.object(cli, "_config", return_value={}), contextlib.redirect_stderr(stderr):
+                    result = cli.main(["--server", server, "--key", str(self.key), "private tweet input"])
+                self.assertEqual(result, 2)
+                self.assertEqual(stderr.getvalue(), "tweet: invalid server URL\n")
+                self.assertNotIn(server, stderr.getvalue())
+                self.assertNotIn("private tweet input", stderr.getvalue())
 
     def test_tweet_rejects_non_https_non_loopback_server(self):
         with self.assertRaises(cli.CliError): cli._server("http://example.com")
         self.assertEqual(cli._server("http://localhost:8000/"), "http://localhost:8000")
+
+    def test_tweet_maps_usage_error_at_public_boundary(self):
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            result = cli.main([])
+        self.assertEqual(result, 2)
+        self.assertEqual(stderr.getvalue(), "tweet: the following arguments are required: text\n")
+
+    def test_tweet_maps_http_error_classes_at_public_boundary(self):
+        cases = [
+            (401, {}, 3, "tweet: authentication failed\n"),
+            (422, {}, 4, "tweet: server rejected the tweet\n"),
+            (429, {}, 5, "tweet: request throttled\n"),
+            (500, {}, 1, "tweet: server error; retry\n"),
+        ]
+        for status, headers, expected_code, expected_message in cases:
+            with self.subTest(status=status):
+                error = cli.HTTPError("https://s", status, "private reason", headers, None)
+                error.read = lambda n=-1: b"{}"
+                stderr = io.StringIO()
+                with patch.object(cli, "_config", return_value={}), patch.object(cli, "post", side_effect=cli._http_error(error, set())), contextlib.redirect_stderr(stderr):
+                    result = cli.main(["--server", "https://s.example", "--key", str(self.key), "private tweet input"])
+                self.assertEqual(result, expected_code)
+                self.assertEqual(stderr.getvalue(), expected_message)
+                self.assertNotIn("private", stderr.getvalue())
+
+    def test_tweet_maps_fingerprint_failure_to_signer_exit(self):
+        stderr = io.StringIO()
+        completed = subprocess.CompletedProcess([], 1, b"private output", b"private path")
+        with patch.object(cli, "_run", return_value=completed), contextlib.redirect_stderr(stderr):
+            result = cli.main(["--server", "https://s.example", "--key", str(self.key), "private tweet input"])
+        self.assertEqual(result, 3)
+        self.assertEqual(stderr.getvalue(), "tweet: cannot read the SSH key fingerprint\n")
+        self.assertNotIn("private", stderr.getvalue())
+        self.assertNotIn(str(self.key), stderr.getvalue())
 
     def test_tweet_signs_server_message_with_exact_namespace_and_posts_bearer_request(self):
         calls=[]
@@ -54,13 +129,57 @@ class CliTests(unittest.TestCase):
             if args[1:3] == ["-lf", str(self.key)]: return subprocess.CompletedProcess(args, 0, b"256 SHA256:fp comment\n", b"")
             self.assertEqual(args, ["ssh-keygen", "-Y", "sign", "-n", cli.NAMESPACE, "-f", str(self.key)])
             self.assertEqual(stdin, b"line\nfinal\n")
-            return subprocess.CompletedProcess(args, 0, b"-----BEGIN SSH SIGNATURE-----\nabc\n", b"")
+            return subprocess.CompletedProcess(args, 0, signature_bytes(), b"")
         with patch.object(cli.OPENER, "open", side_effect=open_), patch.object(cli, "_run", side_effect=run):
             self.assertEqual(cli.post("https://s.example", self.key, "hello"), "https://s.example/timeline#entry-7")
         self.assertEqual(json.loads(calls[0].data), {"key_fingerprint":"SHA256:fp"})
         self.assertEqual(calls[0].full_url, "https://s.example/api/cli/auth/challenge")
         self.assertEqual(calls[2].get_header("Authorization"), "Bearer tok-123")
         self.assertEqual(json.loads(calls[2].data), {"body_markdown":"hello"})
+
+    def test_tweet_normalizes_signer_failures_to_exact_safe_error(self):
+        challenge = {
+            "challenge_id":"123e4567-e89b-12d3-a456-426614174000",
+            "message":"message",
+            "namespace":cli.NAMESPACE,
+            "expires_at":"2099-01-01T00:00:00Z",
+        }
+        cases = [
+            subprocess.CompletedProcess([], 1, b"private signer output", b"private path"),
+            subprocess.CompletedProcess([], 0, b"\xffprivate signer output", b""),
+            subprocess.CompletedProcess([], 0, b"-----BEGIN SSH SIGNATURE-----\nnot-base64!\n-----END SSH SIGNATURE-----\n", b""),
+            subprocess.CompletedProcess([], 0, b"-----BEGIN SSH SIGNATURE-----\nU1NIT1Q=\n-----END SSH SIGNATURE-----\n", b""),
+            subprocess.CompletedProcess([], 0, signature_bytes() + b"private trailing output", b""),
+        ]
+        for completed in cases:
+            with self.subTest(stdout=completed.stdout[:30], returncode=completed.returncode):
+                stderr = io.StringIO()
+                with patch.object(cli, "_fingerprint", return_value="SHA256:fp"), patch.object(cli, "_request", return_value=challenge), patch.object(cli, "_run", return_value=completed), contextlib.redirect_stderr(stderr):
+                    result = cli.main(["--server", "https://s.example", "--key", str(self.key), "private tweet input"])
+                self.assertEqual(result, 3)
+                self.assertEqual(stderr.getvalue(), "tweet: SSH signing failed; check that the key is loaded or its passphrase is available\n")
+                self.assertNotIn("private", stderr.getvalue())
+                self.assertNotIn(str(self.key), stderr.getvalue())
+
+        for signer_error in [OSError("private path"), subprocess.TimeoutExpired("private command", 15)]:
+            with self.subTest(error=type(signer_error).__name__):
+                stderr = io.StringIO()
+                with patch.object(cli, "_fingerprint", return_value="SHA256:fp"), patch.object(cli, "_request", return_value=challenge), patch("subprocess.run", side_effect=signer_error), contextlib.redirect_stderr(stderr):
+                    result = cli.main(["--server", "https://s.example", "--key", str(self.key), "private tweet input"])
+                self.assertEqual(result, 3)
+                self.assertEqual(stderr.getvalue(), "tweet: ssh-keygen is unavailable or timed out\n")
+                self.assertNotIn("private", stderr.getvalue())
+                self.assertNotIn(str(self.key), stderr.getvalue())
+
+    def test_tweet_unexpected_exception_has_fixed_internal_error(self):
+        stderr = io.StringIO()
+        detail = f"unexpected private-input SECRET-TOKEN {self.tmp.name}"
+        with patch.object(cli, "_config", return_value={}), patch.object(cli, "post", side_effect=RuntimeError(detail)), contextlib.redirect_stderr(stderr):
+            result = cli.main(["--server", "https://s.example", "--key", str(self.key), "private-input"])
+        self.assertEqual(result, 1)
+        self.assertEqual(stderr.getvalue(), "tweet: internal error\n")
+        for secret in ["Traceback", "RuntimeError", "unexpected", "private-input", "SECRET-TOKEN", self.tmp.name]:
+            self.assertNotIn(secret, stderr.getvalue())
 
     def test_tweet_does_not_retry_ambiguous_create_failure(self):
         calls=[]
@@ -129,7 +248,7 @@ class CliTests(unittest.TestCase):
         challenge = Response({"challenge_id":"123e4567-e89b-12d3-a456-426614174000", "message":"m", "namespace":cli.NAMESPACE, "expires_at":"2099-01-01T00:00:00Z"})
         token = Response({"access_token":"token", "token_type":"Bearer", "expires_in":600, "scopes":["timeline:write"], "extra":secret})
         stderr = io.StringIO()
-        with patch.object(cli, "_fingerprint", return_value="SHA256:fp"), patch.object(cli.OPENER, "open", side_effect=[challenge, token]), patch.object(cli, "_run", return_value=subprocess.CompletedProcess([], 0, b"-----BEGIN SSH SIGNATURE-----", b"")), contextlib.redirect_stderr(stderr):
+        with patch.object(cli, "_fingerprint", return_value="SHA256:fp"), patch.object(cli.OPENER, "open", side_effect=[challenge, token]), patch.object(cli, "_run", return_value=subprocess.CompletedProcess([], 0, signature_bytes(), b"")), contextlib.redirect_stderr(stderr):
             result = cli.main(["--server", "https://s.example", "--key", str(self.key), "text"])
         self.assertEqual(result, 1)
         self.assertNotIn(secret, stderr.getvalue())

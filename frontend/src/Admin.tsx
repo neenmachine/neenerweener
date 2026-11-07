@@ -1,34 +1,23 @@
 import { type ReactNode, type Ref, type RefObject, useEffect, useRef, useState } from "react";
 import { AdminHead, compact, full } from "./App";
+import {
+  type AdminEntry,
+  type Entry,
+  type Result,
+  checkSession,
+  hasText,
+  LIMIT,
+  length,
+  login,
+  logout as signOut,
+  request,
+} from "./adminApi";
 
 // The private /admin page: a password form, then compose, edit and delete for timeline entries.
 // It is lazy loaded, so public pages never download it, and nothing on the site links here.
 
-type Entry = { id: number; html: string; created_at: string; edited_at: string | null };
-type AdminEntry = Entry & { body_markdown: string };
 type Timeline = { entries: Entry[]; next_cursor: number | null };
-type Session = { authenticated: false } | { authenticated: true; csrf_token: string };
-// message is "" for 401: the page goes back to the login form, which says why.
-type Result<T> = { ok: true; data: T } | { ok: false; status: number; message: string; retryAfter?: number };
 type Send = <T = undefined>(method: string, url: string, body?: object) => Promise<Result<T>>;
-
-const LIMIT = 10_000;
-// Unicode code points, the unit the server's limit counts (not UTF-16 units, like String.length).
-const length = (s: string) => [...s].length;
-
-function failure(status: number, detail: unknown, retryAfter?: number): string {
-  if (status === 401) return "";
-  if (status === 403) return "request refused, reload the page";
-  if (status === 404) return "entry not found";
-  // The server's validation message is a short functional one; schema errors come as a list.
-  if (status === 422) return typeof detail === "string" ? detail : "invalid text";
-  if (status === 429)
-    return retryAfter
-      ? `too many attempts, try again in ${retryAfter < 60 ? `${retryAfter} s` : `${Math.ceil(retryAfter / 60)} min`}`
-      : "too many attempts, try again later";
-  if (status === 503) return "unavailable, try again";
-  return "something went wrong";
-}
 
 export default function Admin() {
   const [auth, setAuth] = useState<"loading" | "unavailable" | "out" | "in">("loading");
@@ -36,8 +25,6 @@ export default function Admin() {
   const [mounted, setMounted] = useState(false);
   const [notice, setNotice] = useState("");
   const [loggingOut, setLoggingOut] = useState(false);
-  // In memory only: never in storage, the URL, or the DOM.
-  const csrf = useRef<string | null>(null);
   const outFlight = useRef(false);
   // The session check is usually fast; say "loading" only when it is not, so a fast check shows no flash.
   const [slow, setSlow] = useState(false);
@@ -50,44 +37,25 @@ export default function Admin() {
     };
   }, [auth]);
 
-  const send: Send = async (method, url, body) => {
-    let r: Response;
-    try {
-      r = await fetch(url, {
-        method,
-        cache: "no-store",
-        headers: {
-          ...(body && { "Content-Type": "application/json" }),
-          ...(method !== "GET" && csrf.current && { "X-CSRF-Token": csrf.current }),
-        },
-        body: body && JSON.stringify(body),
-      });
-    } catch {
-      return { ok: false, status: 0, message: "could not reach the server" };
-    }
-    const json = await r.json().catch(() => undefined);
-    if (r.ok) return { ok: true, data: json };
-    if (r.status === 401 && url !== "/api/admin/login") expire();
-    const seconds = Number(r.headers.get("Retry-After"));
-    const retryAfter = seconds > 0 ? Math.ceil(seconds) : undefined;
-    return { ok: false, status: r.status, message: failure(r.status, json?.detail, retryAfter), retryAfter };
+  const send: Send = async <T,>(method: string, url: string, body?: object) => {
+    const r = await request<T>(method, url, body);
+    if (!r.ok && r.status === 401) expire();
+    return r;
   };
 
   const expire = () => {
-    csrf.current = null;
     setNotice("session expired, log in again");
     setAuth("out");
   };
 
   // Returns whether the session is in, so login can tell a cookie that did not stick.
   const session = async () => {
-    const r = await send<Session>("GET", "/api/admin/session");
+    const r = await checkSession();
     if (!r.ok) {
       setNotice(r.message);
       setAuth("unavailable");
       return false;
     }
-    csrf.current = r.data.authenticated ? r.data.csrf_token : null;
     setAuth(r.data.authenticated ? "in" : "out");
     if (r.data.authenticated) {
       setNotice("");
@@ -109,12 +77,11 @@ export default function Admin() {
     if (outFlight.current) return;
     outFlight.current = true;
     setLoggingOut(true);
-    const r = await send("POST", "/api/admin/logout");
+    const r = await signOut();
     outFlight.current = false;
     setLoggingOut(false);
     if (!r.ok && r.status !== 401) return setNotice(r.message);
     // A deliberate logout drops unsaved text with the page.
-    csrf.current = null;
     setMounted(false);
     setNotice("");
     setAuth("out");
@@ -138,7 +105,7 @@ export default function Admin() {
           <Button onClick={() => (setAuth("loading"), session())} label="retry" />
         </div>
       )}
-      {auth === "out" && <Login send={send} session={session} notice={notice} />}
+      {auth === "out" && <Login session={session} notice={notice} />}
       {auth === "in" && (
         <p className="error" role="alert">
           {notice}
@@ -192,7 +159,7 @@ function Button({
   );
 }
 
-function Login({ send, session, notice }: { send: Send; session: () => Promise<boolean>; notice: string }) {
+function Login({ session, notice }: { session: () => Promise<boolean>; notice: string }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(notice);
   const [blockedFor, setBlockedFor] = useState(0);
@@ -210,7 +177,7 @@ function Login({ send, session, notice }: { send: Send; session: () => Promise<b
     setBusy(true);
     setError("");
     // Read from the field at submit time: the password never goes into React state.
-    const r = await send("POST", "/api/admin/login", { password: field.value });
+    const r = await login(field.value);
     field.value = "";
     const ok = r.ok && (await session());
     inFlight.current = false;
@@ -341,7 +308,7 @@ function Manager({ send }: { send: Send }) {
         error={postError}
         onSubmit={post}
       >
-        <Button type="submit" busy={posting} off={!postable(draft)} label="post" busyLabel="posting" />
+        <Button type="submit" busy={posting} off={!hasText(draft)} label="post" busyLabel="posting" />
       </Editor>
       {list === "loading" && <p className="muted">loading</p>}
       {list === "failed" && (
@@ -383,8 +350,6 @@ function Manager({ send }: { send: Send }) {
   );
 }
 
-const postable = (text: string) => !!text.trim() && length(text) <= LIMIT;
-
 // Markdown text, a code point counter, the action buttons and the error for one form.
 function Editor({
   id,
@@ -410,7 +375,7 @@ function Editor({
   children: ReactNode;
 }) {
   const n = length(text);
-  const submit = () => !busy && postable(text) && onSubmit();
+  const submit = () => !busy && hasText(text) && onSubmit();
   return (
     <form
       className="editor"
@@ -544,7 +509,7 @@ function Row({
           onSubmit={save}
           onCancel={cancel(editButton)}
         >
-          <Button type="submit" busy={saving} off={!postable(text)} label="save" busyLabel="saving" />
+          <Button type="submit" busy={saving} off={!hasText(text)} label="save" busyLabel="saving" />
         </Editor>
       ) : (
         // Rendered server side from Henry's entry, with raw HTML disabled.

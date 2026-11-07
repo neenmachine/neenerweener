@@ -113,7 +113,7 @@ def site(tmp_path, monkeypatch):
     (dist / "favicon.svg").write_text("<svg/>")
     posts = tmp_path / "posts"
     posts.mkdir()
-    (posts / "hello.md").write_text("---\ntitle: hello\ndate: 2026-01-01\ntags: [a]\n---\nbody\n")
+    (posts / "hello.md").write_text('---\ntitle: hello\ndate: 2026-01-01\ntags: [z, "ä", \'a&<"\']\n---\nbody\n')
     (tmp_path / "code" / "demo").mkdir(parents=True)
     (tmp_path / "code" / "demo" / "hello.py").write_text("print(1)\n")
     for name, value in (("FRONTEND_DIST", dist), ("POSTS_DIR", posts), ("DRAFTS_DIR", tmp_path / "drafts"), ("CODE_DIR", tmp_path / "code")):

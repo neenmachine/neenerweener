@@ -8,8 +8,25 @@ def _url_tag(tag: str) -> str:
 
 def _tags(tags: list[str]) -> str:
     return '<span class="tags">' + "".join(
-        f'<a href="/?tag={_url_tag(tag)}">#{escape(tag)}</a>' for tag in tags
+        f'<a href="/?tag={_url_tag(tag)}">#{escape(tag, quote=False)}</a>' for tag in tags
     ) + "</span>"
+
+
+def _tag_filter(posts: list[dict], selected_tag: str | None) -> str:
+    counts: dict[str, int] = {}
+    for post in posts:
+        for tag in post["tags"]:
+            counts[tag] = counts.get(tag, 0) + 1
+    if not counts:
+        return ""
+    all_link = '<a href="/" aria-current="page">all</a>' if selected_tag is None else '<a href="/">all</a>'
+    links = [all_link]
+    links.extend(
+        f'<a href="/?tag={_url_tag(tag)}"'
+        f'{" aria-current=\"page\"" if tag == selected_tag else ""}>#{escape(tag, quote=False)}<span class="muted"> {count}</span></a>'
+        for tag, count in sorted(counts.items())
+    )
+    return f'<nav class="tag-filter" aria-label="tags">{"".join(links)}</nav>'
 
 
 def _footer(selected_tag: str | None) -> str:
@@ -30,21 +47,7 @@ def home_markup(posts: list[dict], selected_tag: str | None) -> str:
     if not posts:
         body = '<p class="muted">no posts yet</p>'
     else:
-        counts: dict[str, int] = {}
-        for post in posts:
-            for tag in post["tags"]:
-                counts[tag] = counts.get(tag, 0) + 1
-        nav = ""
-        if counts:
-            all_link = '<a href="/" aria-current="page">all</a>' if selected_tag is None else '<a href="/">all</a>'
-            links = [all_link]
-            links.extend(
-                f'<a href="/?tag={_url_tag(tag)}"'
-                f'{" aria-current=\"page\"" if tag == selected_tag else ""}>#{escape(tag)}<span class="muted"> {count}</span></a>'
-                for tag, count in sorted(counts.items())
-            )
-            nav = f'<nav class="tag-filter" aria-label="tags">{"".join(links)}</nav>'
         shown = [post for post in posts if selected_tag is None or selected_tag in post["tags"]]
         empty = '<p class="muted">no posts with this tag</p>' if not shown else ""
-        body = nav + empty + f'<ul class="posts">{"".join(_post_row(post) for post in shown)}</ul>'
+        body = _tag_filter(posts, selected_tag) + empty + f'<ul class="posts">{"".join(_post_row(post) for post in shown)}</ul>'
     return f'<main><h1 class="sr-only">neenerweener</h1>{body}{_footer(selected_tag)}</main>'

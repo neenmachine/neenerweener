@@ -415,7 +415,7 @@ def test_server_rendered_pages(tmp_path, monkeypatch):
     class Store:
         def list(self, before, limit):
             from datetime import datetime, timezone
-            return [{"id": 2, "body_markdown": "first & <safe>", "created_at": datetime(2026, 1, 2, tzinfo=timezone.utc), "edited_at": None}]
+            return [{"id": 2, "body_markdown": "first & <safe>", "created_at": datetime(2026, 1, 2, tzinfo=timezone.utc), "edited_at": datetime(2026, 1, 3, tzinfo=timezone.utc)}]
 
     monkeypatch.setattr(app, "timeline_store", Store())
     c = TestClient(app.app)
@@ -438,7 +438,9 @@ def test_server_rendered_pages(tmp_path, monkeypatch):
     assert '<meta name="description" content="timeline" />' in timeline
     assert 'id="entry-2"' in timeline
     assert 'title="January 2, 2026 at 12:00 AM"' in timeline
-    assert 'datetime="2026-01-02T00:00:00+00:00"' in timeline
+    assert 'datetime="2026-01-02T00:00:00.000Z"' in timeline
+    assert 'aria-label="January 2, 2026 at 12:00 AM"' in timeline
+    assert '<span class="edited" title="January 3, 2026 at 12:00 AM">edited<span class="sr-only"> January 3, 2026 at 12:00 AM</span></span>' in timeline
     assert '>jan 2<' in timeline
     assert '<footer><a href="/">neenerweener</a><a href="/timeline" aria-current="page">timeline</a></footer>' in timeline
     assert "first &amp; &lt;safe&gt;" in timeline

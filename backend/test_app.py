@@ -70,6 +70,9 @@ def test_admin_spa_is_noindex_and_public_pages_do_not_link_to_it(tmp_path, monke
         assert missing.headers["X-Content-Type-Options"] == "nosniff"
         assert missing.headers["Referrer-Policy"] == "strict-origin-when-cross-origin"
         assert missing.headers["X-Frame-Options"] == "DENY"
+        csp = dict(d.strip().split(" ", 1) for d in missing.headers["Content-Security-Policy-Report-Only"].split(";"))
+        assert csp.get("img-src") == "'self' blob:"
+        assert csp["default-src"] == csp["script-src"] == csp["connect-src"] == "'self'"
         assert client.head("/admin").headers["X-Robots-Tag"] == "noindex"
         for path in ("/", "/timeline"):
             public = client.get(path)

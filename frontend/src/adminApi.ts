@@ -29,7 +29,8 @@ function failure(status: number, detail: unknown, retryAfter?: number): string {
   if (status === 403) return "request refused, reload the page";
   if (status === 404) return "entry not found";
   // The server's validation message is a short functional one; schema errors come as a list.
-  if (status === 422) return typeof detail === "string" ? detail : "invalid text";
+  if ((status === 413 || status === 422) && typeof detail === "string") return detail;
+  if (status === 422) return "invalid text";
   if (status === 429)
     return retryAfter
       ? `too many attempts, try again in ${retryAfter < 60 ? `${retryAfter} s` : `${Math.ceil(retryAfter / 60)} min`}`
@@ -38,17 +39,19 @@ function failure(status: number, detail: unknown, retryAfter?: number): string {
   return "something went wrong";
 }
 
+// A Blob body (an image upload) goes raw; any other object goes as JSON.
 async function send<T>(method: string, url: string, body?: object): Promise<Result<T>> {
+  const raw = body instanceof Blob;
   let r: Response;
   try {
     r = await fetch(url, {
       method,
       cache: "no-store",
       headers: {
-        ...(body && { "Content-Type": "application/json" }),
+        ...(body && { "Content-Type": raw ? body.type || "application/octet-stream" : "application/json" }),
         ...(method !== "GET" && csrf && { "X-CSRF-Token": csrf }),
       },
-      body: body && JSON.stringify(body),
+      body: raw ? body : body && JSON.stringify(body),
     });
   } catch {
     return { ok: false, status: 0, message: "could not reach the server" };
@@ -87,4 +90,11 @@ export async function logout() {
   return r;
 }
 
-export const createTimeline = (body_markdown: string) => request<AdminEntry>("POST", "/api/admin/timeline", { body_markdown });
+export type Uploaded = { id: string; width: number; height: number };
+export type Attachment = { id: string; alt: string };
+export const uploadMedia = (file: File) => request<Uploaded>("POST", "/api/admin/media", file);
+export const createTimeline = (body_markdown: string, attachments: Attachment[] = []) =>
+  request<AdminEntry>("POST", "/api/admin/timeline", {
+    body_markdown,
+    ...(attachments.length > 0 && { attachments }),
+  });

@@ -9,7 +9,7 @@ import app
 ATOM = "http://www.w3.org/2005/Atom"
 
 
-def test_sitemap_lists_timeline_once(tmp_path, monkeypatch):
+def test_discovery_routes_are_available(tmp_path, monkeypatch):
     posts = tmp_path / "posts"
     posts.mkdir()
     (posts / "special.md").write_text(
@@ -78,7 +78,7 @@ def test_sitemap_lists_timeline_once(tmp_path, monkeypatch):
     ]
     locs = [u.findtext("{http://www.sitemaps.org/schemas/sitemap/0.9}loc") for u in urls]
     assert locs.count("https://www.neenerweener.ca/timeline") == 1
-    assert all(path not in loc for path in ("/now", "/admin", "/api/", "/feed.xml") for loc in locs)
+    assert all(path not in loc for path in ("/now", "/admin", "/api/", "/feed.xml", "/robots.txt") for loc in locs)
     assert urls[1].findtext("{http://www.sitemaps.org/schemas/sitemap/0.9}lastmod") is None
     assert urls[2].findtext("{http://www.sitemaps.org/schemas/sitemap/0.9}lastmod") == "2026-03-28"
     sitemap_head = client.head("/sitemap.xml")
@@ -102,6 +102,12 @@ def test_sitemap_locs_resolve(tmp_path, monkeypatch):
     monkeypatch.setattr(app, "POSTS_DIR", posts)
     monkeypatch.setattr(app, "CODE_DIR", code)
     monkeypatch.setenv("CANONICAL_ORIGIN", "https://www.neenerweener.ca")
+
+    class EmptyStore:
+        def list(self, before, limit):
+            return []
+
+    monkeypatch.setattr(app, "timeline_store", EmptyStore(), raising=False)
 
     client = TestClient(app.app)
     root = ET.fromstring(client.get("/sitemap.xml").content)

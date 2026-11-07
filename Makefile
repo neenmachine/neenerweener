@@ -1,4 +1,4 @@
-.PHONY: dev test code-sync
+.PHONY: dev test chunk-guard code-sync
 
 # The backend serves the built frontend, as in production; vite rebuilds it on save (reload the page). Ctrl-C stops both.
 dev:
@@ -12,6 +12,16 @@ test:
 	cd backend && uv run pytest -q
 	cd cli && uv run --locked pytest -q
 	cd frontend && pnpm test && pnpm build
+	$(MAKE) chunk-guard
+
+# The public entry script (from dist/index.html) must not carry or statically import the admin composer or CSRF code;
+# those are lazy chunks for signed-in admins.
+chunk-guard:
+	@entry=$$(sed -nE 's|.*<script type="module"[^>]* src="/?([^"]+)".*|\1|p' frontend/dist/index.html); \
+	test -n "$$entry" || { echo "no module script in frontend/dist/index.html"; exit 1; }; \
+	if grep -oE 'tweet|new timeline entry|X-CSRF-Token|csrf_token|from"\./(TimelineComposer|adminApi)-' "frontend/dist/$$entry"; then \
+	  echo "frontend/dist/$$entry carries admin code"; exit 1; fi; \
+	echo "chunk-guard: frontend/dist/$$entry is clean"
 
 # Snapshot a local git repo into code/<name>/: make code-sync PROJECT=~/path/to/repo [NAME=name]
 code-sync:

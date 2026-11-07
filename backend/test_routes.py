@@ -10,6 +10,10 @@ def client(tmp_path, monkeypatch):
     dist.mkdir()
     (dist / "index.html").write_text('<html><head><title>neenerweener</title></head><body><div id="root"></div></body></html>')
     monkeypatch.setattr(app, "FRONTEND_DIST", dist)
+    code = tmp_path / "code" / "demo"
+    (code / "src").mkdir(parents=True)
+    (code / "src" / "main.py").write_text("print(1)\n")
+    monkeypatch.setattr(app, "CODE_DIR", tmp_path / "code")
     class EmptyStore:
         def list(self, before, limit):
             return []
@@ -38,7 +42,10 @@ def test_missing_post_is_404_with_noindex(client):
 def test_missing_code_project_and_file(client):
     assert client.get("/code/no-such-project").status_code == 404
     assert "project not found" in client.get("/code/no-such-project").text
-    assert client.get("/code/no-such-project/file.py").status_code == 404
+    assert client.get("/code/demo/missing.py").status_code == 404
+    assert "file not found" in client.get("/code/demo/missing.py").text
+    assert client.get("/code/demo/src").status_code == 200
+    assert client.get("/code/demo/src/main.py").status_code == 200
 
 
 def test_known_routes_stay_200(client):
@@ -66,3 +73,20 @@ def test_head_health_endpoints_match_get(client):
         assert head.status_code == get.status_code
         assert head.headers["content-type"] == get.headers["content-type"]
         assert head.content == b""
+
+
+def test_head_api_routes_match_get(client):
+    for path in ("/api/posts", "/api/posts/missing", "/api/code/demo", "/api/code/demo/file/src/main.py", "/api/timeline"):
+        get = client.get(path)
+        head = client.head(path)
+        assert head.status_code == get.status_code
+        assert head.headers["content-type"] == get.headers["content-type"]
+        assert head.content == b""
+
+
+def test_not_found_pages_have_one_labeled_heading_and_main(client):
+    for path, label in (("/no-such-page", "not found"), ("/posts/no-such-post", "post not found"), ("/code/no-such-project", "project not found"), ("/code/demo/missing.py", "file not found")):
+        response = client.get(path)
+        assert response.text.count("<main>") == 1
+        assert response.text.count("<h1") == 1
+        assert f">{label}</h1>" in response.text

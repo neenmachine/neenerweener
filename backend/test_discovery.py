@@ -29,6 +29,10 @@ def test_discovery_routes_are_available(tmp_path, monkeypatch):
     monkeypatch.setattr(app, "POSTS_DIR", posts)
     monkeypatch.setattr(app, "DRAFTS_DIR", drafts)
     monkeypatch.setattr(app, "CODE_DIR", code)
+    class EmptyStore:
+        def list(self, before, limit):
+            return []
+    monkeypatch.setattr(app, "timeline_store", EmptyStore(), raising=False)
     monkeypatch.setenv("SHOW_DRAFTS", "1")
     monkeypatch.setenv("CANONICAL_ORIGIN", "https://www.neenerweener.ca")
 

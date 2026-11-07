@@ -118,3 +118,14 @@ test("an empty last page after an empty page ends on the empty state, with focus
   expect(document.activeElement?.textContent).toBe("nothing here yet");
   expect(status()).toBe("0 more loaded, end of timeline");
 });
+
+test("index.html keeps the post list route", async () => {
+  history.replaceState(null, "", "/index.html");
+  document.body.innerHTML = `<script id="preload" type="application/json">${JSON.stringify({ "/api/posts": [{ slug: "post", title: "post", excerpt: null, tags: [], draft: false }] })}</script><div id="root"></div>`;
+  const { default: App } = await import("./App");
+  act(() => {
+    root = createRoot(document.getElementById("root")!);
+    root.render(<App />);
+  });
+  expect(document.querySelector("main")?.textContent).toContain("post");
+});

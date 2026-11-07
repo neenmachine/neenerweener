@@ -13,7 +13,7 @@ const slug = location.pathname.match(/^\/posts\/([a-z0-9-]+)\/?$/)?.[1];
 // There is no project index: Henry links to code from his posts.
 const code = location.pathname.match(/^\/code\/([a-z0-9-]+)(?:\/(.+?))?\/?$/);
 const timeline = /^\/timeline\/?$/.test(location.pathname);
-const home = /^\/?$/.test(location.pathname);
+const home = /^\/?(?:index\.html)?$/.test(location.pathname);
 // /?tag=<tag> filters the post list.
 const tag = new URLSearchParams(location.search).get("tag");
 const IMAGE = /\.(png|jpe?g|webp|gif|svg)$/i;
@@ -41,7 +41,7 @@ export default function App() {
 function NotFound() {
   return (
     <>
-      <p className="muted">not found</p>
+      <h1 className="muted">not found</h1>
       <a href="/">neenerweener</a>
     </>
   );
@@ -311,9 +311,7 @@ function PostPage({ slug }: { slug: string }) {
   const back = <Back href="/" />;
   if (error)
     return (
-      <p className="muted has-back">
-        {back}post not found
-      </p>
+      <h1 className="muted">post not found</h1>
     );
   if (!data) return null;
   return (
@@ -452,7 +450,8 @@ function ProjectPage({ name, path }: { name: string; path: string }) {
     return (
       <>
         {crumbs}
-        <p className="muted">project not found</p>
+        <h1 className="muted">project not found</h1>
+        <Footer />
       </>
     );
   if (!data) return crumbs;
@@ -473,7 +472,7 @@ function ProjectPage({ name, path }: { name: string; path: string }) {
 
 function Folder({ project, path }: { project: Project; path: string }) {
   const { dirs, files } = children(project.files, path);
-  if (!dirs.length && !files.length) return <p className="muted">file not found</p>;
+  if (!dirs.length && !files.length) return <><h1 className="muted">file not found</h1><Footer /></>;
   const prefix = path && path + "/";
   return (
     <>
@@ -531,7 +530,7 @@ function FileView({ project, path }: { project: string; path: string }) {
     if (lines) document.getElementById(location.hash.slice(1))?.scrollIntoView();
   }, [data]);
   if (error)
-    return <p className="muted">file not found</p>;
+    return <><h1 className="muted">file not found</h1><Footer /></>;
   if (!data) return null;
   const raw = `/code-raw/${project}/${encoded}`;
   const copy = () => {

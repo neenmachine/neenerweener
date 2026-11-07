@@ -234,7 +234,7 @@ def test_code_api(code_dir):
     assert project["name"] == "demo"
     assert project["files"] == ["README.md", "data.bin", "labels.idx", "main.py", "notes.md", "src/plot.png"]
     readme = project["readme_html"]
-    assert "<h1>demo</h1>" in readme
+    assert '<h1 aria-level="2">demo</h1>' in readme  # the page crumbs are the one h1
     assert '<img src="/code-raw/demo/src/plot.png" alt="plot"' in readme
     assert 'href="/code/demo/main.py"' in readme
     assert 'href="https://example.com"' in readme and 'href="/x"' in readme
@@ -424,7 +424,7 @@ def test_server_rendered_pages(tmp_path, monkeypatch):
     assert "<title>Hi &amp; &lt;bye&gt;</title>" in page
     assert page.count("<title>") == 1
     assert '<meta property="og:description" content="First para here." />' in page
-    assert '<div id="root"><main><article><h1 class="has-back">' in page
+    assert '<div id="root"><main><article><div class="has-back post-head">' in page
     assert '<footer><a href="/">neenerweener</a><a href="/timeline">timeline</a></footer>' in page
     assert '<a href="/?tag=a">#a</a>' in page
     preload = page.split('<script id="preload" type="application/json">')[1].split("</script>")[0]
@@ -451,7 +451,7 @@ def test_server_rendered_pages(tmp_path, monkeypatch):
     missing = c.get("/posts/nope").text
     assert '"/api/posts/nope": null' in missing and "<title>neenerweener</title>" in missing
     home = c.get("/?tag=a").text
-    assert '"/api/posts": [' in home and '<div id="root"></div>' in home
+    assert '"/api/posts": [' in home and '<div id="root"><main><h1 class="sr-only">neenerweener</h1></main></div>' in home
 
 
 @pytest.mark.parametrize(
@@ -571,3 +571,38 @@ def test_image_caption():
     html = app.render_post('![a plot](/images/p.png "the caption")\n\n![no title](/images/q.png)')
     assert '<figure><img src="/images/p.png" alt="a plot" title="the caption" /><figcaption>the caption</figcaption></figure>' in html
     assert '<p><img src="/images/q.png" alt="no title" /></p>' in html
+
+
+def h1s(page: str) -> list[str]:
+    import re
+    return re.findall(r"<h1[^>]*>(.*?)</h1>", page.split('<div id="root">')[1], re.S)
+
+
+def test_post_ssr_h1_contains_only_title(tmp_path, monkeypatch):
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text(INDEX)
+    posts = tmp_path / "posts"
+    posts.mkdir()
+    (posts / "hello.md").write_text("---\ntitle: Hi & <bye>\ndate: 2026-01-01\n---\nbody")
+    monkeypatch.setattr(app, "FRONTEND_DIST", dist)
+    monkeypatch.setattr(app, "POSTS_DIR", posts)
+    page = TestClient(app.app).get("/posts/hello").text
+    assert h1s(page) == ["Hi &amp; &lt;bye&gt;"]
+    # The back link stays first in the article, just outside the heading.
+    assert '<article><div class="has-back post-head"><a class="back" href="/" aria-label="back">←</a><h1>' in page
+
+
+def test_home_ssr_has_one_h1(tmp_path, monkeypatch):
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text(INDEX)
+    posts = tmp_path / "posts"
+    posts.mkdir()
+    monkeypatch.setattr(app, "FRONTEND_DIST", dist)
+    monkeypatch.setattr(app, "POSTS_DIR", posts)
+    c = TestClient(app.app)
+    for url in ("/", "/?tag=a"):
+        page = c.get(url).text
+        assert h1s(page) == ["neenerweener"]
+        assert '<h1 class="sr-only">neenerweener</h1>' in page

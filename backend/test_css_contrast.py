@@ -115,12 +115,12 @@ def test_scroll_cue_fades_between_checked_code_surfaces(selector, dark):
 
 
 def test_mobile_back_arrow_hangs_in_its_own_column():
-    # Below 760px the arrow sits inline before the title: it gets a fixed column the title is indented by,
+    # Below 760px the arrow sits in a fixed column the title is indented by (pinned to its left edge),
     # so the gap is constant and a wrapped title's second line lines up with its first.
     narrow = re.search(r"@media \(max-width: 760px\) \{\s*\.has-back \{([^}]*)\}\s*\.back \{([^}]*)\}", CSS)
     assert narrow, "no narrow-screen .has-back/.back rules"
     has_back, back = narrow.groups()
     # The column clears the ~0.9em glyph with a gap and is a 24px tap target even on small text.
     assert "--back-col: max(1.5em, 24px);" in has_back and "padding-left: var(--back-col);" in has_back, has_back
-    assert "width: var(--back-col);" in back and "margin: 0 0 0 calc(-1 * var(--back-col));" in back, back
+    assert "width: var(--back-col);" in back and "left: 0;" in back and "right: auto;" in back, back
     assert "min-height: 24px;" in back, back

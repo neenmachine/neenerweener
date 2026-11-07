@@ -326,6 +326,9 @@ def readme_html(project: str, root: Path) -> str | None:
     tokens = md.parse(readme.read_text(encoding="utf-8-sig"))
     # Relative README links point into the snapshot: images load raw bytes, links open the code view.
     for token in tokens:
+        # The project name in the page crumbs is the page's one h1, so README headings sit one level below it.
+        if token.type == "heading_open":
+            token.attrSet("aria-level", str(min(int(token.tag[1]) + 1, 6)))
         for child in token.children or []:
             attr = "src" if child.type == "image" else "href" if child.type == "link_open" else None
             url = child.attrGet(attr) if attr else None
@@ -423,6 +426,7 @@ def page_data(path: str, before: int | None = None) -> tuple[dict, dict, str, in
     status_code = 200
     if path == "":
         preload["/api/posts"] = list_posts()
+        markup = '<main><h1 class="sr-only">neenerweener</h1></main>'
     elif path == "timeline":
         head = {"title": "timeline", "description": "timeline"}
         preload["/api/timeline"], markup, status_code = timeline_page(before)
@@ -515,8 +519,8 @@ def post_markup(post: dict) -> str:
     # Mirrors PostPage in App.tsx so the swap to the React page is not visible.
     tags = "".join(f'<a href="/?tag={quote(t)}">#{escape(t)}</a>' for t in post["tags"])
     return (
-        '<main><article><h1 class="has-back"><a class="back" href="/" aria-label="back">←</a>'
-        f'{escape(post["title"])}</h1><div class="meta"><span class="tags">{tags}</span></div>'
+        '<main><article><div class="has-back post-head"><a class="back" href="/" aria-label="back">←</a>'
+        f'<h1>{escape(post["title"])}</h1></div><div class="meta"><span class="tags">{tags}</span></div>'
         f'<div>{post["html"]}</div></article><footer><a href="/">neenerweener</a><a href="/timeline">timeline</a></footer></main>'
     )
 

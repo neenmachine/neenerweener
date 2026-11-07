@@ -343,15 +343,15 @@ article li::marker {
 
 /* Syntax colors for Pygments token classes (c=comment, k=keyword, s=string, m=number). */
 :root {
-  --syn-comment: #8a8a86;
-  --syn-keyword: #8a3ffc;
+  --syn-comment: #6c6c69;
+  --syn-keyword: #873afc;
   --syn-string: #1f7a4d;
-  --syn-number: #b4540a;
+  --syn-number: #af520a;
   --syn-func: #1d5fbf;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --syn-comment: #7d7d78;
+    --syn-comment: #979793;
     --syn-keyword: #b99aff;
     --syn-string: #7fc8a0;
     --syn-number: #e3a26b;

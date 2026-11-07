@@ -26,12 +26,75 @@ def test_readyz_fails_closed_without_database(monkeypatch):
 def test_readyz_fails_closed_when_database_is_unavailable(monkeypatch):
     class Unavailable:
         def ping(self):
+            return None
+
+        def schema_revisions(self):
             raise RuntimeError("postgres://secret")
 
     monkeypatch.setattr(app, "timeline_store", Unavailable())
     response = client.get("/readyz")
     assert response.status_code == 503
+    assert response.json() == {"status": "not_ready", "reason": "database unavailable"}
     assert "postgres" not in response.text
+
+
+def test_readyz_fails_closed_when_schema_version_table_is_missing(monkeypatch):
+    class MissingSchema:
+        def ping(self):
+            return None
+
+        def schema_revisions(self):
+            return frozenset()
+
+    monkeypatch.setattr(app, "timeline_store", MissingSchema())
+    response = client.get("/readyz")
+    assert response.status_code == 503
+    assert response.json() == {"status": "not_ready", "reason": "database unavailable"}
+
+
+def test_readyz_fails_closed_when_schema_is_stale(monkeypatch):
+    class StaleSchema:
+        def ping(self):
+            return None
+
+        def schema_revisions(self):
+            return frozenset({"stale"})
+
+    monkeypatch.setattr(app, "timeline_store", StaleSchema())
+    response = client.get("/readyz")
+    assert response.status_code == 503
+    assert response.json() == {"status": "not_ready", "reason": "database unavailable"}
+
+
+def test_readyz_accepts_current_schema_without_reloading_migration_files(monkeypatch):
+    class CurrentSchema:
+        def schema_revisions(self):
+            return app.EXPECTED_SCHEMA_REVISIONS
+
+    def unexpected_reload(_path):
+        raise AssertionError("migration heads must be loaded once at import")
+
+    monkeypatch.setattr(app, "timeline_store", CurrentSchema())
+    monkeypatch.setattr(app, "load_schema_heads", unexpected_reload)
+    first = client.get("/readyz")
+    second = client.get("/readyz")
+    assert app.EXPECTED_SCHEMA_REVISIONS == frozenset({"001_timeline"})
+    assert first.status_code == second.status_code == 200
+    assert first.json() == second.json() == {"status": "ok"}
+
+
+def test_readyz_rejects_multiple_unexpected_schema_revisions(monkeypatch):
+    class MultipleSchemas:
+        def ping(self):
+            return None
+
+        def schema_revisions(self):
+            return frozenset({"001_timeline", "unexpected"})
+
+    monkeypatch.setattr(app, "timeline_store", MultipleSchemas())
+    response = client.get("/readyz")
+    assert response.status_code == 503
+    assert response.json() == {"status": "not_ready", "reason": "database unavailable"}
 
 
 def test_healthz_returns_ok():

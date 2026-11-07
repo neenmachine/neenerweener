@@ -98,7 +98,7 @@ def test_not_found_pages_have_one_labeled_heading_and_main(client):
         assert "back" not in response.text.split("<h1", 1)[1].split("</h1>", 1)[0]
         preload = re.search(r'<script id="preload" type="application/json">(.*?)</script>', response.text)[1]
         assert json.loads(preload)["page"]["label"] == label
-        assert '<footer><a href="/">neenerweener</a><a href="/timeline">timeline</a></footer></main>' in response.text
+        assert '<footer><a href="/">neenerweener</a><a href="/timeline">timeline</a><a href="/feed.xml">feed</a></footer></main>' in response.text
         assert response.text.count('href="/"') == 2  # the back arrow on posts, or the link under the heading, plus the footer
 
 
@@ -174,3 +174,21 @@ def test_canonical_never_starts_with_two_slashes(path, expected):
 
 def test_redirect_location_cannot_leave_the_site(site):
     assert site.get("/%5Cevil.com/", follow_redirects=False).headers["location"] == "/%5Cevil.com"
+
+
+FEED_LINK = '<a href="/feed.xml">feed</a>'
+
+
+@pytest.mark.parametrize("case", [c for c in CASES if "page" in c], ids=[c["path"] for c in CASES if "page" in c])
+def test_every_server_footer_links_the_feed(site, case):
+    text = site.get(case["path"]).text
+    assert text.count('<link rel="alternate" type="application/atom+xml" href="/feed.xml" title="Atom feed" />') == 1
+    markup = re.search(r'<div id="root">(.*)</div></body>', text, re.S)[1]
+    if case["page"]["kind"] == "code":
+        assert markup == ""  # React draws project pages, which have no site footer.
+        return
+    footer = re.search(r"<footer><a href=\"/\".*?</footer></main>$", markup)[0]
+    assert footer.count(FEED_LINK) == 1
+    current = re.findall(r'<a href="([^"]*)" aria-current="page">', footer)
+    expected = {"/": ["/"], "/timeline": ["/timeline"]}.get(case["path"], [])
+    assert current == expected

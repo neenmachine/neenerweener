@@ -118,15 +118,18 @@ function NotFound({ label, back }: { label: string; back: boolean }) {
   );
 }
 
+// Mirrors site_footer in backend/page_markup.py.
 function Footer() {
+  const current = page.kind === "home" && !tag ? "home" : page.kind === "timeline" ? "timeline" : null;
   return (
     <footer>
-      <a href="/" aria-current={page.kind === "home" && !tag ? "page" : undefined}>
+      <a href="/" aria-current={current === "home" ? "page" : undefined}>
         neenerweener
       </a>
-      <a href="/timeline" aria-current={page.kind === "timeline" ? "page" : undefined}>
+      <a href="/timeline" aria-current={current === "timeline" ? "page" : undefined}>
         timeline
       </a>
+      <a href="/feed.xml">feed</a>
     </footer>
   );
 }

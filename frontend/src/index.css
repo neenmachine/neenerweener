@@ -1,8 +1,8 @@
 :root {
   color-scheme: light dark;
   --fg: #1a1a1a;
-  --muted: #777;
-  --faint: #a3a3a0;
+  --muted: #666664;
+  --faint: #737371;
   /* The one accent: a darker grey, used bold for "you are here". */
   --accent: #4a4a48;
   --bg: #fdfdfc;
@@ -16,7 +16,7 @@
   :root {
     --fg: #e6e6e3;
     --muted: #8f8f8b;
-    --faint: #6a6a67;
+    --faint: #82827e;
     --accent: #c4c4c0;
     --bg: #161616;
   }

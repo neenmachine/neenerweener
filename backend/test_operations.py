@@ -3,7 +3,6 @@ import json
 from fastapi.testclient import TestClient
 
 import app
-import operations
 from operations import JsonFormatter
 
 
@@ -79,32 +78,6 @@ def test_exception_log_has_safe_structured_stack(caplog):
     assert "postgres://" not in line
     assert "secret" not in line
     assert event["request_id"] == "safe-request-id"
-
-
-def test_sentry_configuration_and_captured_event_are_scrubbed(monkeypatch):
-    captured = {}
-    monkeypatch.setenv("SENTRY_DSN", "https://public@example.invalid/1")
-    monkeypatch.setattr("sentry_sdk.init", lambda **options: captured.update(options))
-    operations.configure_sentry()
-    assert captured["send_default_pii"] is False
-    assert captured["request_bodies"] == "never"
-    assert captured["include_local_variables"] is False
-    event = {
-        "request": {"method": "POST", "url": "https://example.test/posts?token=secret" , "headers": {"Authorization": "secret"}, "data": "post prose"},
-        "exception": {"values": [{"type": "RuntimeError", "value": "secret", "stacktrace": {"frames": [{"filename": "app.py", "function": "handle", "lineno": 4, "vars": {"body": "post prose"}}]}}]},
-        "breadcrumbs": {"values": [{"category": "http", "message": "post prose", "data": {"cookie": "secret"}}]},
-        "contexts": {"request": {"body": "post prose"}},
-        "tags": {"request_id": "safe-request-id"},
-        "message": "post prose",
-    }
-    scrubbed = captured["before_send"](event, {})
-    encoded = json.dumps(scrubbed)
-    assert scrubbed["request"] == {"method": "POST", "url": "https://example.test/posts"}
-    assert scrubbed["tags"]["request_id"] == "safe-request-id"
-    assert scrubbed["exception"]["values"][0]["type"] == "RuntimeError"
-    assert "secret" not in encoded
-    assert "post prose" not in encoded
-    assert "cookie" not in encoded
 
 
 def test_security_headers(monkeypatch):

@@ -3,12 +3,12 @@ name = "ween-backend"
 version = "0.1.0"
 requires-python = ">=3.13"
 dependencies = [
-    "fastapi[standard]>=0.158.2",
+    "fastapi>=0.158.2",
+    "uvicorn[standard]>=0.35.0",
     "markdown-it-py>=4.2.0",
     "mdit-py-plugins>=0.5.0",
     "pygments>=2.21.0",
     "pyyaml>=6.0.3",
-    "sentry-sdk[fastapi]>=2.0.0",
 ]
 
 [dependency-groups]

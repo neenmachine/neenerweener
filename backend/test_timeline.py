@@ -45,6 +45,15 @@ def test_non_attachment_integrity_errors_are_not_reclassified():
         TimelineStore("unused", engine=Engine()).create("body")
 
 
+def test_store_create_validates_timeline_before_opening_transaction():
+    class Engine:
+        def begin(self):
+            raise AssertionError("validation did not run")
+
+    with pytest.raises(ValueError, match="unsafe link"):
+        TimelineStore("unused", engine=Engine()).create("[bad](javascript:alert(1))")
+
+
 def test_store_close_disposes_engine():
     class Engine:
         def dispose(self):

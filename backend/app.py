@@ -412,8 +412,8 @@ async def _bounded_json(
         raise HTTPException(415, "application/json required")
     body = await _bounded_body(request, limit)
     try:
-        return model.model_validate(json.loads(body))
-    except (ValidationError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        return model.model_validate_json(body)
+    except ValidationError as exc:
         raise HTTPException(invalid_status, invalid_detail) from exc
 
 
@@ -547,7 +547,11 @@ def admin_login(payload: LoginRequest, request: Request, response: Response):
         retry = auth_store.retry_after(identity)
         if retry is not None:
             raise HTTPException(429, "too many login attempts", headers={"Retry-After": str(retry)})
-        if not verify_password(payload.password, config.password_hash):
+        try:
+            verified = verify_password(payload.password, config.password_hash)
+        except UnicodeEncodeError:
+            verified = False
+        if not verified:
             retry = auth_store.record_failure(identity)
             if retry is not None:
                 raise HTTPException(429, "too many login attempts", headers={"Retry-After": str(retry)})
@@ -588,10 +592,6 @@ def admin_logout(
 
 async def _timeline_create_body(request: Request) -> TimelineCreate:
     return await _bounded_json(request, TimelineCreate, limit=MAX_TIMELINE_JSON_BYTES)
-
-
-async def _timeline_mutation_body(request: Request) -> TimelineMutation:
-    return await _bounded_json(request, TimelineMutation)
 
 
 @app.post("/api/admin/timeline", status_code=201)
@@ -677,7 +677,7 @@ def get_admin_timeline(
 @app.patch("/api/admin/timeline/{entry_id}")
 def update_admin_timeline(
     entry_id: int,
-    payload: TimelineMutation = Depends(_timeline_mutation_body),
+    payload: TimelineMutation,
     _access: Access = Depends(require_browser_mutation),
 ):
     if entry_id <= 0:

@@ -1,8 +1,6 @@
 {
   "$schema": "https://railway.com/railway.schema.json",
   "deploy": {
-    "preDeployCommand": ["cd /app/backend && /app/backend/.venv/bin/alembic upgrade head"],
-    "preDeployTimeoutSeconds": 300,
     "healthcheckPath": "/readyz",
     "healthcheckTimeout": 30
   }

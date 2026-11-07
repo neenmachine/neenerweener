@@ -1,10 +1,16 @@
 """Small operational hooks used by the web application."""
 
+import asyncio
+import hmac
 import json
 import logging
 import sys
 import traceback
 from datetime import datetime, timezone
+from pathlib import Path
+
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 
 
 class JsonFormatter(logging.Formatter):
@@ -37,15 +43,23 @@ def configure_logging() -> None:
         root.addHandler(handler)
     root.setLevel(logging.INFO)
 
-import asyncio
+def load_schema_heads(alembic_ini: Path) -> frozenset[str]:
+    """Load the application migration heads without depending on the process cwd."""
+    config = Config(str(alembic_ini))
+    config.set_main_option("script_location", str(alembic_ini.parent / "migrations"))
+    return frozenset(ScriptDirectory.from_config(config).get_heads())
 
 
-async def check_readiness(store) -> tuple[bool, str | None]:
-    """Return ready only after a bounded query on the shared database store."""
+async def check_readiness(store, expected_revisions: frozenset[str]) -> tuple[bool, str | None]:
+    """Return ready only when the bounded database query finds the exact app schema."""
     if store is None:
         return False, "database unavailable"
     try:
-        await asyncio.wait_for(asyncio.to_thread(store.ping), timeout=3)
+        revisions = await asyncio.wait_for(asyncio.to_thread(store.schema_revisions), timeout=3)
+        current = "\0".join(sorted(revisions))
+        expected = "\0".join(sorted(expected_revisions))
+        if not hmac.compare_digest(current, expected):
+            return False, "database unavailable"
     except Exception:
         return False, "database unavailable"
     return True, None

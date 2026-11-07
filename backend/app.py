@@ -80,7 +80,6 @@ from timeline import (
     TimelineStore,
     TimelineStoreProtocol,
     serialize_entry,
-    validate_timeline_body,
     validate_timeline_create,
 )
 
@@ -243,20 +242,21 @@ class LoginRequest(BaseModel):
     password: str
 
 
-class TimelineMutation(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    body_markdown: str
-
-
 class Attachment(BaseModel):
     model_config = ConfigDict(extra="forbid")
     id: uuid.UUID
     alt: str = ""
 
 
-class TimelineCreate(TimelineMutation):
-    """Attachments are set once at create; an edit (TimelineMutation) cannot change them."""
+class TimelineMutation(BaseModel):
+    """An edit: attachments is the full ordered image list; omitted (None) leaves the images as they are."""
 
+    model_config = ConfigDict(extra="forbid")
+    body_markdown: str
+    attachments: list[Attachment] | None = None
+
+
+class TimelineCreate(TimelineMutation):
     attachments: list[Attachment] = []
 
 
@@ -703,12 +703,17 @@ def update_admin_timeline(
 ):
     if entry_id <= 0:
         raise HTTPException(422, "invalid timeline id")
+    attachments = None if payload.attachments is None else [(a.id, a.alt) for a in payload.attachments]
     try:
-        validate_timeline_body(payload.body_markdown)
+        validate_timeline_create(payload.body_markdown, [alt for _id, alt in attachments or ()])
+    except InvalidAttachment as exc:
+        raise HTTPException(422, "invalid attachment") from exc
     except ValueError as exc:
         raise HTTPException(422, "invalid timeline entry") from exc
     try:
-        entry = _timeline_storage().update(entry_id, payload.body_markdown)
+        entry = _timeline_storage().update(entry_id, payload.body_markdown, attachments)
+    except InvalidAttachment as exc:
+        raise HTTPException(422, "invalid attachment") from exc
     except HTTPException:
         raise
     except Exception as exc:

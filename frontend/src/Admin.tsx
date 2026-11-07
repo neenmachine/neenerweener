@@ -1,5 +1,5 @@
 import { type ReactNode, type Ref, type RefObject, useEffect, useRef, useState } from "react";
-import { compact, full } from "./App";
+import { AdminHead, compact, full } from "./App";
 
 // The private /admin page: a password form, then compose, edit and delete for timeline entries.
 // It is lazy loaded, so public pages never download it, and nothing on the site links here.
@@ -39,6 +39,16 @@ export default function Admin() {
   // In memory only: never in storage, the URL, or the DOM.
   const csrf = useRef<string | null>(null);
   const outFlight = useRef(false);
+  // The session check is usually fast; say "loading" only when it is not, so a fast check shows no flash.
+  const [slow, setSlow] = useState(false);
+  useEffect(() => {
+    if (auth !== "loading") return;
+    const t = setTimeout(() => setSlow(true), 400);
+    return () => {
+      clearTimeout(t);
+      setSlow(false);
+    };
+  }, [auth]);
 
   const send: Send = async (method, url, body) => {
     let r: Response;
@@ -112,13 +122,10 @@ export default function Admin() {
 
   return (
     <article className="admin">
-      <div className="admin-head">
-        <h1>admin</h1>
-        {auth === "in" && (
-          <Button onClick={logout} busy={loggingOut} label="log out" busyLabel="logging out" />
-        )}
-      </div>
-      {auth === "loading" && (
+      <AdminHead>
+        {auth === "in" && <Button onClick={logout} busy={loggingOut} label="log out" busyLabel="logging out" />}
+      </AdminHead>
+      {auth === "loading" && slow && (
         <p className="muted" role="status">
           loading
         </p>

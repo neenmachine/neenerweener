@@ -390,6 +390,7 @@ test("tweet is off while an image uploads and on once it is done", { timeout: 50
   );
   await showsComposer();
   type("new");
+  expect(document.querySelector('label[for="compose-files"]')?.textContent).toBe("attach images");
   pick([png("slow")]);
   await settle();
   expect(document.querySelector("#compose-files-status")?.textContent).toBe("uploading");
@@ -406,6 +407,7 @@ test("a create failure shows the server's detail and keeps the text, the images 
   const revoked = previews();
   await openAdmin(true, withMedia(() => reply(422, { detail: "unknown image" })));
   await showsComposer();
+  expect(document.querySelector('label[for="compose-files"]')?.textContent).toBe("attach images");
   pick([png("a")]);
   await settle();
   alt(0, "kept alt");
@@ -425,6 +427,7 @@ test("an upload failure shows the server's detail; a 401 on upload removes the c
   let status = 413;
   await openAdmin(true, withMedia(undefined, () => reply(status, { detail: "image too large" })));
   await showsComposer();
+  expect(document.querySelector('label[for="compose-files"]')?.textContent).toBe("attach images");
   pick([png("big")]);
   await settle();
   expect(document.querySelector("#compose-files-error")?.textContent).toBe("image too large");

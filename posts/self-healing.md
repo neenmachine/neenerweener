@@ -48,8 +48,8 @@ an alert comes in, its your issue. two messages go out: one to your coding orche
 
 > "Customer X is facing issue Y in prod. Issue Y was introduced when feature Z was introduced because of A, B, C."
 
-there are so many sources of data that are high signal produced from different sources every single day, and they become so much more valuable when connected.
+there are too many sources of data to track. tracking everything becomes low signal, tracking too little makes everything high signal. what if signal was never about the information being tracked, but rather, the mechanism behind ingress/egress.
 
-messaging agents are now able to track peoples locations. what if your coding agent could see whether or not you were close to your computer. it would stop asking questions that you can easily miss.
+messaging agents are now able to track locations. what if notifications were dynamic: coding agents can ask you questions in the TUI if youre known to be at your computer, otherwise, they text you.
 
 im definitely going to play around with this idea for the next couple of weeks. see what comes out of it. updates will be posted here.

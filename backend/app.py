@@ -14,7 +14,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 import yaml
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
@@ -57,6 +57,16 @@ from machine_auth import (
     MachineAuthStore,
     Principal,
     Throttled,
+)
+from media import (
+    MAX_UPLOAD_BYTES,
+    MediaConfig,
+    MediaStore,
+    S3MediaStore,
+    UnsupportedImage,
+    process_image,
+    store_image,
+    sweep,
 )
 from timeline import (
     TimelineStore,
@@ -102,6 +112,13 @@ async def lifespan(_app):
     _app.state.machine_auth_config = config
     if _admin_config().rate_limit_key is None:
         logger.warning(RATE_LIMIT_KEY_ERROR)
+    global media_store
+    media_config = await asyncio.to_thread(MediaConfig.from_env)
+    _app.state.media_config = media_config
+    if media_config.partial:
+        logger.warning("media configuration incomplete; missing %s", ", ".join(media_config.missing))
+    elif media_config.complete and media_store is None:
+        media_store = await asyncio.to_thread(S3MediaStore, media_config)
     yield
     if timeline_store is not None:
         await asyncio.to_thread(timeline_store.close)
@@ -114,6 +131,7 @@ async def lifespan(_app):
 app = FastAPI(lifespan=lifespan)
 app.state.machine_auth_configured = False
 app.state.machine_auth_config = MachineAuthConfig({}, None, None, False)
+app.state.media_config = MediaConfig()
 configure_logging()
 timeline_store: TimelineStoreProtocol | None = (
     TimelineStore(os.environ["DATABASE_URL"]) if os.environ.get("DATABASE_URL") else None
@@ -122,6 +140,10 @@ auth_store: AuthStore | None = AuthStore(os.environ["DATABASE_URL"]) if os.envir
 machine_auth_store: MachineAuthStore | None = (
     MachineAuthStore(os.environ["DATABASE_URL"]) if os.environ.get("DATABASE_URL") else None
 )
+media_store: MediaStore | None = None  # set at startup when all MEDIA_* variables are present
+_decode = asyncio.Semaphore(1)  # one decode per process, so two large uploads cannot double peak RAM
+MEDIA_SWEEP_INTERVAL_SECONDS = 600
+_media_sweep_due = 0.0  # time.monotonic() after which the next upload may schedule a sweep
 
 
 @app.exception_handler(RequestValidationError)
@@ -332,25 +354,39 @@ def _timeline_storage() -> TimelineStoreProtocol:
     return timeline_store
 
 
-async def _bounded_json(request: Request, model, *, invalid_status: int = 422, invalid_detail: str = "invalid request"):
-    if request.headers.get("Content-Type", "").split(";", 1)[0].strip().lower() != "application/json":
-        raise HTTPException(415, "application/json required")
+def _permit_machine(request: Request, access: Access, event: str, limit: int) -> None:
+    if access.principal.scopes is None:
+        return
+    assert machine_auth_store is not None
+    retry = machine_auth_store.permit(event, limit, access.principal.subject, _machine_config(request))
+    if retry is not None:
+        raise HTTPException(429, "too many requests", headers={"Retry-After": str(retry)})
+
+
+async def _bounded_body(request: Request, limit: int) -> bytes:
+    """Read the body, rejecting a declared or streamed size above `limit`."""
     length = request.headers.get("Content-Length")
     if length is not None:
         try:
             parsed_length = int(length)
             if parsed_length < 0:
                 raise ValueError
-            if parsed_length > MAX_REQUEST_BYTES:
+            if parsed_length > limit:
                 raise HTTPException(413, "request too large")
         except ValueError as exc:
             raise HTTPException(400, "invalid request") from exc
     chunks = bytearray()
     async for chunk in request.stream():
         chunks.extend(chunk)
-        if len(chunks) > MAX_REQUEST_BYTES:
+        if len(chunks) > limit:
             raise HTTPException(413, "request too large")
-    body = bytes(chunks)
+    return bytes(chunks)
+
+
+async def _bounded_json(request: Request, model, *, invalid_status: int = 422, invalid_detail: str = "invalid request"):
+    if request.headers.get("Content-Type", "").split(";", 1)[0].strip().lower() != "application/json":
+        raise HTTPException(415, "application/json required")
+    body = await _bounded_body(request, MAX_REQUEST_BYTES)
     try:
         return model.model_validate_json(body)
     except ValidationError as exc:
@@ -536,11 +572,7 @@ def create_admin_timeline(
         validate_timeline_body(payload.body_markdown)
     except ValueError as exc:
         raise HTTPException(422, "invalid timeline entry") from exc
-    if access.principal.scopes is not None:
-        assert machine_auth_store is not None
-        retry = machine_auth_store.permit_create(access.principal.subject, _machine_config(request))
-        if retry is not None:
-            raise HTTPException(429, "too many requests", headers={"Retry-After": str(retry)})
+    _permit_machine(request, access, "timeline_create", 30)
     try:
         return _admin_entry(_timeline_storage().create(payload.body_markdown))
     except HTTPException:
@@ -548,6 +580,42 @@ def create_admin_timeline(
     except Exception as exc:
         logger.warning("timeline storage unavailable: %s", type(exc).__name__)
         raise HTTPException(503, "admin unavailable") from exc
+
+
+@app.post("/api/admin/media", status_code=201)
+async def upload_media(
+    request: Request, background: BackgroundTasks, access: Access = Depends(require_timeline_create)
+):
+    # The client filename and Content-Type are never read: the format comes from the decoded bytes.
+    store, assets = media_store, timeline_store
+    if store is None or assets is None:
+        raise HTTPException(503, "media unavailable")
+    if request.headers.get("Content-Length") is None:
+        raise HTTPException(411, "length required")
+    await asyncio.to_thread(_permit_machine, request, access, "media_upload", 40)
+    data = await _bounded_body(request, MAX_UPLOAD_BYTES)
+    try:
+        async with _decode:  # waiters park on the event loop, not in an executor thread
+            image = await asyncio.to_thread(process_image, data)
+    except UnsupportedImage as exc:
+        raise HTTPException(422, "unsupported image") from exc
+    try:
+        asset_id = await asyncio.to_thread(store_image, assets, store, image)
+    except Exception as exc:
+        logger.warning("media.store.unavailable: %s", type(exc).__name__)
+        raise HTTPException(503, "media unavailable") from exc
+    global _media_sweep_due
+    if time.monotonic() >= _media_sweep_due:
+        _media_sweep_due = time.monotonic() + MEDIA_SWEEP_INTERVAL_SECONDS
+        background.add_task(_sweep_media, assets, store)  # after the response, so a slow bucket cannot hold it
+    return {"id": str(asset_id), "width": image.width, "height": image.height}
+
+
+async def _sweep_media(assets, store) -> None:
+    try:
+        await asyncio.to_thread(sweep, assets, store)
+    except Exception as exc:
+        logger.warning("media.sweep.unavailable: %s", type(exc).__name__)
 
 
 @app.get("/api/admin/timeline/{entry_id}")
@@ -620,6 +688,8 @@ async def readyz(request: Request):
         return JSONResponse({"status": "not_ready", "reason": reason or "dependency unavailable"}, status_code=503)
     if request.app.state.machine_auth_configured and not _machine_config(request).valid:
         return JSONResponse({"status": "not_ready", "reason": "authentication configuration invalid"}, status_code=503)
+    if request.app.state.media_config.partial:
+        return JSONResponse({"status": "not_ready", "reason": "media configuration invalid"}, status_code=503)
     return {"status": "ok"}
 
 def split_frontmatter(text: str) -> tuple[dict | None, str]:

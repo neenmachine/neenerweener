@@ -3,11 +3,38 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
+import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Protocol
 
 from markdown_it import MarkdownIt
-from sqlalchemy import BigInteger, Column, DateTime, MetaData, Table, Text, create_engine, delete, desc, func, insert, select, text, update
+from sqlalchemy import (
+    BigInteger,
+    CheckConstraint,
+    Column,
+    DateTime,
+    ForeignKey,
+    Integer,
+    LargeBinary,
+    MetaData,
+    PrimaryKeyConstraint,
+    SmallInteger,
+    Table,
+    Text,
+    UniqueConstraint,
+    and_,
+    create_engine,
+    delete,
+    desc,
+    exists,
+    func,
+    insert,
+    or_,
+    select,
+    text,
+    update,
+)
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.engine import Engine
 
 metadata = MetaData()
@@ -19,6 +46,35 @@ timeline_entries = Table(
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("edited_at", DateTime(timezone=True), nullable=True),
 )
+media_assets = Table(
+    "media_assets",
+    metadata,
+    Column("id", UUID(as_uuid=True), primary_key=True),
+    Column("width", Integer, nullable=False),
+    Column("height", Integer, nullable=False),
+    Column("byte_size", Integer, nullable=False),
+    Column("sha256", LargeBinary, nullable=False),
+    Column("alt_text", Text, nullable=False, server_default=""),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("detached_at", DateTime(timezone=True), nullable=True),
+    CheckConstraint("char_length(alt_text) <= 1000", name="ck_media_assets_alt_text_length"),
+)
+timeline_entry_media = Table(
+    "timeline_entry_media",
+    metadata,
+    Column("entry_id", BigInteger, ForeignKey("timeline_entries.id", ondelete="CASCADE"), nullable=False),
+    Column("asset_id", UUID(as_uuid=True), ForeignKey("media_assets.id"), nullable=False),
+    Column("position", SmallInteger, nullable=False),
+    PrimaryKeyConstraint("entry_id", "position"),
+    UniqueConstraint("asset_id"),
+    CheckConstraint("position BETWEEN 0 AND 3", name="ck_timeline_entry_media_position"),
+)
+# The sweep never deletes the row of an attached asset. It does not protect the objects: an attach that lands
+# between the sweep's object deletes and its row delete leaves a row with no objects. M2 must reject attaching
+# a never-attached asset older than about 23 h, and must set detached_at when an entry is deleted.
+_unattached = ~exists().where(timeline_entry_media.c.asset_id == media_assets.c.id)
+NEVER_ATTACHED_GRACE = timedelta(hours=24)
+DETACHED_GRACE = timedelta(days=7)
 
 _timeline_md = MarkdownIt("commonmark", {"html": False}).disable("image")
 _UNSAFE_SCHEME = re.compile(r"^(?:javascript|vbscript|data):", re.IGNORECASE)
@@ -44,6 +100,9 @@ class TimelineStoreProtocol(Protocol):
     def create(self, body_markdown: str) -> dict: ...
     def update(self, entry_id: int, body_markdown: str) -> dict | None: ...
     def delete(self, entry_id: int) -> bool: ...
+    def create_media_asset(self, asset_id: uuid.UUID, width: int, height: int, byte_size: int, sha256: bytes) -> None: ...
+    def expired_media_assets(self, limit: int) -> list[uuid.UUID]: ...
+    def delete_media_asset(self, asset_id: uuid.UUID) -> None: ...
     def schema_revisions(self) -> frozenset[str]: ...
     def ping(self) -> None: ...
     def close(self) -> None: ...
@@ -126,6 +185,36 @@ class TimelineStore:
         with self.engine.begin() as connection:
             result = connection.execute(delete(timeline_entries).where(timeline_entries.c.id == entry_id))
         return result.rowcount == 1
+
+    def create_media_asset(self, asset_id: uuid.UUID, width: int, height: int, byte_size: int, sha256: bytes) -> None:
+        with self.engine.begin() as connection:
+            connection.execute(
+                insert(media_assets).values(
+                    id=asset_id, width=width, height=height, byte_size=byte_size, sha256=sha256
+                )
+            )
+
+    def expired_media_assets(self, limit: int) -> list[uuid.UUID]:
+        """Assets detached for 7 days, or never attached for 24 hours."""
+        now = func.now()
+        query = (
+            select(media_assets.c.id)
+            .where(
+                _unattached,
+                or_(
+                    media_assets.c.detached_at < now - DETACHED_GRACE,
+                    and_(media_assets.c.detached_at.is_(None), media_assets.c.created_at < now - NEVER_ATTACHED_GRACE),
+                ),
+            )
+            .order_by(media_assets.c.created_at)
+            .limit(limit)
+        )
+        with self.engine.connect() as connection:
+            return list(connection.execute(query).scalars())
+
+    def delete_media_asset(self, asset_id: uuid.UUID) -> None:
+        with self.engine.begin() as connection:
+            connection.execute(delete(media_assets).where(media_assets.c.id == asset_id, _unattached))
 
     def schema_revisions(self) -> frozenset[str]:
         with self.engine.connect() as connection:

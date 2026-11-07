@@ -377,6 +377,76 @@ class CliTests(unittest.TestCase):
         self.assertEqual(str(cm.exception), "server redirect rejected; retry with the configured server")
         self.assertEqual(followed, [])
 
+    def test_tweet_attach_uploads_then_creates_with_empty_alt(self):
+        image = Path(self.tmp.name) / "image.jpg"
+        image.write_bytes(b"\xff\xd8\xfftest")
+        calls = []
+        responses = iter([
+            Response({"challenge_id":"123e4567-e89b-12d3-a456-426614174000", "message":"m", "namespace":cli.NAMESPACE, "expires_at":"2099-01-01T00:00:00Z"}),
+            Response({"access_token":"tok", "token_type":"Bearer", "expires_in":600, "scopes":["timeline:create", "timeline:read"]}),
+            Response({"id":"123e4567-e89b-12d3-a456-426614174000", "width":10, "height":20}),
+            Response({"id":7}),
+        ])
+        def open_(request, timeout):
+            calls.append((request, timeout))
+            return next(responses)
+        with patch.object(cli.OPENER, "open", side_effect=open_), patch.object(cli, "_fingerprint", return_value="fp"), patch.object(cli, "_run", return_value=subprocess.CompletedProcess([], 0, signature_bytes(), b"")):
+            self.assertEqual(cli.post("https://s.example", self.key, "hello", (image,), ()), "https://s.example/timeline#entry-7")
+        self.assertEqual(calls[2][0].data, b"\xff\xd8\xfftest")
+        self.assertEqual(json.loads(calls[3][0].data), {"body_markdown":"hello", "attachments":[{"id":"123e4567-e89b-12d3-a456-426614174000", "alt":""}]})
+        self.assertEqual(calls[2][1], 120)
+        self.assertEqual(calls[3][1], 15)
+
+    def test_tweet_attach_validates_before_network_and_pairs_alts(self):
+        first = Path(self.tmp.name) / "one.png"; first.write_bytes(b"\x89PNG\\r\\n\\x1atest")
+        second = Path(self.tmp.name) / "two.webp"; second.write_bytes(b"RIFFxxxxWEBPtest")
+        with patch.object(cli, "_fingerprint", side_effect=AssertionError("network")):
+            with self.assertRaises(cli.UsageConfigError) as error:
+                cli.post("https://s.example", self.key, "hello", (first, second), ("a",))
+        self.assertEqual(str(error.exception), "give one --alt per --attach, or none")
+        with patch.object(cli, "_fingerprint", side_effect=AssertionError("network")):
+            with self.assertRaises(cli.UsageConfigError) as error:
+                cli.post("https://s.example", self.key, "hello", tuple([first] * 5), ())
+        self.assertEqual(str(error.exception), "at most 4 images")
+
+    def test_tweet_rejects_invalid_or_large_images_before_network(self):
+        bad = Path(self.tmp.name) / "bad.jpg"; bad.write_bytes(b"not image")
+        with patch.object(cli, "_fingerprint", side_effect=AssertionError("network")):
+            with self.assertRaises(cli.UsageConfigError) as error:
+                cli.post("https://s.example", self.key, "hello", (bad,), ())
+        self.assertEqual(str(error.exception), "not a JPEG, PNG, WebP, or HEIC image")
+        large = Path(self.tmp.name) / "large.jpg"; large.write_bytes(b"0" * (20 * 1024 * 1024 + 1))
+        with patch.object(cli, "_fingerprint", side_effect=AssertionError("network")):
+            with self.assertRaises(cli.UsageConfigError) as error:
+                cli.post("https://s.example", self.key, "hello", (large,), ())
+        self.assertEqual(str(error.exception), "image is too large (max 20 MB)")
+
+    def test_tweet_heic_requires_macos_and_removes_conversion_directory(self):
+        heic = Path(self.tmp.name) / "photo.heic"; heic.write_bytes(b"xxxxftypheicxxxx")
+        with patch.object(cli.sys, "platform", "linux"), patch.object(cli, "_fingerprint", side_effect=AssertionError("network")):
+            with self.assertRaises(cli.UsageConfigError) as error:
+                cli.post("https://s.example", self.key, "hello", (heic,), ())
+        self.assertEqual(str(error.exception), "HEIC is not supported here; convert to JPEG first")
+        temp_dirs = []
+        def run(args, **kwargs):
+            self.assertEqual(args[0], "sips")
+            self.assertFalse(kwargs.get("shell"))
+            Path(args[-1]).write_bytes(b"\xff\xd8\xffconverted")
+            temp_dirs.append(Path(args[-1]).parent)
+            return subprocess.CompletedProcess(args, 0, b"", b"")
+        with patch.object(cli.sys, "platform", "darwin"), patch.object(cli.subprocess, "run", side_effect=run), patch.object(cli, "_fingerprint", side_effect=AssertionError("network")):
+            with self.assertRaises(AssertionError):
+                cli.post("https://s.example", self.key, "hello", (heic,), ())
+        self.assertTrue(temp_dirs)
+        self.assertFalse(temp_dirs[0].exists())
+
+    def test_tweet_attach_rejects_extra_upload_fields_or_bad_uuid(self):
+        image = Path(self.tmp.name) / "image.jpg"; image.write_bytes(b"\xff\xd8\xfftest")
+        for response in ({"id":"123e4567-e89b-12d3-a456-426614174000", "width":1, "height":1, "extra":1}, {"id":"123E4567-e89b-12d3-a456-426614174000", "width":1, "height":1}):
+            with self.subTest(response=response), patch.object(cli.OPENER, "open", return_value=Response(response)):
+                with self.assertRaises(cli.NetworkError):
+                    cli._upload("https://s.example", b"image", "tok")
+
     def test_tweet_key_path_expands_home_in_config_and_default(self):
         home = Path(self.tmp.name)
         (home / ".ssh").mkdir()

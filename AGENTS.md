@@ -22,16 +22,16 @@ Everything else: the site, backend, frontend, styling, deployment, demos, toolin
 - `scripts/code_sync.py` - the snapshot script behind `make code-sync`.
 - `backend/` - FastAPI app (`uv`). Serves posts at `/api/posts` and `/api/posts/{slug}`, the timeline at `/api/timeline`, code at `/api/code/{project}` and raw code files at `/code-raw/<project>/<path>`.
 - Server-rendered pages: for `/`, `/timeline` and `/posts/<slug>`, the backend fills `index.html` with the page title, description and link-preview tags, the API data the page needs (`<script id="preload">`, read by `useApi`), and the first timeline or post markup.
-- `frontend/` - React + Vite (`pnpm`). The dev server proxies `/api`, `/images`, and `/code-raw` to the backend on port 8000.
+- `frontend/` - React + Vite (`pnpm`). The backend serves the built `frontend/dist` on port 8000, in dev as in production.
 
 ## Commands
 
-- Both servers: `make dev` (Ctrl-C stops both)
+- Dev: `make dev`, then open http://localhost:8000 (backend with drafts plus `vite build --watch`; reload after a frontend save; Ctrl-C stops both)
 - All checks: `make test`
-- Backend: `cd backend && uv run fastapi dev app.py`
+- Backend: `cd backend && uv run fastapi dev app.py` (serves the last `pnpm build` on port 8000)
 - Backend tests: `cd backend && uv run pytest`
 - CLI tests: `cd cli && uv run --locked pytest -q`
-- Frontend: `cd frontend && pnpm dev`
+- Frontend: `cd frontend && pnpm exec vite build --watch`
 - Frontend build and type check: `cd frontend && pnpm build`
 - Snapshot a project's committed files: `make code-sync PROJECT=~/path/to/repo [NAME=name]` (skips files over 1 MB, warns on personal info, refuses secret-looking lines; uncommitted changes are not included)
 - Ween has no CI: run `make test` before opening a PR.

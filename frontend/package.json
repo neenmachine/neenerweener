@@ -4,9 +4,8 @@
   "packageManager": "pnpm@11.26.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "vite build --watch",
     "build": "tsc --noEmit && vite build",
-    "preview": "vite preview",
     "test": "vitest run"
   },
   "dependencies": {

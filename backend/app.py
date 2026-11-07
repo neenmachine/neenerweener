@@ -393,7 +393,7 @@ def frontend(path: str):
         raise HTTPException(404, "not found")
     page = page_data(path)
     if page is None:
-        return FileResponse(index)
+        return HTMLResponse(fill_index(index.read_text(encoding="utf-8"), {}, {"title": "neenerweener"}, ""))
     preload, head, markup, status_code = page
     return HTMLResponse(fill_index(index.read_text(encoding="utf-8"), preload, head, markup), status_code=status_code)
 

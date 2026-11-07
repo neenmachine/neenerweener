@@ -269,7 +269,7 @@ def _token(data):
             or data.get("token_type") != "Bearer" or data.get("expires_in") != 600
             or not isinstance(scopes, list) or len(scopes) > 16
             or any(not isinstance(scope, str) or len(scope) > 128 for scope in scopes)
-            or len(scopes) != len(set(scopes)) or set(scopes) != {"timeline:create"}):
+            or len(scopes) != len(set(scopes)) or set(scopes) != {"timeline:create", "timeline:media"}):
         raise NetworkError("server returned an invalid response")
     return token
 

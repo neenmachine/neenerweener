@@ -446,14 +446,19 @@ def timeline_markup(entries: list[dict], unavailable: bool = False) -> str:
         items = []
         for entry in entries:
             edited = (
-                f'<span class="edited" title="{escape(full_timestamp(entry["edited_at"]))}">edited</span>'
+                f'<span class="edited" title="{escape(full_timestamp(entry["edited_at"]))}">'
+                f'edited<span class="sr-only"> {escape(full_timestamp(entry["edited_at"]))}</span></span>'
                 if entry.get("edited_at") else ""
             )
             created = entry["created_at"]
+            created_utc = _utc_datetime(created).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+            created_full = full_timestamp(created)
             items.append(
                 f'<article class="timeline-entry" id="entry-{entry["id"]}">'
                 f'<div>{entry["html"]}</div>'
-                f'<footer><a href="/timeline#entry-{entry["id"]}"><time datetime="{escape(created)}" title="{escape(full_timestamp(created))}">{escape(compact_timestamp(created))}</time></a>{edited}</footer>'
+                f'<footer><a href="/timeline#entry-{entry["id"]}" aria-label="{escape(created_full)}">'
+                f'<time datetime="{escape(created_utc)}" title="{escape(created_full)}">{escape(compact_timestamp(created))}</time>'
+                f'</a>{edited}</footer>'
                 "</article>"
             )
         content = f'<div class="timeline">{"".join(items)}</div>'

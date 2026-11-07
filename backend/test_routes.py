@@ -5,7 +5,11 @@ import app
 
 
 @pytest.fixture
-def client(monkeypatch):
+def client(tmp_path, monkeypatch):
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text('<html><head><title>neenerweener</title></head><body><div id="root"></div></body></html>')
+    monkeypatch.setattr(app, "FRONTEND_DIST", dist)
     class EmptyStore:
         def list(self, before, limit):
             return []

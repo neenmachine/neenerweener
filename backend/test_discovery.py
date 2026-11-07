@@ -21,6 +21,10 @@ def test_discovery_routes_are_available(tmp_path, monkeypatch):
     (drafts / "draft.md").write_text("draft body")
     code = tmp_path / "code"
     (code / "public-project").mkdir(parents=True)
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text('<html><head><title>neenerweener</title></head><body><div id="root"></div></body></html>')
+    monkeypatch.setattr(app, "FRONTEND_DIST", dist)
     (code / "not_public").mkdir()
     monkeypatch.setattr(app, "POSTS_DIR", posts)
     monkeypatch.setattr(app, "DRAFTS_DIR", drafts)

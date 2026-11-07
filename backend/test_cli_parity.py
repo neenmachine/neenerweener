@@ -38,7 +38,7 @@ CASES = [
 
 @pytest.mark.parametrize(("text", "alts"), CASES)
 def test_cli_never_rejects_content_that_server_accepts(text, alts):
-    cli_rejects = _post_validation_error(text, alts) is not None
+    cli_rejects = _post_validation_error(text, (None,) * len(alts), alts) is not None
     try:
         validate_timeline_create(text, alts)
     except ValueError:

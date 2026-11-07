@@ -370,7 +370,7 @@ def _upload(server, data, bearer):
     return image_id
 
 
-def _post_validation_error(text, alts):
+def _post_validation_error(text, attachments, alts):
     try:
         text.encode("utf-8")
     except UnicodeEncodeError:
@@ -388,17 +388,17 @@ def _post_validation_error(text, alts):
             alt.encode("utf-8")
     except UnicodeEncodeError:
         return "invalid alt text"
+    if len(attachments) > 4:
+        return "at most 4 images"
+    if alts and len(alts) != len(attachments):
+        return "give one --alt per --attach, or none"
     return None
 
 
 def post(server, key, text, attachments=(), alts=()):
-    validation_error = _post_validation_error(text, alts)
+    validation_error = _post_validation_error(text, attachments, alts)
     if validation_error:
         raise UsageConfigError(validation_error)
-    if len(attachments) > 4:
-        raise UsageConfigError("at most 4 images")
-    if alts and len(alts) != len(attachments):
-        raise UsageConfigError("give one --alt per --attach, or none")
     image_data = [_image_file(path) for path in attachments]
     fingerprint = _fingerprint(key)
     challenge = _request(server, "/api/cli/auth/challenge", {"key_fingerprint": fingerprint})
@@ -432,6 +432,9 @@ def parser():
 def main(argv=None):
     try:
         args = parser().parse_args(argv)
+        validation_error = _post_validation_error(args.text, args.attach or (), args.alt)
+        if validation_error:
+            raise UsageConfigError(validation_error)
         cfg = _config()
         server = _server(args.server or os.environ.get("WEEN_SERVER") or cfg.get("server", "https://www.neenerweener.ca"))
         key = _key(args.key or os.environ.get("WEEN_SSH_KEY") or cfg.get("key", "~/.ssh/ween_tweet_ed25519"))

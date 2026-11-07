@@ -137,6 +137,32 @@ class CliTests(unittest.TestCase):
         self.assertEqual(result, 2)
         self.assertEqual(stderr.getvalue(), "tweet: the following arguments are required: text\n")
 
+    def test_tweet_rejects_argument_errors_before_config_key_files_or_network(self):
+        cases = [
+            (["bad\ud800text"], "invalid text"),
+            (["hello", "--alt", "bad\ud800alt"], "invalid alt text"),
+            (["bad\0text"], "invalid text"),
+            (["   "], "text must not be empty"),
+            (["hello", *sum((["--attach", f"image-{i}.jpg"] for i in range(5)), [])], "at most 4 images"),
+            (["hello", "--attach", "image.jpg", "--alt", "one", "--alt", "two"],
+             "give one --alt per --attach, or none"),
+        ]
+        with tempfile.TemporaryDirectory() as home:
+            for args, message in cases:
+                with self.subTest(message=message), \
+                        patch.dict(os.environ, {"HOME": home}, clear=True), \
+                        patch.object(cli, "_config", side_effect=AssertionError("config file access")), \
+                        patch.object(cli, "_key", side_effect=AssertionError("key file access")) as key, \
+                        patch.object(cli, "_image_file", side_effect=AssertionError("attachment file access")), \
+                        patch.object(cli.OPENER, "open", side_effect=AssertionError("network access")) as open_:
+                    stderr = io.StringIO()
+                    with contextlib.redirect_stderr(stderr):
+                        result = cli.main(args)
+                    self.assertEqual(result, 2)
+                    self.assertEqual(stderr.getvalue(), f"tweet: {message}\n")
+                    key.assert_not_called()
+                    open_.assert_not_called()
+
     def test_tweet_maps_http_error_classes_at_public_boundary(self):
         cases = [
             (401, {}, 3, "tweet: authentication failed\n"),

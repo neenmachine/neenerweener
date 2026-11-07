@@ -30,6 +30,7 @@ class CliTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.key = Path(self.tmp.name) / "key.pub"
         self.key.write_text("ssh-ed25519 AAAA test\n")
+        self.key.chmod(0o600)
 
     def tearDown(self): self.tmp.cleanup()
 
@@ -87,6 +88,30 @@ class CliTests(unittest.TestCase):
                 self.assertNotIn(server, stderr.getvalue())
                 self.assertNotIn("private tweet input", stderr.getvalue())
 
+    def test_tweet_rejects_bad_key_files_before_network(self):
+        directory = Path(self.tmp.name) / "key-dir"
+        directory.mkdir()
+        symlink = Path(self.tmp.name) / "key-link"
+        symlink.symlink_to(self.key)
+        group_readable = Path(self.tmp.name) / "key-group-readable"
+        group_readable.write_text("ssh-ed25519 AAAA test\\n")
+        group_readable.chmod(0o640)
+        cases = [
+            Path(self.tmp.name) / "missing-key",
+            directory,
+            symlink,
+            group_readable,
+        ]
+        for key in cases:
+            with self.subTest(key=key.name), patch.object(cli, "post") as post:
+                stderr = io.StringIO()
+                with contextlib.redirect_stderr(stderr):
+                    result = cli.main(["--server", "https://s.example", "--key", str(key), "private tweet input"])
+                self.assertEqual(result, 2)
+                self.assertEqual(stderr.getvalue(), "tweet: key file must be a private regular owner-readable file\n"
+                                 if key != cases[0] else "tweet: key file is not readable\n")
+                post.assert_not_called()
+
     def test_tweet_rejects_non_https_non_loopback_server(self):
         with self.assertRaises(cli.CliError): cli._server("http://example.com")
         self.assertEqual(cli._server("http://localhost:8000/"), "http://localhost:8000")
@@ -128,7 +153,7 @@ class CliTests(unittest.TestCase):
 
     def test_tweet_signs_server_message_with_exact_namespace_and_posts_bearer_request(self):
         calls=[]
-        responses = iter([Response({"challenge_id":"123e4567-e89b-12d3-a456-426614174000", "message":"line\nfinal\n", "namespace":cli.NAMESPACE, "expires_at":"2099-01-01T00:00:00Z"}), Response({"access_token":"tok-123", "token_type":"Bearer", "expires_in":600, "scopes":["timeline:create", "timeline:media"]}), Response({"id":7})])
+        responses = iter([Response({"challenge_id":"123e4567-e89b-12d3-a456-426614174000", "message":"line\nfinal\n", "namespace":cli.NAMESPACE, "expires_at":"2099-01-01T00:00:00Z"}), Response({"access_token":"tok-123", "token_type":"Bearer", "expires_in":600, "scopes":["timeline:create", "timeline:read"]}), Response({"id":7})])
         def open_(request, timeout): calls.append(request); return next(responses)
         def run(args, stdin=None):
             if args[1:3] == ["-lf", str(self.key)]: return subprocess.CompletedProcess(args, 0, b"256 SHA256:fp comment\n", b"")
@@ -247,7 +272,7 @@ class CliTests(unittest.TestCase):
     def test_tweet_rejects_unknown_token_field_with_safe_exit(self):
         secret = "token-extra-secret"
         challenge = Response({"challenge_id":"123e4567-e89b-12d3-a456-426614174000", "message":"m", "namespace":cli.NAMESPACE, "expires_at":"2099-01-01T00:00:00Z"})
-        token = Response({"access_token":"token", "token_type":"Bearer", "expires_in":600, "scopes":["timeline:create", "timeline:media"], "extra":secret})
+        token = Response({"access_token":"token", "token_type":"Bearer", "expires_in":600, "scopes":["timeline:create", "timeline:read"], "extra":secret})
         stderr = io.StringIO()
         with patch.object(cli, "_fingerprint", return_value="SHA256:fp"), patch.object(cli.OPENER, "open", side_effect=[challenge, token]), patch.object(cli, "_run", return_value=subprocess.CompletedProcess([], 0, signature_bytes(), b"")), contextlib.redirect_stderr(stderr):
             result = cli.main(["--server", "https://s.example", "--key", str(self.key), "text"])
@@ -265,8 +290,8 @@ class CliTests(unittest.TestCase):
             with self.assertRaisesRegex(cli.CliError, "invalid response"):
                 cli._challenge(challenge)
         for token in [
-            {"access_token":"token", "token_type":"Basic", "expires_in":600, "scopes":["timeline:create", "timeline:media"]},
-            {"access_token":"token", "token_type":"Bearer", "expires_in":601, "scopes":["timeline:create", "timeline:media"]},
+            {"access_token":"token", "token_type":"Basic", "expires_in":600, "scopes":["timeline:create", "timeline:read"]},
+            {"access_token":"token", "token_type":"Bearer", "expires_in":601, "scopes":["timeline:create", "timeline:read"]},
             {"access_token":"token", "token_type":"Bearer", "expires_in":600, "scopes":["timeline:create", "admin"]},
         ]:
             with self.assertRaisesRegex(cli.CliError, "invalid response"):

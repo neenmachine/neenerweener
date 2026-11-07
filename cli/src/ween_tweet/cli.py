@@ -5,8 +5,10 @@ import binascii
 import ipaddress
 import json
 import os
+import stat
 import subprocess
 import sys
+import tomllib
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -14,8 +16,6 @@ from re import fullmatch
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse, urlunparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
-
-import tomllib
 
 from . import __version__
 
@@ -111,11 +111,12 @@ def _config():
 def _key(path):
     try:
         p = Path(path).expanduser()
-        st = p.stat()
+        st = p.lstat()
     except (OSError, RuntimeError):
         raise UsageConfigError("key file is not readable") from None
-    if not p.is_file() or not (st.st_mode & 0o444):
-        raise UsageConfigError("key file must be a regular readable file")
+    if (stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode)
+            or not (st.st_mode & 0o400) or st.st_mode & 0o077):
+        raise UsageConfigError("key file must be a private regular owner-readable file")
     return p
 
 
@@ -170,8 +171,9 @@ def _json_response(response):
     return value
 
 
-def _sensitive_values(payload, bearer):
+def _sensitive_values(payload, bearer, headers=()):
     values = {value for value in payload.values() if isinstance(value, str) and value}
+    values.update(value for value in headers if isinstance(value, str) and value)
     if bearer:
         values.add(bearer)
     return values
@@ -211,10 +213,11 @@ def _request(server, path, payload, bearer=None):
     if bearer:
         headers["Authorization"] = "Bearer " + bearer
     request = Request(server + path, data=body, headers=headers, method="POST")
+    sensitive = _sensitive_values(payload, bearer, (*headers.values(), server, path, body.decode()))
     try:
         response = OPENER.open(request, timeout=TIMEOUT)
     except HTTPError as error:
-        raise _http_error(error, _sensitive_values(payload, bearer))
+        raise _http_error(error, sensitive)
     except (URLError, TimeoutError, OSError) as error:
         raise NetworkError("network or TLS error; retry") from error
     return _json_response(response)
@@ -255,7 +258,7 @@ def _challenge(data):
     if len(expires_at) > 40 or not fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z", expires_at):
         raise NetworkError("server returned an invalid response")
     try:
-        datetime.fromisoformat(expires_at[:-1] + "+00:00")
+        datetime.fromisoformat(expires_at)
     except ValueError:
         raise NetworkError("server returned an invalid response")
     return challenge_id, encoded_message
@@ -269,7 +272,7 @@ def _token(data):
             or data.get("token_type") != "Bearer" or data.get("expires_in") != 600
             or not isinstance(scopes, list) or len(scopes) > 16
             or any(not isinstance(scope, str) or len(scope) > 128 for scope in scopes)
-            or len(scopes) != len(set(scopes)) or set(scopes) != {"timeline:create", "timeline:media"}):
+            or len(scopes) != len(set(scopes)) or set(scopes) != {"timeline:create", "timeline:read"}):
         raise NetworkError("server returned an invalid response")
     return token
 

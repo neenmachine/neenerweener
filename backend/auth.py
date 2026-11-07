@@ -159,6 +159,12 @@ def _valid_password_hash(value: str | None) -> bool:
     )
 
 
+RATE_LIMIT_KEY_ERROR = (
+    "RATE_LIMIT_KEY is missing or invalid: it must be exactly 32 ASCII characters; "
+    "generate it with `openssl rand -hex 16`"
+)
+
+
 def _decode_rate_limit_key(value: str | None) -> bytes | None:
     if value is None:
         return None

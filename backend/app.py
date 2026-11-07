@@ -40,6 +40,7 @@ FILENAME = re.compile(r"^([a-z0-9-]+)\.md$")
 PROJECT = re.compile(r"[a-z0-9-]+")
 from auth import (
     CSRF_HEADER,
+    RATE_LIMIT_KEY_ERROR,
     AdminConfig,
     AuthStore,
     Session,
@@ -99,6 +100,8 @@ async def lifespan(_app):
     configured, config = await asyncio.to_thread(_load_machine_auth_state)
     _app.state.machine_auth_configured = configured
     _app.state.machine_auth_config = config
+    if _admin_config().rate_limit_key is None:
+        logger.warning(RATE_LIMIT_KEY_ERROR)
     yield
     if timeline_store is not None:
         await asyncio.to_thread(timeline_store.close)

@@ -165,7 +165,13 @@ def _required(data, name, typ):
     return value
 
 
+def _validate_response_fields(data, fields):
+    if set(data) != fields:
+        raise CliError("server returned an invalid response", 1)
+
+
 def _challenge(data):
+    _validate_response_fields(data, {"challenge_id", "message", "namespace", "expires_at"})
     challenge_id = _required(data, "challenge_id", str)
     try:
         canonical_id = str(uuid.UUID(challenge_id))
@@ -194,6 +200,7 @@ def _challenge(data):
 
 
 def _token(data):
+    _validate_response_fields(data, {"access_token", "token_type", "expires_in", "scopes"})
     token = _required(data, "access_token", str)
     scopes = data.get("scopes")
     if (len(token) > 4096 or any(ord(char) < 33 or ord(char) > 126 for char in token)

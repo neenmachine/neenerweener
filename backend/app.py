@@ -13,8 +13,11 @@ from pathlib import Path
 
 import yaml
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from pydantic import BaseModel, ConfigDict
 from fastapi.staticfiles import StaticFiles
 from markdown_it import MarkdownIt
 from mdit_py_plugins.dollarmath import dollarmath_plugin
@@ -34,6 +37,9 @@ FRONTEND_DIST = Path(os.environ.get("FRONTEND_DIST", Path(__file__).parent.paren
 EXPECTED_SCHEMA_REVISIONS = load_schema_heads(Path(__file__).with_name("alembic.ini"))
 FILENAME = re.compile(r"^([a-z0-9-]+)\.md$")
 PROJECT = re.compile(r"[a-z0-9-]+")
+from auth import AuthStore, AdminConfig, CSRF_HEADER, Session, valid_csrf, verify_password
+from operations import check_readiness, configure_logging
+from timeline import TimelineStore, TimelineStoreProtocol, serialize_entry, validate_timeline_body
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +72,8 @@ async def lifespan(_app):
     yield
     if timeline_store is not None:
         timeline_store.close()
+    if auth_store is not None:
+        auth_store.close()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -73,6 +81,14 @@ configure_logging()
 timeline_store: TimelineStoreProtocol | None = (
     TimelineStore(os.environ["DATABASE_URL"]) if os.environ.get("DATABASE_URL") else None
 )
+auth_store: AuthStore | None = AuthStore(os.environ["DATABASE_URL"]) if os.environ.get("DATABASE_URL") else None
+
+
+@app.exception_handler(RequestValidationError)
+async def admin_validation_error(request: Request, exc: RequestValidationError):
+    if request.url.path.startswith("/api/admin/"):
+        return JSONResponse({"detail": "invalid request"}, status_code=422, headers={"Cache-Control": "no-store"})
+    return await request_validation_exception_handler(request, exc)
 
 
 @app.middleware("http")
@@ -106,6 +122,8 @@ async def operational_middleware(request: Request, call_next):
 @app.middleware("http")
 async def security_middleware(request: Request, call_next):
     response = await call_next(request)
+    if request.url.path.startswith("/api/admin/"):
+        response.headers["Cache-Control"] = "no-store"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["Permissions-Policy"] = "camera=(), geolocation=(), microphone=(), payment=(), usb=()"
@@ -146,6 +164,235 @@ def list_timeline(
         "entries": entries,
         "next_cursor": rows[limit - 1]["id"] if has_next and rows else None,
     }
+
+
+class LoginRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    password: str
+
+
+class TimelineMutation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    body_markdown: str
+
+
+def trusted_client_ip(request: Request) -> str:
+    """Use only the client identity accepted by the ASGI server's trusted-proxy policy."""
+    return request.client.host if request.client else "unknown"
+
+
+def _admin_config() -> AdminConfig:
+    return AdminConfig.from_env()
+
+
+def _check_origin(request: Request, config: AdminConfig) -> None:
+    if not config.origin_valid or request.headers.get("Origin") != config.origin:
+        raise HTTPException(403, "origin not allowed")
+
+
+def _clear_session_cookie(response: Response, config: AdminConfig) -> None:
+    response.delete_cookie(
+        config.cookie_name,
+        path="/",
+        secure=config.secure_cookie,
+        httponly=True,
+        samesite="strict",
+    )
+
+
+def _load_session(request: Request) -> tuple[str, Session, AdminConfig]:
+    config = _admin_config()
+    if not config.valid:
+        raise HTTPException(401, "authentication required")
+    token = request.cookies.get(config.cookie_name)
+    if not token:
+        raise HTTPException(401, "authentication required")
+    if auth_store is None:
+        raise HTTPException(503, "admin unavailable")
+    try:
+        session = auth_store.session(token, config.password_hash or "")
+    except Exception as exc:
+        logger.warning("admin storage unavailable: %s", type(exc).__name__)
+        raise HTTPException(503, "admin unavailable") from exc
+    if session is None:
+        raise HTTPException(401, "authentication required")
+    return token, session, config
+
+
+def require_admin(request: Request) -> tuple[str, Session, AdminConfig]:
+    return _load_session(request)
+
+
+def require_mutation_admin(request: Request) -> tuple[str, Session, AdminConfig]:
+    token, session, config = _load_session(request)
+    _check_origin(request, config)
+    if not valid_csrf(session, request.headers.get(CSRF_HEADER)):
+        raise HTTPException(403, "csrf validation failed")
+    return token, session, config
+
+
+def _admin_entry(entry: dict) -> dict:
+    try:
+        return serialize_entry(entry, admin=True)
+    except ValueError as exc:
+        raise HTTPException(422, "invalid timeline entry") from exc
+
+
+def _timeline_storage() -> TimelineStoreProtocol:
+    if timeline_store is None:
+        raise HTTPException(503, "admin unavailable")
+    return timeline_store
+
+
+@app.get("/api/admin/session")
+def admin_session(request: Request, response: Response):
+    config = _admin_config()
+    if not config.valid:
+        return {"authenticated": False}
+    token = request.cookies.get(config.cookie_name)
+    if not token:
+        return {"authenticated": False}
+    if auth_store is None:
+        raise HTTPException(503, "admin unavailable")
+    try:
+        session = auth_store.session(token, config.password_hash or "")
+    except Exception as exc:
+        logger.warning("admin storage unavailable: %s", type(exc).__name__)
+        raise HTTPException(503, "admin unavailable") from exc
+    if session is None:
+        _clear_session_cookie(response, config)
+        return {"authenticated": False}
+    return {"authenticated": True, "csrf_token": session.csrf_token}
+
+
+@app.post("/api/admin/login", status_code=204)
+def admin_login(payload: LoginRequest, request: Request, response: Response):
+    config = _admin_config()
+    if not config.origin_valid:
+        raise HTTPException(401, "invalid credentials")
+    _check_origin(request, config)
+    if auth_store is None:
+        raise HTTPException(503, "admin unavailable")
+    client_ip = trusted_client_ip(request)
+    try:
+        retry = auth_store.retry_after(client_ip)
+        if retry is not None:
+            raise HTTPException(429, "too many login attempts", headers={"Retry-After": str(retry)})
+        if not verify_password(payload.password, config.password_hash):
+            retry = auth_store.record_failure(client_ip)
+            if retry is not None:
+                raise HTTPException(429, "too many login attempts", headers={"Retry-After": str(retry)})
+            raise HTTPException(401, "invalid credentials")
+        token, session = auth_store.create_session(config.password_hash or "", client_ip)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("admin storage unavailable: %s", type(exc).__name__)
+        raise HTTPException(503, "admin unavailable") from exc
+    response.set_cookie(
+        config.cookie_name,
+        token,
+        max_age=12 * 60 * 60,
+        expires=session.expires_at,
+        path="/",
+        secure=config.secure_cookie,
+        httponly=True,
+        samesite="strict",
+    )
+
+
+@app.post("/api/admin/logout", status_code=204)
+def admin_logout(
+    response: Response,
+    auth: tuple[str, Session, AdminConfig] = Depends(require_mutation_admin),
+):
+    token, _, config = auth
+    try:
+        assert auth_store is not None
+        auth_store.delete_session(token)
+    except Exception as exc:
+        logger.warning("admin storage unavailable: %s", type(exc).__name__)
+        raise HTTPException(503, "admin unavailable") from exc
+    _clear_session_cookie(response, config)
+
+
+@app.post("/api/admin/timeline", status_code=201)
+def create_admin_timeline(
+    payload: TimelineMutation,
+    _auth: tuple[str, Session, AdminConfig] = Depends(require_mutation_admin),
+):
+    try:
+        validate_timeline_body(payload.body_markdown)
+    except ValueError as exc:
+        raise HTTPException(422, "invalid timeline entry") from exc
+    try:
+        return _admin_entry(_timeline_storage().create(payload.body_markdown))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("timeline storage unavailable: %s", type(exc).__name__)
+        raise HTTPException(503, "admin unavailable") from exc
+
+
+@app.get("/api/admin/timeline/{entry_id}")
+def get_admin_timeline(
+    entry_id: int,
+    _auth: tuple[str, Session, AdminConfig] = Depends(require_admin),
+):
+    if entry_id <= 0:
+        raise HTTPException(422, "invalid timeline id")
+    try:
+        entry = _timeline_storage().get(entry_id)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("timeline storage unavailable: %s", type(exc).__name__)
+        raise HTTPException(503, "admin unavailable") from exc
+    if entry is None:
+        raise HTTPException(404, "timeline entry not found")
+    return _admin_entry(entry)
+
+
+@app.patch("/api/admin/timeline/{entry_id}")
+def update_admin_timeline(
+    entry_id: int,
+    payload: TimelineMutation,
+    _auth: tuple[str, Session, AdminConfig] = Depends(require_mutation_admin),
+):
+    if entry_id <= 0:
+        raise HTTPException(422, "invalid timeline id")
+    try:
+        validate_timeline_body(payload.body_markdown)
+    except ValueError as exc:
+        raise HTTPException(422, "invalid timeline entry") from exc
+    try:
+        entry = _timeline_storage().update(entry_id, payload.body_markdown)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("timeline storage unavailable: %s", type(exc).__name__)
+        raise HTTPException(503, "admin unavailable") from exc
+    if entry is None:
+        raise HTTPException(404, "timeline entry not found")
+    return _admin_entry(entry)
+
+
+@app.delete("/api/admin/timeline/{entry_id}", status_code=204)
+def delete_admin_timeline(
+    entry_id: int,
+    _auth: tuple[str, Session, AdminConfig] = Depends(require_mutation_admin),
+):
+    if entry_id <= 0:
+        raise HTTPException(422, "invalid timeline id")
+    try:
+        deleted = _timeline_storage().delete(entry_id)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("timeline storage unavailable: %s", type(exc).__name__)
+        raise HTTPException(503, "admin unavailable") from exc
+    if not deleted:
+        raise HTTPException(404, "timeline entry not found")
 
 
 @app.get("/readyz")
@@ -383,14 +630,18 @@ app.include_router(discovery_router)
 def frontend(path: str, request: Request):
     if path == "api" or path.startswith("api/"):
         raise HTTPException(404, "not found")
+    headers = {"X-Robots-Tag": "noindex"} if path.strip("/") == "admin" else None
     root = FRONTEND_DIST.resolve()
     if not root.is_dir():
         raise HTTPException(404, "not found")
     requested = contained_file(root, path)
     if requested:
         if requested.name == "index.html":
-            return HTMLResponse(fill_index(requested.read_text(encoding="utf-8"), {}, {"title": "neenerweener"}, ""))
-        return FileResponse(requested)
+            return HTMLResponse(
+                fill_index(requested.read_text(encoding="utf-8"), {}, {"title": "neenerweener"}, ""),
+                headers=headers,
+            )
+        return FileResponse(requested, headers=headers)
     index = contained_file(root, "index.html")
     if not index:
         raise HTTPException(404, "not found")
@@ -400,9 +651,16 @@ def frontend(path: str, request: Request):
         before_cursor = None
     page = page_data(path, before_cursor)
     if page is None:
-        return HTMLResponse(fill_index(index.read_text(encoding="utf-8"), {}, {"title": "neenerweener"}, ""))
+        return HTMLResponse(
+            fill_index(index.read_text(encoding="utf-8"), {}, {"title": "neenerweener"}, ""),
+            headers=headers,
+        )
     preload, head, markup, status_code = page
-    return HTMLResponse(fill_index(index.read_text(encoding="utf-8"), preload, head, markup), status_code=status_code)
+    return HTMLResponse(
+        fill_index(index.read_text(encoding="utf-8"), preload, head, markup),
+        status_code=status_code,
+        headers=headers,
+    )
 
 
 def timeline_before(request: Request) -> int | None:

@@ -24,6 +24,23 @@ def test_spa_fallback(tmp_path, monkeypatch):
     assert c.get("/api/posts").status_code == 200
 
 
+def test_admin_spa_is_noindex_and_public_pages_do_not_link_to_it(tmp_path, monkeypatch):
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text(
+        '<html><head><title>app</title></head><body><div id="root"></div></body></html>'
+    )
+    monkeypatch.setattr(app, "FRONTEND_DIST", dist)
+
+    with TestClient(app.app) as client:
+        admin = client.get("/admin")
+        assert admin.status_code == 200
+        assert admin.headers["X-Robots-Tag"] == "noindex"
+        assert client.head("/admin").headers["X-Robots-Tag"] == "noindex"
+        for path in ("/", "/timeline"):
+            assert 'href="/admin"' not in client.get(path).text
+
+
 def test_spa_index_symlink_blocked(tmp_path, monkeypatch):
     dist = tmp_path / "dist"
     dist.mkdir()

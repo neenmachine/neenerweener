@@ -3,6 +3,7 @@ import os
 
 from alembic import context
 
+import auth  # noqa: F401 -- register auth tables in shared migration metadata
 from timeline import database_engine, metadata
 
 config = context.config

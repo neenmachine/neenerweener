@@ -120,7 +120,7 @@ class TimelineStoreProtocol(Protocol):
 
 
 def validate_timeline_body(body: str) -> None:
-    if not body.strip() or len(body) > 10_000:
+    if "\x00" in body or not body.strip() or len(body) > 10_000:
         raise ValueError("invalid body")
     render_timeline(body)
 
@@ -173,7 +173,7 @@ class TimelineStore:
         ids = [asset_id for asset_id, _alt in attachments]
         if len(ids) > MAX_ATTACHMENTS or len(set(ids)) != len(ids):
             raise InvalidAttachment
-        if any(len(alt) > MAX_ALT_CHARS for _id, alt in attachments):
+        if any("\x00" in alt or len(alt) > MAX_ALT_CHARS for _id, alt in attachments):
             raise InvalidAttachment
         try:
             with self.engine.begin() as connection:
@@ -199,8 +199,11 @@ class TimelineStore:
                         insert(timeline_entry_media).values(entry_id=row["id"], asset_id=asset_id, position=position)
                     )
                 return _with_media(connection, row)
-        except IntegrityError as exc:  # a concurrent create attached the same asset first
-            raise InvalidAttachment from exc
+        except IntegrityError as exc:
+            constraint_name = getattr(getattr(exc.orig, "diag", None), "constraint_name", None)
+            if constraint_name in {"timeline_entry_media_asset_id_key", "ck_timeline_entry_media_position"}:
+                raise InvalidAttachment from exc
+            raise
 
     def update(self, entry_id: int, body_markdown: str) -> dict | None:
         with self.engine.begin() as connection:

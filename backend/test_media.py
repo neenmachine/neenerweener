@@ -629,6 +629,22 @@ def test_one_attachment_without_alt_stores_empty_alt(author):
     assert response.json()["media"] == [{"id": str(asset_id), "width": 30, "height": 20, "alt": ""}]
 
 
+def test_nul_in_attachment_alt_is_rejected(author):
+    client, store = author
+    asset_id = attachable(store)
+    response = create(client, [{"id": str(asset_id), "alt": "bad\x00alt"}])
+    assert (response.status_code, response.json()) == (422, {"detail": "invalid attachment"})
+
+
+def test_nul_in_timeline_body_is_rejected_on_create_and_edit(author):
+    client, _store = author
+    created = create(client, [], body="bad\x00body")
+    assert (created.status_code, created.json()) == (422, {"detail": "invalid timeline entry"})
+    entry_id = create(client, [], body="valid").json()["id"]
+    edited = client.patch(f"/api/admin/timeline/{entry_id}", json={"body_markdown": "bad\x00body"})
+    assert (edited.status_code, edited.json()) == (422, {"detail": "invalid timeline entry"})
+
+
 def test_text_only_create_is_unchanged_for_the_released_cli(media_db):
     (private, _public, _machine_store, _secret), _store = media_db
     client = TestClient(app.app, base_url="http://127.0.0.1")

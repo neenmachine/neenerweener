@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import IntegrityError
 
 import app
 from timeline import TimelineStore, render_timeline
@@ -18,6 +19,30 @@ class FakeStore:
     def list(self, before, limit):
         self.calls.append((before, limit))
         return self.rows
+
+
+def test_non_attachment_integrity_errors_are_not_reclassified():
+    class Orig:
+        class diag:
+            constraint_name = "other_constraint"
+
+    class Connection:
+        def execute(self, _query):
+            raise IntegrityError("insert", {}, Orig())
+
+    class Transaction:
+        def __enter__(self):
+            return Connection()
+
+        def __exit__(self, *_args):
+            return False
+
+    class Engine:
+        def begin(self):
+            return Transaction()
+
+    with pytest.raises(IntegrityError, match="insert"):
+        TimelineStore("unused", engine=Engine()).create("body")
 
 
 def test_store_close_disposes_engine():

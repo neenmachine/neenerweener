@@ -804,6 +804,7 @@ def _demote_readme_heading_tokens(tokens):
         if token.type == "heading_open":
             token.attrSet("class", f"readme-h{source}")
 
+
 def readme_html(project: str, root: Path) -> str | None:
     readme = contained_file(root, "README.md")
     if not readme:

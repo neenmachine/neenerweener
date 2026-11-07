@@ -342,17 +342,33 @@ def test_code_raw_head(code_dir):
         assert head.headers["content-security-policy"] == "sandbox"
 
 
-def test_readme_headings_are_demoted_for_markdown_and_raw_html(code_dir):
+def test_readme_markdown_headings_are_demoted_with_source_classes(code_dir):
     readme = code_dir / "demo" / "README.md"
-    readme.write_text('# one\n\n## two\n\n### three\n\n#### four\n\n##### five\n\n###### six\n\n```html\n# x\n<h1>literal</h1>\n```\n\n<h1 title="a > b">raw</h1><pre><code><h1>literal</h1></code></pre><script>"<h1>literal</h1>"</script><h10>ten</h10>\n')
+    readme.write_text("# one\n\n## two\n\n### three\n\n#### four\n\n##### five\n\n###### six\n")
     html = TestClient(app.app).get("/api/code/demo").json()["readme_html"]
-    for source, target in ((1, 2), (2, 3), (3, 4), (4, 5), (5, 6), (6, 6)):
-        assert f'<h{target} class="readme-h{source}">' in html
-    assert "# x" in html and "<h1>literal</h1>" in html
-    assert '<h1 title="a > b">raw</h1>' in html
-    assert '<pre><code><h1>literal</h1></code></pre>' in html
-    assert '<script>"<h1>literal</h1>"</script>' in html
-    assert '<h10>ten</h10>' in html
+    assert html == (
+        '<h2 class="readme-h1">one</h2>\n<h3 class="readme-h2">two</h3>\n<h4 class="readme-h3">three</h4>\n'
+        '<h5 class="readme-h4">four</h5>\n<h6 class="readme-h5">five</h6>\n<h6 class="readme-h6">six</h6>\n'
+    )
+
+
+@pytest.mark.parametrize(
+    "source, expected",
+    [
+        # shortcut: raw HTML headings are trusted README content and keep their level; demoting them needs an HTML parser.
+        (
+            '<h1 title="a > b">raw</h1><pre><code><h1>literal</h1></code></pre><script>"<h1>literal</h1>"</script><div><h10>ten</h10></div>\n',
+            '<h1 title="a > b">raw</h1><pre><code><h1>literal</h1></code></pre><script>"<h1>literal</h1>"</script><div><h10>ten</h10></div>\n',
+        ),
+        (
+            "```\n# x\n<h1>literal</h1>\n```\n",
+            "<pre><code># x\n&lt;h1&gt;literal&lt;/h1&gt;\n</code></pre>\n",
+        ),
+    ],
+)
+def test_readme_raw_html_and_code_keep_their_headings(code_dir, source, expected):
+    (code_dir / "demo" / "README.md").write_text(source)
+    assert TestClient(app.app).get("/api/code/demo").json()["readme_html"] == expected
 
 
 def test_readme_parent_links_blocked(code_dir):

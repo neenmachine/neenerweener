@@ -25,6 +25,9 @@ def test_readyz_fails_closed_without_database(monkeypatch):
 
 def test_readyz_fails_closed_when_database_is_unavailable(monkeypatch):
     class Unavailable:
+        def ping(self):
+            return None
+
         def schema_revisions(self):
             raise RuntimeError("postgres://secret")
 
@@ -37,6 +40,9 @@ def test_readyz_fails_closed_when_database_is_unavailable(monkeypatch):
 
 def test_readyz_fails_closed_when_schema_version_table_is_missing(monkeypatch):
     class MissingSchema:
+        def ping(self):
+            return None
+
         def schema_revisions(self):
             return frozenset()
 
@@ -48,6 +54,9 @@ def test_readyz_fails_closed_when_schema_version_table_is_missing(monkeypatch):
 
 def test_readyz_fails_closed_when_schema_is_stale(monkeypatch):
     class StaleSchema:
+        def ping(self):
+            return None
+
         def schema_revisions(self):
             return frozenset({"stale"})
 
@@ -76,6 +85,9 @@ def test_readyz_accepts_current_schema_without_reloading_migration_files(monkeyp
 
 def test_readyz_rejects_multiple_unexpected_schema_revisions(monkeypatch):
     class MultipleSchemas:
+        def ping(self):
+            return None
+
         def schema_revisions(self):
             return frozenset({"001_timeline", "unexpected"})
 

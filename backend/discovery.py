@@ -1,3 +1,4 @@
+import re
 from os import environ
 from xml.etree.ElementTree import Element, SubElement, tostring
 
@@ -28,6 +29,25 @@ def xml_response(root: Element, media_type: str) -> Response:
     )
 
 
+CAPTIONED = re.compile(r'<p>(<img [^>]*?title="([^\"]*)"[^>]*>)</p>')
+
+
+def feed_html(body: str, post_url: str) -> str:
+    tokens = app.md.parse(body, {})
+    for token in tokens:
+        for item in [token, *(token.children or [])]:
+            for attribute in ("href", "src"):
+                value = item.attrGet(attribute)
+                if value is None:
+                    continue
+                if value.startswith("/"):
+                    item.attrSet(attribute, f"{origin()}{value}")
+                elif value.startswith("#"):
+                    item.attrSet(attribute, f"{post_url}{value}")
+    html = app.md.renderer.render(tokens, app.md.options, {})
+    return CAPTIONED.sub(r"<figure>\1<figcaption>\2</figcaption></figure>", html)
+
+
 @router.api_route("/feed.xml", methods=["GET", "HEAD"])
 def feed() -> Response:
     posts = [post for post in app.all_posts() if not post["draft"]]
@@ -47,8 +67,10 @@ def feed() -> Response:
         published = atom_date(post["date"])
         SubElement(entry, "published").text = published
         SubElement(entry, "updated").text = published
-        content = post["excerpt"] if post["excerpt"] is not None else post["body"]
-        SubElement(entry, "content", {"type": "text"}).text = content
+        if post["excerpt"] is not None:
+            SubElement(entry, "content", {"type": "text"}).text = post["excerpt"]
+        else:
+            SubElement(entry, "content", {"type": "html"}).text = feed_html(post["body"], url)
     return xml_response(root, "application/atom+xml; charset=utf-8")
 
 

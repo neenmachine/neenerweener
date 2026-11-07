@@ -42,7 +42,8 @@ def test_discovery_routes_are_available(tmp_path, monkeypatch):
     assert root.find(f"{{{ATOM}}}entry/{{{ATOM}}}published").text == "2026-03-28T00:00:00Z"
     assert root.find(f"{{{ATOM}}}entry/{{{ATOM}}}updated").text == "2026-03-28T00:00:00Z"
     assert root.find(f"{{{ATOM}}}entry/{{{ATOM}}}content").text == "an & <summary>"
-    assert root.findall(f"{{{ATOM}}}entry/{{{ATOM}}}content")[1].text == "old"
+    assert root.findall(f"{{{ATOM}}}entry/{{{ATOM}}}content")[1].attrib["type"] == "html"
+    assert root.findall(f"{{{ATOM}}}entry/{{{ATOM}}}content")[1].text == "<p>old</p>\n"
     assert b"an &amp; &lt;summary&gt;" in feed.content
     assert "draft" not in feed.text
 
@@ -81,6 +82,63 @@ def test_discovery_routes_are_available(tmp_path, monkeypatch):
     assert sitemap_head.headers["cache-control"] == sitemap.headers["cache-control"]
     assert sitemap_head.content == b""
     assert client.get("/sitemap.xml", headers={"host": "evil.example"}).text.find("evil.example") == -1
+
+
+def test_feed_no_excerpt_entry_is_rendered_html(tmp_path, monkeypatch):
+    posts = tmp_path / "posts"
+    posts.mkdir()
+    (posts / "source.md").write_text(
+        "---\ntitle: source\ndate: 2026-03-28\n---\n"
+        "## Heading\n\n*emphasis* [x](/posts/other) [s](#sec)\n\n"
+        "![a](/images/p.png \"cap\")\n\n```python\nprint('x')\n```"
+    )
+    monkeypatch.setattr(app, "POSTS_DIR", posts)
+    monkeypatch.setattr(app, "DRAFTS_DIR", tmp_path / "drafts")
+    monkeypatch.setenv("CANONICAL_ORIGIN", "https://www.neenerweener.ca")
+
+    response = TestClient(app.app).get("/feed.xml")
+    root = ET.fromstring(response.content)
+    content = root.find(f"{{{ATOM}}}entry/{{{ATOM}}}content")
+    assert content.attrib["type"] == "html"
+    html = content.text
+    assert "<em>emphasis</em>" in html
+    assert '<a href="https://www.neenerweener.ca/posts/other">x</a>' in html
+    assert 'src="https://www.neenerweener.ca/images/p.png"' in html
+    assert "<figcaption>cap</figcaption>" in html
+    assert 'href="https://www.neenerweener.ca/posts/source#sec"' in html
+    assert "](" not in html
+    assert 'class="anchor"' not in html
+
+
+def test_feed_excerpt_entry_unchanged(tmp_path, monkeypatch):
+    posts = tmp_path / "posts"
+    posts.mkdir()
+    (posts / "excerpted.md").write_text(
+        "---\ntitle: excerpted\ndate: 2026-03-28\nexcerpt: '[x](/posts/other)'\n---\nbody"
+    )
+    monkeypatch.setattr(app, "POSTS_DIR", posts)
+    monkeypatch.setattr(app, "DRAFTS_DIR", tmp_path / "drafts")
+
+    response = TestClient(app.app).get("/feed.xml")
+    root = ET.fromstring(response.content)
+    content = root.find(f"{{{ATOM}}}entry/{{{ATOM}}}content")
+    assert content.attrib["type"] == "text"
+    assert content.text == "[x](/posts/other)"
+
+
+def test_feed_raw_html_is_left_untouched(tmp_path, monkeypatch):
+    posts = tmp_path / "posts"
+    posts.mkdir()
+    (posts / "raw.md").write_text(
+        "---\ntitle: raw\ndate: 2026-03-28\n---\n<a href=\"/raw\">raw</a>"
+    )
+    monkeypatch.setattr(app, "POSTS_DIR", posts)
+    monkeypatch.setattr(app, "DRAFTS_DIR", tmp_path / "drafts")
+
+    response = TestClient(app.app).get("/feed.xml")
+    root = ET.fromstring(response.content)
+    content = root.find(f"{{{ATOM}}}entry/{{{ATOM}}}content")
+    assert content.text == '<p><a href="/raw">raw</a></p>\n'
 
 
 def test_html_head_advertises_feed(tmp_path, monkeypatch):

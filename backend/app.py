@@ -365,6 +365,11 @@ def get_code_raw(project: str, path: str):
     return FileResponse(project_file(project, path), headers={"Content-Security-Policy": "sandbox"})
 
 
+from discovery import router as discovery_router
+
+app.include_router(discovery_router)
+
+
 @app.api_route("/{path:path}", methods=["GET", "HEAD"])
 def frontend(path: str):
     if path == "api" or path.startswith("api/"):
@@ -374,13 +379,15 @@ def frontend(path: str):
         raise HTTPException(404, "not found")
     requested = contained_file(root, path)
     if requested:
+        if requested.name == "index.html":
+            return HTMLResponse(fill_index(requested.read_text(encoding="utf-8"), {}, {"title": "neenerweener"}, ""))
         return FileResponse(requested)
     index = contained_file(root, "index.html")
     if not index:
         raise HTTPException(404, "not found")
     page = page_data(path)
     if page is None:
-        return FileResponse(index)
+        return HTMLResponse(fill_index(index.read_text(encoding="utf-8"), {}, {"title": "neenerweener"}, ""))
     return HTMLResponse(fill_index(index.read_text(encoding="utf-8"), *page))
 
 
@@ -432,7 +439,8 @@ def post_markup(post: dict) -> str:
 
 def fill_index(index: str, preload: dict, head: dict, markup: str) -> str:
     tags = [f"<title>{escape(head['title'])}</title>", f'<meta property="og:title" content="{escape(head["title"])}" />',
-            '<meta property="og:site_name" content="neenerweener" />']
+            '<meta property="og:site_name" content="neenerweener" />',
+            '<link rel="alternate" type="application/atom+xml" href="/feed.xml" title="Atom feed" />']
     if head.get("description"):
         tags += [f'<meta name="description" content="{escape(head["description"])}" />',
                  f'<meta property="og:description" content="{escape(head["description"])}" />']

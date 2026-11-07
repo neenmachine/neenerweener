@@ -115,6 +115,52 @@ def test_admin_origin_and_cookie_configuration(monkeypatch, admin_password, orig
     assert config.cookie_name == cookie
 
 
+def test_admin_config_accepts_only_helper_password_hash_profile(monkeypatch):
+    valid_hash = hash_password("profile-test")
+    fields = valid_hash.split("$")
+
+    def changed(index, value):
+        candidate = fields.copy()
+        candidate[index] = value
+        return "$".join(candidate)
+
+    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    noncanonical_salt = fields[4][:-1] + alphabet[alphabet.index(fields[4][-1]) + 1]
+    noncanonical_digest = fields[5][:-1] + alphabet[alphabet.index(fields[5][-1]) + 1]
+    invalid_hashes = {
+        "truncated algorithm": changed(1, fields[1][:-1]),
+        "truncated version": changed(2, fields[2][:-1]),
+        "truncated parameters": changed(3, fields[3][:-1]),
+        "truncated salt": changed(4, fields[4][:-1]),
+        "truncated digest": changed(5, fields[5][:-1]),
+        "salt padding": changed(4, fields[4] + "="),
+        "digest padding": changed(5, fields[5] + "="),
+        "invalid salt base64": changed(4, fields[4][:-1] + "*"),
+        "invalid digest base64": changed(5, fields[5][:-1] + "*"),
+        "noncanonical salt base64": changed(4, noncanonical_salt),
+        "noncanonical digest base64": changed(5, noncanonical_digest),
+        "extra field": valid_hash + "$extra",
+        "duplicate parameter": changed(3, fields[3] + ",p=4"),
+        "reordered parameters": changed(3, "t=3,m=65536,p=4"),
+        "wrong memory profile": changed(3, "m=65537,t=3,p=4"),
+        "wrong time profile": changed(3, "m=65536,t=4,p=4"),
+        "wrong parallelism profile": changed(3, "m=65536,t=3,p=3"),
+        "wrong version": changed(2, "v=18"),
+        "wrong scheme": changed(1, "argon2i"),
+        "over length bound": "$argon2id$" + "x" * 129,
+    }
+    monkeypatch.setenv("ADMIN_ORIGIN", "http://127.0.0.1")
+    monkeypatch.setenv("RATE_LIMIT_KEY", "r" * 32)
+
+    monkeypatch.setenv("ADMIN_PASSWORD_HASH", valid_hash)
+    assert AdminConfig.from_env().valid
+
+    for label, invalid_hash in invalid_hashes.items():
+        monkeypatch.setenv("ADMIN_PASSWORD_HASH", invalid_hash)
+        assert not AdminConfig.from_env().valid, label
+        assert invalid_hash not in repr(AdminConfig.from_env()), label
+
+
 def test_login_rejects_insecure_origin_configuration_as_invalid_credentials(monkeypatch, configured_app, make_client):
     password, _, _ = configured_app
     monkeypatch.setenv("ADMIN_ORIGIN", "http://www.example.test")
@@ -126,6 +172,7 @@ def test_login_rejects_insecure_origin_configuration_as_invalid_credentials(monk
 @pytest.mark.parametrize(
     "invalid_hash",
     [
+        hash_password("truncated-configuration")[:-1],
         "$argon2id$configured",
         "$argon2id$v=19$m=65536,t=3,p=4$c2FsdA",
         "$argon2i$v=19$m=65536,t=3,p=4$c2FsdA$Y29uZmlndXJlZA",

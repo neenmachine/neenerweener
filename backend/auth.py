@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import binascii
 import getpass
 import hashlib
 import hmac
@@ -16,9 +17,9 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
 
-from argon2 import Type, extract_parameters
-from argon2.exceptions import InvalidHashError
-from pwdlib import PasswordHash
+from argon2 import PasswordHasher, Type
+from argon2.exceptions import InvalidHashError, VerificationError
+from argon2.low_level import ARGON2_VERSION
 from sqlalchemy import (
     CheckConstraint,
     Column,
@@ -36,6 +37,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.engine import Engine
+
 from timeline import database_engine, metadata
 
 SESSION_HOURS = 12
@@ -46,14 +48,16 @@ GLOBAL_FAILURE_LIMIT = 300
 PRODUCTION_COOKIE = "__Host-ween_session"
 DEVELOPMENT_COOKIE = "ween_session_dev"
 CSRF_HEADER = "X-CSRF-Token"
-_PASSWORD_HASHER = PasswordHash.recommended()
+_PASSWORD_HASHER = PasswordHasher(
+    memory_cost=65_536,
+    time_cost=3,
+    parallelism=4,
+    salt_len=16,
+    hash_len=32,
+    type=Type.ID,
+)
 _DUMMY_HASH = _PASSWORD_HASHER.hash("invalid-configuration")
-_MAX_PASSWORD_HASH_LENGTH = 512
-_ARGON2_MEMORY_RANGE = range(19_456, 262_145)
-_ARGON2_TIME_RANGE = range(2, 11)
-_ARGON2_PARALLELISM_RANGE = range(1, 17)
-_ARGON2_SALT_LENGTH_RANGE = range(16, 65)
-_ARGON2_HASH_LENGTH_RANGE = range(16, 65)
+_MAX_PASSWORD_HASH_LENGTH = 128
 
 admin_sessions = Table(
     "admin_sessions",
@@ -121,21 +125,36 @@ class AdminConfig:
         return RateIdentity.from_headers(self.rate_limit_key, raw_headers)
 
 
+def _decode_phc_payload(value: str, expected_length: int) -> bool:
+    if "=" in value:
+        return False
+    try:
+        encoded = value.encode("ascii")
+        decoded = base64.b64decode(encoded + b"=" * (-len(encoded) % 4), validate=True)
+    except (UnicodeEncodeError, binascii.Error):
+        return False
+    return len(decoded) == expected_length and base64.b64encode(decoded).rstrip(b"=") == encoded
+
+
 def _valid_password_hash(value: str | None) -> bool:
     if not value or len(value) > _MAX_PASSWORD_HASH_LENGTH:
         return False
-    try:
-        parameters = extract_parameters(value)
-    except (InvalidHashError, ValueError):
+    fields = value.split("$")
+    if len(fields) != 6:
         return False
+    empty, algorithm, version, parameters, salt, digest = fields
+    expected_parameters = (
+        f"m={_PASSWORD_HASHER.memory_cost},"
+        f"t={_PASSWORD_HASHER.time_cost},"
+        f"p={_PASSWORD_HASHER.parallelism}"
+    )
     return bool(
-        parameters.type is Type.ID
-        and parameters.version == 19
-        and parameters.memory_cost in _ARGON2_MEMORY_RANGE
-        and parameters.time_cost in _ARGON2_TIME_RANGE
-        and parameters.parallelism in _ARGON2_PARALLELISM_RANGE
-        and parameters.salt_len in _ARGON2_SALT_LENGTH_RANGE
-        and parameters.hash_len in _ARGON2_HASH_LENGTH_RANGE
+        empty == ""
+        and algorithm == "argon2id"
+        and version == f"v={ARGON2_VERSION}"
+        and parameters == expected_parameters
+        and _decode_phc_payload(salt, _PASSWORD_HASHER.salt_len)
+        and _decode_phc_payload(digest, _PASSWORD_HASHER.hash_len)
     )
 
 
@@ -228,8 +247,8 @@ def verify_password(password: str, configured_hash: str | None) -> bool:
     using_configured_hash = bool(configured_hash and configured_hash.startswith("$argon2id$"))
     candidate = configured_hash if using_configured_hash else _DUMMY_HASH
     try:
-        verified = _PASSWORD_HASHER.verify(password, candidate)
-    except Exception:
+        verified = _PASSWORD_HASHER.verify(candidate, password)
+    except (InvalidHashError, VerificationError):
         verified = False
     return using_configured_hash and verified
 

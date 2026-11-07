@@ -31,6 +31,7 @@ def test_readyz_validates_password_hash_configuration(monkeypatch, caplog):
 
     valid_hash = hash_password("test-password")
     invalid_hashes = [
+        valid_hash[:-1],
         "$argon2id$configured",
         "$argon2id$v=19$m=65536,t=3,p=4$c2FsdA",
         valid_hash.replace("$argon2id$", "$argon2i$", 1),

@@ -119,11 +119,20 @@ footer a[aria-current] {
   text-decoration: none;
 }
 
-/* No margin to hang into on narrow screens: put the arrow inline. */
+/* No margin to hang into on narrow screens: the arrow gets its own 1.5em column (a hanging indent),
+   so the title keeps a clear gap from it and wrapped title lines line up with the first. */
 @media (max-width: 760px) {
+  .has-back {
+    --back-col: max(1.5em, 24px);
+    padding-left: var(--back-col);
+  }
+
   .back {
     position: static;
-    margin-right: 0.5em;
+    display: inline-block;
+    width: var(--back-col);
+    min-height: 24px;
+    margin: 0 0 0 calc(-1 * var(--back-col));
   }
 }
 
@@ -299,10 +308,23 @@ figcaption {
 }
 
 pre {
+  --code-bg: color-mix(in srgb, var(--fg) 6%, var(--bg));
+  --code-edge: var(--bg);
   overflow-x: auto;
   padding: 1rem;
-  background: color-mix(in srgb, var(--fg) 6%, transparent);
   border-radius: 6px;
+}
+
+/* Scroll cue: an edge that can scroll fades toward --code-edge. The covers move with the content
+   (attachment local) and hide the fade once that end is reached, so a block that fits shows none.
+   The edge colour is the other code surface, so syntax colours keep their contrast under the fade. */
+:is(pre, .scroll) {
+  background:
+    linear-gradient(to right, var(--code-bg) 50%, transparent) left / 3rem 100% no-repeat local,
+    linear-gradient(to left, var(--code-bg) 50%, transparent) right / 3rem 100% no-repeat local,
+    linear-gradient(to right, var(--code-edge), transparent) left / 1.5rem 100% no-repeat scroll,
+    linear-gradient(to left, var(--code-edge), transparent) right / 1.5rem 100% no-repeat scroll,
+    var(--code-bg);
 }
 
 pre,
@@ -615,6 +637,8 @@ main.wide {
 
 /* Only the box scrolls sideways; line numbers stay put. */
 .scroll {
+  --code-bg: var(--bg);
+  --code-edge: color-mix(in srgb, var(--fg) 6%, var(--bg));
   overflow-x: auto;
   padding: 0.5rem 0;
 }

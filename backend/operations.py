@@ -50,8 +50,12 @@ def load_schema_heads(alembic_ini: Path) -> frozenset[str]:
     return frozenset(ScriptDirectory.from_config(config).get_heads())
 
 
-async def check_readiness(store, expected_revisions: frozenset[str]) -> tuple[bool, str | None]:
-    """Return ready only when the bounded database query finds the exact app schema."""
+async def check_readiness(
+    store, expected_revisions: frozenset[str], auth_config_valid: bool = True
+) -> tuple[bool, str | None]:
+    """Return ready only when authentication config and the exact app schema are usable."""
+    if not auth_config_valid:
+        return False, "invalid authentication configuration"
     if store is None:
         return False, "database unavailable"
     try:

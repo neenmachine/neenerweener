@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import Protocol
 
 from markdown_it import MarkdownIt
-from sqlalchemy import BigInteger, Column, DateTime, MetaData, Table, Text, create_engine, desc, select, text
+from sqlalchemy import BigInteger, Column, DateTime, MetaData, Table, Text, create_engine, delete, desc, func, insert, select, text, update
 from sqlalchemy.engine import Engine
 
 metadata = MetaData()
@@ -40,9 +40,20 @@ def database_engine(database_url: str, **kwargs) -> Engine:
 
 class TimelineStoreProtocol(Protocol):
     def list(self, before: int | None, limit: int) -> list[dict]: ...
+    def get(self, entry_id: int) -> dict | None: ...
+    def create(self, body_markdown: str) -> dict: ...
+    def update(self, entry_id: int, body_markdown: str) -> dict | None: ...
+    def delete(self, entry_id: int) -> bool: ...
     def schema_revisions(self) -> frozenset[str]: ...
+    def ping(self) -> None: ...
     def close(self) -> None: ...
 
+
+
+def validate_timeline_body(body: str) -> None:
+    if not body.strip() or len(body) > 10_000:
+        raise ValueError("invalid body")
+    render_timeline(body)
 
 
 def render_timeline(body: str) -> str:
@@ -80,22 +91,65 @@ class TimelineStore:
             rows = connection.execute(query).mappings().all()
         return [dict(row) for row in rows]
 
+    def get(self, entry_id: int) -> dict | None:
+        with self.engine.connect() as connection:
+            row = connection.execute(
+                select(timeline_entries).where(timeline_entries.c.id == entry_id)
+            ).mappings().one_or_none()
+        return dict(row) if row else None
+
+    def create(self, body_markdown: str) -> dict:
+        with self.engine.begin() as connection:
+            row = connection.execute(
+                insert(timeline_entries).values(body_markdown=body_markdown).returning(timeline_entries)
+            ).mappings().one()
+        return dict(row)
+
+    def update(self, entry_id: int, body_markdown: str) -> dict | None:
+        with self.engine.begin() as connection:
+            current = connection.execute(
+                select(timeline_entries).where(timeline_entries.c.id == entry_id).with_for_update()
+            ).mappings().one_or_none()
+            if current is None:
+                return None
+            if current["body_markdown"] == body_markdown:
+                return dict(current)
+            row = connection.execute(
+                update(timeline_entries)
+                .where(timeline_entries.c.id == entry_id)
+                .values(body_markdown=body_markdown, edited_at=func.now())
+                .returning(timeline_entries)
+            ).mappings().one()
+        return dict(row)
+
+    def delete(self, entry_id: int) -> bool:
+        with self.engine.begin() as connection:
+            result = connection.execute(delete(timeline_entries).where(timeline_entries.c.id == entry_id))
+        return result.rowcount == 1
+
     def schema_revisions(self) -> frozenset[str]:
         with self.engine.connect() as connection:
             rows = connection.execute(text("SELECT version_num FROM alembic_version"))
             return frozenset(rows.scalars())
 
+    def ping(self) -> None:
+        with self.engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
+
     def close(self) -> None:
         self.engine.dispose()
 
 
-def serialize_entry(entry: dict) -> dict:
-    return {
+def serialize_entry(entry: dict, *, admin: bool = False) -> dict:
+    result = {
         "id": entry["id"],
         "html": render_timeline(entry["body_markdown"]),
         "created_at": _timestamp(entry["created_at"]),
         "edited_at": _timestamp(entry.get("edited_at")),
     }
+    if admin:
+        result["body_markdown"] = entry["body_markdown"]
+    return result
 
 
 def _timestamp(value: datetime | None) -> str | None:

@@ -1,3 +1,4 @@
+import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -103,8 +104,9 @@ def test_alembic_has_one_head():
 
     config = Config(str(Path(__file__).with_name('alembic.ini')))
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == ['001_timeline']
+    assert script.get_heads() == ['002_admin_auth']
     assert script.get_revision('001_timeline').down_revision is None
+    assert script.get_revision('002_admin_auth').down_revision == '001_timeline'
 
 
 @pytest.mark.skipif(not os.environ.get('DATABASE_URL'), reason='DATABASE_URL not configured')
@@ -117,26 +119,31 @@ def test_alembic_upgrade_from_empty():
     engine = create_engine(os.environ['DATABASE_URL'])
     try:
         with engine.begin() as connection:
+            connection.exec_driver_sql('DROP TABLE IF EXISTS admin_login_failures CASCADE')
+            connection.exec_driver_sql('DROP TABLE IF EXISTS admin_sessions CASCADE')
             connection.exec_driver_sql('DROP TABLE IF EXISTS timeline_entries CASCADE')
             connection.exec_driver_sql('DROP TABLE IF EXISTS alembic_version')
         command.upgrade(config, 'head')
+        assert not logging.getLogger("app").disabled
         assert 'timeline_entries' in inspect(engine).get_table_names()
     finally:
         engine.dispose()
 
 
 @pytest.mark.skipif(not os.environ.get('DATABASE_URL'), reason='DATABASE_URL not configured')
-def test_alembic_upgrade_from_base_is_repeatable():
+def test_alembic_upgrade_down_up_is_repeatable():
     from alembic import command
     from alembic.config import Config
     from sqlalchemy import create_engine, text
 
     config = Config(str(Path(__file__).with_name('alembic.ini')))
     command.downgrade(config, 'base')
-    command.upgrade(config, '001_timeline')
+    command.upgrade(config, 'head')
+    command.downgrade(config, '001_timeline')
+    command.upgrade(config, 'head')
     engine = create_engine(os.environ['DATABASE_URL'])
     try:
         with engine.connect() as connection:
-            assert connection.execute(text('select version_num from alembic_version')).scalar() == '001_timeline'
+            assert connection.execute(text('select version_num from alembic_version')).scalar() == '002_admin_auth'
     finally:
         engine.dispose()

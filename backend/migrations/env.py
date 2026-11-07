@@ -3,11 +3,12 @@ import os
 
 from alembic import context
 
+import auth  # noqa: F401 -- register auth tables in shared migration metadata
 from timeline import database_engine, metadata
 
 config = context.config
 if config.config_file_name:
-    fileConfig(config.config_file_name)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 
 def run_migrations_offline() -> None:

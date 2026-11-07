@@ -145,7 +145,7 @@ test("create is guarded and edit saves the full replacement", async () => {
   await flush();
   click("edit");
   await flush();
-  const edit = input('[aria-label="edit entry"]', "replacement");
+  const edit = input('[aria-label="edit entry 2"]', "replacement");
   submit(edit.form!);
   await flush();
   const patch = fetch.mock.calls.find(([url, init]) => url === "/api/admin/timeline/2" && init?.method === "PATCH");
@@ -167,10 +167,88 @@ test("delete cancel preserves the entry, delete removes it and restores focus", 
   click("cancel");
   expect(document.querySelector("#entry-1")).not.toBeNull();
   click("delete");
-  click("delete");
+  click("confirm delete");
   await flush();
   expect(document.querySelector("#entry-1")).toBeNull();
   expect((document.activeElement as HTMLButtonElement)?.getAttribute("data-action")).toBe("edit");
+});
+
+const named = (name: string) => document.querySelector<HTMLElement>(`[aria-label="${name}"]`);
+const key = (el: Element, k: string) => act(() => el.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true })));
+
+test("delete arms inline with id names, Escape disarms back to delete, one DELETE under double activation", async () => {
+  const fetch = loggedInFetch([[entry(42), entry(43)]]);
+  await render(fetch);
+  await flush();
+  expect(named("edit entry 42")?.textContent).toBe("editloading");
+  const del = named("delete entry 42")!;
+  expect(del.textContent).toBe("deletedelete");
+  act(() => del.click());
+  const group = named("delete entry 42?")!;
+  expect(group.getAttribute("role")).toBe("group");
+  expect(named("confirm delete entry 42")?.textContent).toBe("confirm deletedeleting");
+  expect(document.activeElement).toBe(named("cancel delete entry 42"));
+  key(document.activeElement!, "Escape");
+  expect(named("delete entry 42?")).toBeNull();
+  expect(document.activeElement).toBe(named("delete entry 42"));
+  act(() => named("delete entry 42")!.click());
+  act(() => named("cancel delete entry 42")!.click());
+  expect(document.activeElement).toBe(named("delete entry 42"));
+  act(() => named("delete entry 42")!.click());
+  act(() => named("confirm delete entry 42")!.click());
+  act(() => named("confirm delete entry 42")!.click());
+  await flush();
+  const deletes = fetch.mock.calls.filter(([, init]) => init?.method === "DELETE");
+  expect(deletes.map(([url, init]) => [url, (init?.headers as Record<string, string>)["X-CSRF-Token"]])).toEqual([["/api/admin/timeline/42", "csrf"]]);
+  expect(document.querySelector("#entry-42")).toBeNull();
+  expect(document.activeElement).toBe(named("edit entry 43"));
+  expect(document.querySelector('[role="status"].sr-only')?.textContent).toBe("deleted");
+});
+
+test("a failed delete stays armed and shows the server detail", async () => {
+  const fetch = loggedInFetch([[entry(42)]]);
+  fetch.mockImplementation(async (url: string, init?: RequestInit) => {
+    if (url === "/api/admin/session") return ok(session);
+    if (url === "/api/timeline") return ok({ entries: [entry(42)], next_cursor: null });
+    if (init?.method === "DELETE") return bad(422, "invalid timeline id");
+    return ok({});
+  });
+  await render(fetch);
+  act(() => named("delete entry 42")!.click());
+  act(() => named("confirm delete entry 42")!.click());
+  await flush();
+  expect(named("confirm delete entry 42")?.getAttribute("aria-busy")).toBe("false");
+  expect(document.querySelector("#entry-42 [role=alert]")?.textContent).toBe("invalid timeline id");
+});
+
+test("edit opens the private body with id names; Escape cancels to edit; a failed save keeps the draft", async () => {
+  const fetch = loggedInFetch([[entry(42)]]);
+  fetch.mockImplementation(async (url: string, init?: RequestInit) => {
+    if (url === "/api/admin/session") return ok(session);
+    if (url === "/api/timeline") return ok({ entries: [entry(42)], next_cursor: null });
+    if (url === "/api/admin/timeline/42" && init?.method === "GET") return ok(json(42, "private *markdown*"));
+    if (url === "/api/admin/timeline/42" && init?.method === "PATCH") return bad(422, "unsafe link");
+    return ok({});
+  });
+  await render(fetch);
+  act(() => named("edit entry 42")!.click());
+  await flush();
+  const box = named("edit entry 42") as HTMLTextAreaElement;
+  expect(box.tagName).toBe("TEXTAREA");
+  expect(box.value).toBe("private *markdown*");
+  expect(document.activeElement).toBe(box);
+  expect(named("save entry 42")?.textContent).toBe("savesaving");
+  expect(named("cancel edit entry 42")?.textContent).toBe("cancelcancel");
+  key(box, "Escape");
+  expect(document.querySelector("textarea[aria-label='edit entry 42']")).toBeNull();
+  expect(document.activeElement).toBe(named("edit entry 42"));
+  act(() => named("edit entry 42")!.click());
+  await flush();
+  const again = input('[aria-label="edit entry 42"]', "[x](javascript:1)");
+  submit(again.form!);
+  await flush();
+  expect((named("edit entry 42") as HTMLTextAreaElement).value).toBe("[x](javascript:1)");
+  expect(document.querySelector("#edit-42-error")?.textContent).toBe("unsafe link");
 });
 
 test("429 uses Retry-After and the editor counts 10,000 Unicode code points", async () => {

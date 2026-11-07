@@ -294,22 +294,26 @@ def _image_kind(data):
         return "webp"
     if len(data) >= 12 and data[4:8] == b"ftyp":
         brands = data[8:32]
-        if any(brand in brands for brand in (b"heic", b"heix", b"hevc", b"hevx", b"mif1")):
+        if any(brand in brands for brand in (b"heic", b"heix", b"hevc", b"hevx", b"mif1", b"msf1")):
             return "heic"
     return None
 
 
 def _image_file(path):
     try:
-        size = path.stat().st_size
+        file_stat = path.lstat()
     except OSError:
         raise UsageConfigError("not a JPEG, PNG, WebP, or HEIC image") from None
-    if size > MAX_IMAGE_BYTES:
+    if not stat.S_ISREG(file_stat.st_mode):
+        raise UsageConfigError("not a JPEG, PNG, WebP, or HEIC image")
+    if file_stat.st_size > MAX_IMAGE_BYTES:
         raise UsageConfigError("image is too large (max 20 MB)")
     try:
         data = path.read_bytes()
     except OSError:
         raise UsageConfigError("not a JPEG, PNG, WebP, or HEIC image") from None
+    if len(data) > MAX_IMAGE_BYTES:
+        raise UsageConfigError("image is too large (max 20 MB)")
     kind = _image_kind(data)
     if kind == "heic":
         if sys.platform != "darwin":
@@ -329,6 +333,8 @@ def _image_file(path):
                 data = output.read_bytes()
             except OSError:
                 raise UsageConfigError("HEIC is not supported here; convert to JPEG first") from None
+            if len(data) > MAX_IMAGE_BYTES:
+                raise UsageConfigError("image is too large (max 20 MB)")
             if _image_kind(data) != "jpeg":
                 raise UsageConfigError("HEIC is not supported here; convert to JPEG first")
     elif kind is None:
@@ -365,10 +371,14 @@ def _upload(server, data, bearer):
 
 
 def post(server, key, text, attachments=(), alts=()):
+    if not text:
+        raise UsageConfigError("text must not be empty")
     if len(attachments) > 4:
         raise UsageConfigError("at most 4 images")
     if alts and len(alts) != len(attachments):
         raise UsageConfigError("give one --alt per --attach, or none")
+    if any(len(alt) > 1000 or "\0" in alt for alt in alts):
+        raise UsageConfigError("invalid alt text")
     image_data = [_image_file(path) for path in attachments]
     fingerprint = _fingerprint(key)
     challenge = _request(server, "/api/cli/auth/challenge", {"key_fingerprint": fingerprint})

@@ -10,7 +10,7 @@ def test_container_start_migrates_before_starting_the_server():
         'CMD ["sh", "-c", "cd /app/backend && '
         '/app/backend/.venv/bin/alembic upgrade head && exec '
         '/app/backend/.venv/bin/uvicorn app:app --host 0.0.0.0 '
-        '--port ${PORT:-8000} --no-access-log"]'
+        '--port ${PORT:-8000} --no-access-log --no-proxy-headers"]'
     )
 
     assert command in dockerfile

@@ -4,23 +4,61 @@ import socket
 import subprocess
 import sys
 import time
+from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from fastapi.testclient import TestClient
-
 import app
+from auth import hash_password
+from fastapi.testclient import TestClient
 from operations import JsonFormatter
-
 
 client = TestClient(app.app)
 
 
 def test_readyz_fails_closed_without_database(monkeypatch):
     monkeypatch.setattr(app, "timeline_store", None)
+    monkeypatch.setattr(app, "_admin_config", lambda: type("Config", (), {"valid": True})())
     response = client.get("/readyz")
     assert response.status_code == 503
     assert response.json() == {"status": "not_ready", "reason": "database unavailable"}
+
+
+def test_readyz_validates_password_hash_configuration(monkeypatch, caplog):
+    class Available:
+        def schema_revisions(self):
+            return app.EXPECTED_SCHEMA_REVISIONS
+
+    valid_hash = hash_password("test-password")
+    invalid_hashes = [
+        valid_hash[:-1],
+        "$argon2id$configured",
+        "$argon2id$v=19$m=65536,t=3,p=4$c2FsdA",
+        valid_hash.replace("$argon2id$", "$argon2i$", 1),
+        valid_hash.replace("m=65536", "m=19455", 1),
+        valid_hash.replace("m=65536", "m=262145", 1),
+        valid_hash.replace("t=3", "t=1", 1),
+        valid_hash.replace("t=3", "t=11", 1),
+        valid_hash.replace("p=4", "p=17", 1),
+        "$argon2id$" + "x" * 513,
+    ]
+    monkeypatch.setattr(app, "timeline_store", Available())
+    monkeypatch.setenv("ADMIN_ORIGIN", "http://127.0.0.1")
+    monkeypatch.setenv("RATE_LIMIT_KEY", "r" * 32)
+
+    monkeypatch.setenv("ADMIN_PASSWORD_HASH", valid_hash)
+    response = client.get("/readyz")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
+    for invalid_hash in invalid_hashes:
+        caplog.clear()
+        monkeypatch.setenv("ADMIN_PASSWORD_HASH", invalid_hash)
+        response = client.get("/readyz")
+        assert response.status_code == 503
+        assert response.json() == {"status": "not_ready", "reason": "invalid authentication configuration"}
+        assert invalid_hash not in response.text
+        assert invalid_hash not in caplog.text
 
 
 def test_readyz_fails_closed_when_database_is_unavailable(monkeypatch):
@@ -32,6 +70,7 @@ def test_readyz_fails_closed_when_database_is_unavailable(monkeypatch):
             raise RuntimeError("postgres://secret")
 
     monkeypatch.setattr(app, "timeline_store", Unavailable())
+    monkeypatch.setattr(app, "_admin_config", lambda: type("Config", (), {"valid": True})())
     response = client.get("/readyz")
     assert response.status_code == 503
     assert response.json() == {"status": "not_ready", "reason": "database unavailable"}
@@ -47,6 +86,7 @@ def test_readyz_fails_closed_when_schema_version_table_is_missing(monkeypatch):
             return frozenset()
 
     monkeypatch.setattr(app, "timeline_store", MissingSchema())
+    monkeypatch.setattr(app, "_admin_config", lambda: type("Config", (), {"valid": True})())
     response = client.get("/readyz")
     assert response.status_code == 503
     assert response.json() == {"status": "not_ready", "reason": "database unavailable"}
@@ -61,6 +101,7 @@ def test_readyz_fails_closed_when_schema_is_stale(monkeypatch):
             return frozenset({"stale"})
 
     monkeypatch.setattr(app, "timeline_store", StaleSchema())
+    monkeypatch.setattr(app, "_admin_config", lambda: type("Config", (), {"valid": True})())
     response = client.get("/readyz")
     assert response.status_code == 503
     assert response.json() == {"status": "not_ready", "reason": "database unavailable"}
@@ -75,10 +116,11 @@ def test_readyz_accepts_current_schema_without_reloading_migration_files(monkeyp
         raise AssertionError("migration heads must be loaded once at import")
 
     monkeypatch.setattr(app, "timeline_store", CurrentSchema())
+    monkeypatch.setattr(app, "_admin_config", lambda: type("Config", (), {"valid": True})())
     monkeypatch.setattr(app, "load_schema_heads", unexpected_reload)
     first = client.get("/readyz")
     second = client.get("/readyz")
-    assert app.EXPECTED_SCHEMA_REVISIONS == frozenset({"001_timeline"})
+    assert app.EXPECTED_SCHEMA_REVISIONS == frozenset({"002_admin_auth"})
     assert first.status_code == second.status_code == 200
     assert first.json() == second.json() == {"status": "ok"}
 
@@ -92,6 +134,7 @@ def test_readyz_rejects_multiple_unexpected_schema_revisions(monkeypatch):
             return frozenset({"001_timeline", "unexpected"})
 
     monkeypatch.setattr(app, "timeline_store", MultipleSchemas())
+    monkeypatch.setattr(app, "_admin_config", lambda: type("Config", (), {"valid": True})())
     response = client.get("/readyz")
     assert response.status_code == 503
     assert response.json() == {"status": "not_ready", "reason": "database unavailable"}
@@ -159,6 +202,7 @@ def test_uvicorn_writes_only_allowlisted_request_events():
             "--port",
             str(port),
             "--no-access-log",
+            "--no-proxy-headers",
         ],
         cwd=os.path.dirname(__file__),
         stdout=subprocess.PIPE,
@@ -214,6 +258,67 @@ def test_uvicorn_writes_only_allowlisted_request_events():
     for event in events:
         assert set(event) == allowed
         assert event["route"] == "/healthz"
+
+
+def test_real_uvicorn_ignores_forwarded_client_and_disables_access_log(tmp_path):
+    probe = tmp_path / "probe.py"
+    probe.write_text(
+        "async def app(scope, receive, send):\n"
+        "    body = scope['client'][0].encode()\n"
+        "    await send({'type': 'http.response.start', 'status': 200, 'headers': []})\n"
+        "    await send({'type': 'http.response.body', 'body': body})\n"
+    )
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "probe:app",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+            "--no-access-log",
+            "--no-proxy-headers",
+        ],
+        cwd=tmp_path,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    output = ""
+    try:
+        deadline = time.monotonic() + 10
+        while True:
+            try:
+                request = Request(f"http://127.0.0.1:{port}/", headers={"X-Forwarded-For": "203.0.113.9"})
+                with urlopen(request, timeout=1) as response:
+                    assert response.read() == b"127.0.0.1"
+                break
+            except (URLError, OSError):
+                if process.poll() is not None or time.monotonic() >= deadline:
+                    raise AssertionError("uvicorn did not become ready")
+                time.sleep(0.05)
+    finally:
+        process.terminate()
+        try:
+            output = process.communicate(timeout=5)[0]
+        except subprocess.TimeoutExpired:
+            process.kill()
+            output = process.communicate(timeout=5)[0]
+    assert '"GET /' not in output
+    assert "203.0.113.9" not in output
+
+
+def test_server_commands_disable_proxy_headers():
+    root = Path(__file__).parent.parent
+    for filename in ("Dockerfile", "Makefile"):
+        command = (root / filename).read_text(encoding="utf-8")
+        assert "--no-proxy-headers" in command
+        assert "--proxy-headers" not in command.replace("--no-proxy-headers", "")
 
 
 def test_exception_log_has_safe_structured_stack(caplog):

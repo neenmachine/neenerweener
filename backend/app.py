@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import os
@@ -8,16 +9,18 @@ import uuid
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timezone
 from html import escape, unescape
-from urllib.parse import quote
 from pathlib import Path
+from urllib.parse import quote
 
 import yaml
-
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from markdown_it import MarkdownIt
 from mdit_py_plugins.dollarmath import dollarmath_plugin
+from pydantic import BaseModel, ConfigDict
 from pygments import highlight as pygments_highlight
 from pygments.formatters import HtmlFormatter
 from pygments.lexers import TextLexer, get_lexer_by_name, get_lexer_for_filename
@@ -25,7 +28,7 @@ from pygments.util import ClassNotFound
 
 from anchors import add_heading_anchors
 from operations import check_readiness, configure_logging, load_schema_heads
-from timeline import TimelineStore, TimelineStoreProtocol, serialize_entry
+from routes import page_kind
 
 POSTS_DIR = Path(os.environ.get("POSTS_DIR", Path(__file__).parent.parent / "posts"))
 DRAFTS_DIR = Path(os.environ.get("DRAFTS_DIR", Path(__file__).parent.parent / "drafts"))
@@ -34,6 +37,15 @@ FRONTEND_DIST = Path(os.environ.get("FRONTEND_DIST", Path(__file__).parent.paren
 EXPECTED_SCHEMA_REVISIONS = load_schema_heads(Path(__file__).with_name("alembic.ini"))
 FILENAME = re.compile(r"^([a-z0-9-]+)\.md$")
 PROJECT = re.compile(r"[a-z0-9-]+")
+from auth import (
+    CSRF_HEADER,
+    AdminConfig,
+    AuthStore,
+    Session,
+    valid_csrf,
+    verify_password,
+)
+from timeline import TimelineStore, TimelineStoreProtocol, serialize_entry, validate_timeline_body
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +77,9 @@ md.core.ruler.after("inline", "heading_anchors", add_heading_anchors)
 async def lifespan(_app):
     yield
     if timeline_store is not None:
-        timeline_store.close()
+        await asyncio.to_thread(timeline_store.close)
+    if auth_store is not None:
+        await asyncio.to_thread(auth_store.close)
 
 
 app = FastAPI(lifespan=lifespan)
@@ -73,6 +87,14 @@ configure_logging()
 timeline_store: TimelineStoreProtocol | None = (
     TimelineStore(os.environ["DATABASE_URL"]) if os.environ.get("DATABASE_URL") else None
 )
+auth_store: AuthStore | None = AuthStore(os.environ["DATABASE_URL"]) if os.environ.get("DATABASE_URL") else None
+
+
+@app.exception_handler(RequestValidationError)
+async def admin_validation_error(request: Request, exc: RequestValidationError):
+    if request.url.path.startswith("/api/admin/"):
+        return JSONResponse({"detail": "invalid request"}, status_code=422, headers={"Cache-Control": "no-store"})
+    return await request_validation_exception_handler(request, exc)
 
 
 @app.middleware("http")
@@ -106,6 +128,8 @@ async def operational_middleware(request: Request, call_next):
 @app.middleware("http")
 async def security_middleware(request: Request, call_next):
     response = await call_next(request)
+    if request.url.path.startswith("/api/admin/"):
+        response.headers["Cache-Control"] = "no-store"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["Permissions-Policy"] = "camera=(), geolocation=(), microphone=(), payment=(), usb=()"
@@ -118,12 +142,12 @@ async def security_middleware(request: Request, call_next):
     return response
 
 
-@app.get("/healthz")
+@app.api_route("/healthz", methods=["GET", "HEAD"])
 async def healthz():
     return {"status": "ok"}
 
 
-@app.get("/api/timeline")
+@app.api_route("/api/timeline", methods=["GET", "HEAD"])
 def list_timeline(
     before: int | None = Query(default=None, gt=0),
     limit: int = Query(default=20, ge=1, le=20),
@@ -148,9 +172,239 @@ def list_timeline(
     }
 
 
-@app.get("/readyz")
+class LoginRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    password: str
+
+
+class TimelineMutation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    body_markdown: str
+
+
+def _admin_config() -> AdminConfig:
+    return AdminConfig.from_env()
+
+
+def _check_origin(request: Request, config: AdminConfig) -> None:
+    if not config.origin_valid or request.headers.get("Origin") != config.origin:
+        raise HTTPException(403, "origin not allowed")
+
+
+def _clear_session_cookie(response: Response, config: AdminConfig) -> None:
+    response.delete_cookie(
+        config.cookie_name,
+        path="/",
+        secure=config.secure_cookie,
+        httponly=True,
+        samesite="strict",
+    )
+
+
+def _load_session(request: Request) -> tuple[str, Session, AdminConfig]:
+    config = _admin_config()
+    if not config.valid:
+        raise HTTPException(401, "authentication required")
+    token = request.cookies.get(config.cookie_name)
+    if not token:
+        raise HTTPException(401, "authentication required")
+    if auth_store is None:
+        raise HTTPException(503, "admin unavailable")
+    try:
+        session = auth_store.session(token, config.password_hash or "")
+    except Exception as exc:
+        logger.warning("admin storage unavailable: %s", type(exc).__name__)
+        raise HTTPException(503, "admin unavailable") from exc
+    if session is None:
+        raise HTTPException(401, "authentication required")
+    return token, session, config
+
+
+def require_admin(request: Request) -> tuple[str, Session, AdminConfig]:
+    return _load_session(request)
+
+
+def require_mutation_admin(request: Request) -> tuple[str, Session, AdminConfig]:
+    token, session, config = _load_session(request)
+    _check_origin(request, config)
+    if not valid_csrf(session, request.headers.get(CSRF_HEADER)):
+        raise HTTPException(403, "csrf validation failed")
+    return token, session, config
+
+
+def _admin_entry(entry: dict) -> dict:
+    try:
+        return serialize_entry(entry, admin=True)
+    except ValueError as exc:
+        raise HTTPException(422, "invalid timeline entry") from exc
+
+
+def _timeline_storage() -> TimelineStoreProtocol:
+    if timeline_store is None:
+        raise HTTPException(503, "admin unavailable")
+    return timeline_store
+
+
+@app.get("/api/admin/session")
+def admin_session(request: Request, response: Response):
+    config = _admin_config()
+    if not config.valid:
+        return {"authenticated": False}
+    token = request.cookies.get(config.cookie_name)
+    if not token:
+        return {"authenticated": False}
+    if auth_store is None:
+        raise HTTPException(503, "admin unavailable")
+    try:
+        session = auth_store.session(token, config.password_hash or "")
+    except Exception as exc:
+        logger.warning("admin storage unavailable: %s", type(exc).__name__)
+        raise HTTPException(503, "admin unavailable") from exc
+    if session is None:
+        _clear_session_cookie(response, config)
+        return {"authenticated": False}
+    return {"authenticated": True, "csrf_token": session.csrf_token}
+
+
+@app.post("/api/admin/login", status_code=204)
+def admin_login(payload: LoginRequest, request: Request, response: Response):
+    config = _admin_config()
+    if not config.origin_valid:
+        raise HTTPException(401, "invalid credentials")
+    _check_origin(request, config)
+    if not config.valid:
+        raise HTTPException(401, "invalid credentials")
+    if auth_store is None:
+        raise HTTPException(503, "admin unavailable")
+    identity = config.rate_identity(request.scope.get("headers", []))
+    if identity is None:
+        raise HTTPException(401, "invalid credentials")
+    try:
+        retry = auth_store.retry_after(identity)
+        if retry is not None:
+            raise HTTPException(429, "too many login attempts", headers={"Retry-After": str(retry)})
+        if not verify_password(payload.password, config.password_hash):
+            retry = auth_store.record_failure(identity)
+            if retry is not None:
+                raise HTTPException(429, "too many login attempts", headers={"Retry-After": str(retry)})
+            raise HTTPException(401, "invalid credentials")
+        token, session = auth_store.create_session(config.password_hash or "", identity)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("admin storage unavailable: %s", type(exc).__name__)
+        raise HTTPException(503, "admin unavailable") from exc
+    response.set_cookie(
+        config.cookie_name,
+        token,
+        max_age=12 * 60 * 60,
+        expires=session.expires_at,
+        path="/",
+        secure=config.secure_cookie,
+        httponly=True,
+        samesite="strict",
+    )
+
+
+@app.post("/api/admin/logout", status_code=204)
+def admin_logout(
+    response: Response,
+    auth: tuple[str, Session, AdminConfig] = Depends(require_mutation_admin),
+):
+    token, _, config = auth
+    try:
+        assert auth_store is not None
+        auth_store.delete_session(token)
+    except Exception as exc:
+        logger.warning("admin storage unavailable: %s", type(exc).__name__)
+        raise HTTPException(503, "admin unavailable") from exc
+    _clear_session_cookie(response, config)
+
+
+@app.post("/api/admin/timeline", status_code=201)
+def create_admin_timeline(
+    payload: TimelineMutation,
+    _auth: tuple[str, Session, AdminConfig] = Depends(require_mutation_admin),
+):
+    try:
+        validate_timeline_body(payload.body_markdown)
+    except ValueError as exc:
+        raise HTTPException(422, "invalid timeline entry") from exc
+    try:
+        return _admin_entry(_timeline_storage().create(payload.body_markdown))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("timeline storage unavailable: %s", type(exc).__name__)
+        raise HTTPException(503, "admin unavailable") from exc
+
+
+@app.get("/api/admin/timeline/{entry_id}")
+def get_admin_timeline(
+    entry_id: int,
+    _auth: tuple[str, Session, AdminConfig] = Depends(require_admin),
+):
+    if entry_id <= 0:
+        raise HTTPException(422, "invalid timeline id")
+    try:
+        entry = _timeline_storage().get(entry_id)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("timeline storage unavailable: %s", type(exc).__name__)
+        raise HTTPException(503, "admin unavailable") from exc
+    if entry is None:
+        raise HTTPException(404, "timeline entry not found")
+    return _admin_entry(entry)
+
+
+@app.patch("/api/admin/timeline/{entry_id}")
+def update_admin_timeline(
+    entry_id: int,
+    payload: TimelineMutation,
+    _auth: tuple[str, Session, AdminConfig] = Depends(require_mutation_admin),
+):
+    if entry_id <= 0:
+        raise HTTPException(422, "invalid timeline id")
+    try:
+        validate_timeline_body(payload.body_markdown)
+    except ValueError as exc:
+        raise HTTPException(422, "invalid timeline entry") from exc
+    try:
+        entry = _timeline_storage().update(entry_id, payload.body_markdown)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("timeline storage unavailable: %s", type(exc).__name__)
+        raise HTTPException(503, "admin unavailable") from exc
+    if entry is None:
+        raise HTTPException(404, "timeline entry not found")
+    return _admin_entry(entry)
+
+
+@app.delete("/api/admin/timeline/{entry_id}", status_code=204)
+def delete_admin_timeline(
+    entry_id: int,
+    _auth: tuple[str, Session, AdminConfig] = Depends(require_mutation_admin),
+):
+    if entry_id <= 0:
+        raise HTTPException(422, "invalid timeline id")
+    try:
+        deleted = _timeline_storage().delete(entry_id)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("timeline storage unavailable: %s", type(exc).__name__)
+        raise HTTPException(503, "admin unavailable") from exc
+    if not deleted:
+        raise HTTPException(404, "timeline entry not found")
+
+
+@app.api_route("/readyz", methods=["GET", "HEAD"])
 async def readyz():
-    ready, reason = await check_readiness(timeline_store, EXPECTED_SCHEMA_REVISIONS)
+    ready, reason = await check_readiness(
+        timeline_store, EXPECTED_SCHEMA_REVISIONS, _admin_config().valid
+    )
     if not ready:
         return JSONResponse({"status": "not_ready", "reason": reason or "dependency unavailable"}, status_code=503)
     return {"status": "ok"}
@@ -263,12 +517,12 @@ def render_post(body: str) -> str:
     return CAPTIONED.sub(r"<figure>\1<figcaption>\2</figcaption></figure>", html)
 
 
-@app.get("/api/posts")
+@app.api_route("/api/posts", methods=["GET", "HEAD"])
 def list_posts():
     return [{k: p[k] for k in ("slug", "date", "title", "excerpt", "tags", "draft")} for p in all_posts()]
 
 
-@app.get("/api/posts/{slug}")
+@app.api_route("/api/posts/{slug}", methods=["GET", "HEAD"])
 def get_post(slug: str):
     for p in all_posts():
         if p["slug"] == slug:
@@ -312,6 +566,18 @@ def project_file(project: str, path: str) -> Path:
     return file
 
 
+def project_files(root: Path) -> list[str]:
+    return sorted(
+        rel for p in root.rglob("*")
+        if contained_file(root, rel := p.relative_to(root).as_posix())
+    )
+
+
+def code_path_exists(project: str, path: str) -> bool:
+    files = project_files(project_root(project))
+    return not path or path in files or any(file.startswith(path + "/") for file in files)
+
+
 def rewrite_readme_link(project: str, url: str, prefix: str) -> str | None:
     target = posixpath.normpath(posixpath.join(".", url))
     if posixpath.isabs(target) or target == ".." or target.startswith("../"):
@@ -342,17 +608,14 @@ def readme_html(project: str, root: Path) -> str | None:
     return md.renderer.render(tokens, md.options, {})
 
 
-@app.get("/api/code/{project}")
+@app.api_route("/api/code/{project}", methods=["GET", "HEAD"])
 def get_project(project: str):
     root = project_root(project)
-    files = sorted(
-        rel for p in root.rglob("*")
-        if contained_file(root, rel := p.relative_to(root).as_posix())
-    )
+    files = project_files(root)
     return {"name": project, "files": files, "readme_html": readme_html(project, root)}
 
 
-@app.get("/api/code/{project}/file/{path:path}")
+@app.api_route("/api/code/{project}/file/{path:path}", methods=["GET", "HEAD"])
 def get_code_file(project: str, path: str):
     file = project_file(project, path)
     data = file.read_bytes()
@@ -386,26 +649,34 @@ app.include_router(discovery_router)
 def frontend(path: str, request: Request):
     if path == "api" or path.startswith("api/"):
         raise HTTPException(404, "not found")
+    kind = page_kind(path)
+    headers = {"X-Robots-Tag": "noindex"} if kind and kind[0] == "admin" else None
     root = FRONTEND_DIST.resolve()
     if not root.is_dir():
         raise HTTPException(404, "not found")
     requested = contained_file(root, path)
     if requested:
         if requested.name == "index.html":
-            return HTMLResponse(fill_index(requested.read_text(encoding="utf-8"), {}, {"title": "neenerweener"}, ""))
-        return FileResponse(requested)
+            target = "/" + path[: -len("index.html")]
+            if not target.endswith("/"):
+                target += "/"
+            location = target + (f"?{request.url.query}" if request.url.query else "")
+            return RedirectResponse(location, status_code=301, headers=headers)
+        return FileResponse(requested, headers=headers)
     index = contained_file(root, "index.html")
     if not index:
         raise HTTPException(404, "not found")
-    if path.strip("/") == "timeline":
-        before_cursor = timeline_before(request)
-    else:
-        before_cursor = None
-    page = page_data(path, before_cursor)
+    before_cursor = timeline_before(request) if kind and kind[0] == "timeline" else None
+    page = page_data(kind, before_cursor)
     if page is None:
-        return HTMLResponse(fill_index(index.read_text(encoding="utf-8"), {}, {"title": "neenerweener"}, ""))
-    preload, head, markup, status_code = page
-    return HTMLResponse(fill_index(index.read_text(encoding="utf-8"), preload, head, markup), status_code=status_code)
+        preload, head, markup, status_code = not_found_page("not found")
+    else:
+        preload, head, markup, status_code = page
+    return HTMLResponse(
+        fill_index(index.read_text(encoding="utf-8"), preload, head, markup),
+        status_code=status_code,
+        headers=headers,
+    )
 
 
 def timeline_before(request: Request) -> int | None:
@@ -417,32 +688,45 @@ def timeline_before(request: Request) -> int | None:
     return int(values[0])
 
 
-def page_data(path: str, before: int | None = None) -> tuple[dict, dict, str, int] | None:
-    """For the home, timeline, and post pages: preload data, head tags, and no-JS markup."""
-    path = path.strip("/")
-    preload: dict = {}
-    head = {"title": "neenerweener"}
-    markup = ""
-    status_code = 200
-    if path == "":
-        preload["/api/posts"] = list_posts()
-        markup = '<main><h1 class="sr-only">neenerweener</h1></main>'
-    elif path == "timeline":
-        head = {"title": "timeline", "description": "timeline"}
-        preload["/api/timeline"], markup, status_code = timeline_page(before)
-    elif (m := re.fullmatch(r"posts/([a-z0-9-]+)", path)):
-        url = f"/api/posts/{m[1]}"
-        try:
-            post = get_post(m[1])
-        except HTTPException:
-            preload[url] = None
-        else:
-            preload[url] = post
-            head = {"title": post["title"], "description": post["excerpt"] or summary(post["html"])}
-            markup = post_markup(post)
-    else:
+def page_data(kind: tuple[str, ...] | None, before: int | None = None) -> tuple[dict, dict, str, int] | None:
+    """For known public pages: preload data, head tags, and no-JS markup."""
+    if kind is None:
         return None
-    return preload, head, markup, status_code
+    if kind[0] == "home":
+        return {"/api/posts": list_posts()}, {"title": "neenerweener"}, '<main><h1 class="sr-only">neenerweener</h1></main>', 200
+    if kind[0] == "timeline":
+        page, markup, status_code = timeline_page(before)
+        return {"/api/timeline": page}, {"title": "timeline", "description": "timeline"}, markup, status_code
+    if kind[0] == "admin":
+        return {}, {"title": "neenerweener"}, "", 200
+    if kind[0] == "post":
+        return post_page_data(kind[1])
+    return code_page_data(*kind[1:])
+
+
+def post_page_data(slug: str) -> tuple[dict, dict, str, int]:
+    try:
+        post = get_post(slug)
+    except HTTPException:
+        return not_found_page("post not found", back=True)
+    return {f"/api/posts/{slug}": post}, {"title": post["title"], "description": post["excerpt"] or summary(post["html"])}, post_markup(post), 200
+
+
+def code_page_data(project: str, code_path: str) -> tuple[dict, dict, str, int]:
+    try:
+        if not code_path_exists(project, code_path):
+            return not_found_page("file not found")
+    except HTTPException as exc:
+        return not_found_page(str(exc.detail))
+    return {}, {"title": "neenerweener"}, "", 200
+
+
+def not_found_page(label: str, back: bool = False) -> tuple[dict, dict, str, int]:
+    """The one not-found view; the React app reads the label from the preload and renders the same markup."""
+    heading = f'<h1 class="muted">{escape(label)}</h1>'
+    heading = f'<div class="has-back"><a class="back" href="/" aria-label="back">←</a>{heading}</div>' if back else f'{heading}<a href="/">neenerweener</a>'
+    markup = f'<main>{heading}<footer><a href="/">neenerweener</a><a href="/timeline">timeline</a></footer></main>'
+    return {"not-found": label}, {"title": "not found", "robots": "noindex"}, markup, 404
 
 
 def timeline_page(before: int | None) -> tuple[dict | None, str, int]:
@@ -532,6 +816,8 @@ def fill_index(index: str, preload: dict, head: dict, markup: str) -> str:
     if head.get("description"):
         tags += [f'<meta name="description" content="{escape(head["description"])}" />',
                  f'<meta property="og:description" content="{escape(head["description"])}" />']
+    if head.get("robots"):
+        tags.append(f'<meta name="robots" content="{escape(head["robots"])}">')
     # "<" escaped so post text cannot close the script tag.
     data = json.dumps(preload).replace("<", "\\u003c")
     tags.append(f'<script id="preload" type="application/json">{data}</script>')

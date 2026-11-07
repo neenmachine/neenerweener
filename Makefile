@@ -12,8 +12,8 @@ test:
 	cd backend && uv run pytest -q
 	cd cli && uv run --locked pytest -q
 	cd frontend && pnpm test && pnpm build
-	# The public chunk must not carry the admin composer (it is a lazy chunk for signed-in admins).
-	! grep -lE 'tweet|new timeline entry' frontend/dist/assets/index-*.js
+	# The public chunk must not carry or statically import the admin composer (a lazy chunk for signed-in admins).
+	! grep -lE 'tweet|new timeline entry|from"\./(TimelineComposer|adminApi)-' frontend/dist/assets/index-*.js
 
 # Snapshot a local git repo into code/<name>/: make code-sync PROJECT=~/path/to/repo [NAME=name]
 code-sync:

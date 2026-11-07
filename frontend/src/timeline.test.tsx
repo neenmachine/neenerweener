@@ -2,13 +2,17 @@
 // Drives the real TimelinePage in jsdom: server preload in the page, fetch stubbed per older page.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
-// Counts loads of the composer chunk; the real module still renders.
-const composerLoads = vi.hoisted(() => ({ count: 0 }));
-vi.mock("./TimelineComposer", async (importOriginal) => {
-  composerLoads.count++;
-  return importOriginal();
+// Counts loads of the composer chunk; the real module still renders. doMock per test, after resetModules,
+// so each test loads it afresh (a hoisted vi.mock factory runs once per file).
+let composerLoads = 0;
+beforeEach(() => {
+  composerLoads = 0;
+  vi.doMock("./TimelineComposer", async (importOriginal) => {
+    composerLoads++;
+    return importOriginal();
+  });
 });
 
 type Page = { entries: { id: number; html: string; created_at: string; edited_at: null }[]; next_cursor: number | null };
@@ -23,7 +27,6 @@ const page = (ids: number[], next_cursor: number | null): Page => ({
 let root: Root | undefined;
 
 afterEach(() => {
-  composerLoads.count = 0;
   document.cookie = "admin_hint=; Max-Age=0; Path=/";
   act(() => root?.unmount());
   root = undefined;
@@ -176,7 +179,7 @@ test("without the hint there is no session request and no composer chunk", { tim
   const calls = await openAdmin(false, signedIn);
   await settle();
   expect(calls).toEqual([]);
-  expect(composerLoads.count).toBe(0);
+  expect(composerLoads).toBe(0);
   expect(textarea()).toBeNull();
 });
 
@@ -184,7 +187,7 @@ test("hint and a signed-in session show the composer, with the CSRF token kept o
   const calls = await openAdmin(true, signedIn);
   await showsComposer();
   expect(calls.map(([url]) => url)).toEqual(["/api/admin/session"]);
-  expect(textarea()).toBeTruthy();
+  expect(composerLoads).toBe(1);
   // Right after the heading, before the entries.
   expect(document.querySelector("h1 + form textarea")).toBe(textarea());
   expect(document.documentElement.outerHTML).not.toContain("csrf-secret");
@@ -196,7 +199,7 @@ test("hint and a signed-out session clear the hint and never load the composer",
   await until(() => !document.cookie.includes("admin_hint"), "hint cleared");
   await settle();
   expect(calls.map(([url]) => url)).toEqual(["/api/admin/session"]);
-  expect(composerLoads.count).toBe(0);
+  expect(composerLoads).toBe(0);
   expect(textarea()).toBeNull();
 });
 

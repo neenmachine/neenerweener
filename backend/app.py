@@ -29,7 +29,6 @@ CODE_DIR = Path(os.environ.get("CODE_DIR", Path(__file__).parent.parent / "code"
 FRONTEND_DIST = Path(os.environ.get("FRONTEND_DIST", Path(__file__).parent.parent / "frontend" / "dist"))
 FILENAME = re.compile(r"^([a-z0-9-]+)\.md$")
 PROJECT = re.compile(r"[a-z0-9-]+")
-<<<<<<< HEAD
 from operations import check_readiness, configure_logging
 from timeline import TimelineStore, TimelineStoreProtocol, serialize_entry
 

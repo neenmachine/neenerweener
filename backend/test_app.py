@@ -557,7 +557,7 @@ def test_server_rendered_pages(tmp_path, monkeypatch):
     assert '<meta name="description" content="short one" />' in c.get("/posts/brief").text
     missing = c.get("/posts/nope")
     assert missing.status_code == 404
-    assert '{"not-found": "post not found"}' in missing.text and '<meta name="robots" content="noindex">' in missing.text
+    assert '{"page": {"kind": "not-found", "label": "post not found", "back": true}}' in missing.text and '<meta name="robots" content="noindex">' in missing.text
     home = c.get("/?tag=a").text
     assert '"/api/posts": [' in home and '<div id="root"><main><h1 class="sr-only">neenerweener</h1></main></div>' in home
 
@@ -604,7 +604,7 @@ def test_timeline_ssr_and_preload_share_one_initial_page(tmp_path, monkeypatch, 
     assert len(h1s(html)) == 1
     preload = html.split('<script id="preload" type="application/json">')[1].split("</script>")[0]
     data = __import__("json").loads(preload)
-    assert set(data) == {"/api/timeline"}
+    assert set(data) == {"page", "/api/timeline"}
     assert data["/api/timeline"]["entries"][0]["id"] == expected_id
     assert f'id="entry-{expected_id}"' in html
     control = f'<div class="load-more"><a href="/timeline?before={next_cursor}">load more</a></div>'

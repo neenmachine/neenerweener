@@ -1,0 +1,312 @@
+{
+ "_comment": "Every page URL case, run by backend/test_routes.py (server) and src/routes.test.tsx (React). `data` is the server's preload besides `page`; `fetched` is what the React page then fetches. Fixtures: post hello, code project demo with hello.py, empty timeline.",
+ "rows": [
+  {
+   "path": "/",
+   "status": 200,
+   "noindex": false,
+   "page": {
+    "kind": "home"
+   },
+   "data": {
+    "/api/posts": [
+     {
+      "slug": "hello",
+      "date": "2026-01-01",
+      "title": "hello",
+      "excerpt": null,
+      "tags": [],
+      "draft": false
+     }
+    ]
+   },
+   "h1": [
+    "neenerweener"
+   ]
+  },
+  {
+   "path": "/?tag=a",
+   "status": 200,
+   "noindex": false,
+   "page": {
+    "kind": "home"
+   },
+   "data": {
+    "/api/posts": [
+     {
+      "slug": "hello",
+      "date": "2026-01-01",
+      "title": "hello",
+      "excerpt": null,
+      "tags": [],
+      "draft": false
+     }
+    ]
+   },
+   "h1": [
+    "neenerweener"
+   ]
+  },
+  {
+   "path": "/timeline",
+   "status": 200,
+   "noindex": false,
+   "page": {
+    "kind": "timeline"
+   },
+   "data": {
+    "/api/timeline": {
+     "entries": [],
+     "next_cursor": null
+    }
+   },
+   "h1": [
+    "timeline"
+   ]
+  },
+  {
+   "path": "/posts/hello",
+   "status": 200,
+   "noindex": false,
+   "page": {
+    "kind": "post",
+    "slug": "hello"
+   },
+   "data": {
+    "/api/posts/hello": {
+     "slug": "hello",
+     "date": "2026-01-01",
+     "title": "hello",
+     "excerpt": null,
+     "tags": [],
+     "draft": false,
+     "html": "<p>body</p>\n"
+    }
+   },
+   "h1": [
+    "hello"
+   ]
+  },
+  {
+   "path": "/code/demo",
+   "status": 200,
+   "noindex": false,
+   "page": {
+    "kind": "code",
+    "project": "demo"
+   },
+   "h1": [
+    "demo"
+   ],
+   "fetched": {
+    "/api/code/demo": {
+     "name": "demo",
+     "files": [
+      "hello.py"
+     ],
+     "readme_html": null
+    }
+   },
+   "data": {}
+  },
+  {
+   "path": "/code/demo/hello.py",
+   "status": 200,
+   "noindex": false,
+   "page": {
+    "kind": "code",
+    "project": "demo",
+    "path": "hello.py"
+   },
+   "h1": [
+    "demo/hello.py"
+   ],
+   "fetched": {
+    "/api/code/demo": {
+     "name": "demo",
+     "files": [
+      "hello.py"
+     ],
+     "readme_html": null
+    },
+    "/api/code/demo/file/hello.py": {
+     "path": "hello.py",
+     "html": "<span class=\"line\">print(1)</span>\n"
+    }
+   },
+   "data": {}
+  },
+  {
+   "path": "/admin",
+   "status": 200,
+   "noindex": true,
+   "page": {
+    "kind": "admin"
+   },
+   "data": {},
+   "h1": [
+    "admin"
+   ],
+   "fetched": {
+    "/api/admin/session": {
+     "authenticated": false
+    }
+   }
+  },
+  {
+   "path": "/does-not-exist",
+   "status": 404,
+   "noindex": false,
+   "page": {
+    "kind": "not-found",
+    "label": "not found",
+    "back": false
+   },
+   "data": {},
+   "h1": [
+    "not found"
+   ],
+   "markup": "<main><h1 class=\"muted\">not found</h1><a href=\"/\" tabindex=\"-1\" aria-hidden=\"true\">neenerweener</a><footer><a href=\"/\">neenerweener</a><a href=\"/timeline\">timeline</a></footer></main>"
+  },
+  {
+   "path": "/posts/nope",
+   "status": 404,
+   "noindex": false,
+   "page": {
+    "kind": "not-found",
+    "label": "post not found",
+    "back": true
+   },
+   "data": {},
+   "h1": [
+    "post not found"
+   ],
+   "markup": "<main><div class=\"has-back\"><a class=\"back\" href=\"/\" aria-label=\"back\">←</a><h1 class=\"muted\">post not found</h1></div><footer><a href=\"/\">neenerweener</a><a href=\"/timeline\">timeline</a></footer></main>"
+  },
+  {
+   "path": "/code/nope",
+   "status": 404,
+   "noindex": false,
+   "page": {
+    "kind": "not-found",
+    "label": "project not found",
+    "back": false
+   },
+   "data": {},
+   "h1": [
+    "project not found"
+   ],
+   "markup": "<main><h1 class=\"muted\">project not found</h1><a href=\"/\" tabindex=\"-1\" aria-hidden=\"true\">neenerweener</a><footer><a href=\"/\">neenerweener</a><a href=\"/timeline\">timeline</a></footer></main>"
+  },
+  {
+   "path": "/code/demo/nope.py",
+   "status": 404,
+   "noindex": false,
+   "page": {
+    "kind": "not-found",
+    "label": "file not found",
+    "back": false
+   },
+   "data": {},
+   "h1": [
+    "file not found"
+   ],
+   "markup": "<main><h1 class=\"muted\">file not found</h1><a href=\"/\" tabindex=\"-1\" aria-hidden=\"true\">neenerweener</a><footer><a href=\"/\">neenerweener</a><a href=\"/timeline\">timeline</a></footer></main>"
+  },
+  {
+   "path": "/admin/settings",
+   "status": 404,
+   "noindex": true,
+   "page": {
+    "kind": "not-found",
+    "label": "not found",
+    "back": false
+   },
+   "data": {},
+   "h1": [
+    "not found"
+   ],
+   "markup": "<main><h1 class=\"muted\">not found</h1><a href=\"/\" tabindex=\"-1\" aria-hidden=\"true\">neenerweener</a><footer><a href=\"/\">neenerweener</a><a href=\"/timeline\">timeline</a></footer></main>"
+  },
+  {
+   "path": "/admin/x/y",
+   "status": 404,
+   "noindex": true,
+   "page": {
+    "kind": "not-found",
+    "label": "not found",
+    "back": false
+   },
+   "data": {},
+   "h1": [
+    "not found"
+   ],
+   "markup": "<main><h1 class=\"muted\">not found</h1><a href=\"/\" tabindex=\"-1\" aria-hidden=\"true\">neenerweener</a><footer><a href=\"/\">neenerweener</a><a href=\"/timeline\">timeline</a></footer></main>"
+  },
+  {
+   "path": "/admin//",
+   "status": 301,
+   "location": "/admin",
+   "noindex": true
+  },
+  {
+   "path": "/admin/",
+   "status": 301,
+   "location": "/admin",
+   "noindex": true
+  },
+  {
+   "path": "/admin/?next=1",
+   "status": 301,
+   "location": "/admin?next=1",
+   "noindex": true
+  },
+  {
+   "path": "/posts/nope//",
+   "status": 301,
+   "location": "/posts/nope",
+   "noindex": false
+  },
+  {
+   "path": "/posts/hello/",
+   "status": 301,
+   "location": "/posts/hello",
+   "noindex": false
+  },
+  {
+   "path": "/timeline//",
+   "status": 301,
+   "location": "/timeline",
+   "noindex": false
+  },
+  {
+   "path": "/timeline/?before=5",
+   "status": 301,
+   "location": "/timeline?before=5",
+   "noindex": false
+  },
+  {
+   "path": "/code/demo/",
+   "status": 301,
+   "location": "/code/demo",
+   "noindex": false
+  },
+  {
+   "path": "/index.html",
+   "status": 301,
+   "location": "/",
+   "noindex": false
+  },
+  {
+   "path": "/index.html?tag=a",
+   "status": 301,
+   "location": "/?tag=a",
+   "noindex": false
+  },
+  {
+   "path": "/api/nope",
+   "status": 404,
+   "noindex": false
+  }
+ ]
+}

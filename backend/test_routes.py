@@ -1,10 +1,12 @@
 import json
 import re
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 import app
+import routes
 
 
 @pytest.fixture
@@ -57,16 +59,6 @@ def test_known_routes_stay_200(client):
     assert client.get("/now", follow_redirects=False).status_code == 301
 
 
-def test_only_the_admin_root_is_a_known_admin_page():
-    from routes import page_kind
-
-    for path in ("admin", "admin/", "/admin"):
-        assert page_kind(path) == ("admin",)
-    # React has no admin subroutes, so the server serves them as the not-found page.
-    for path in ("admin/settings", "/admin/anything/deeper"):
-        assert page_kind(path) is None
-
-
 def test_api_404_stays_json(client):
     response = client.get("/api/no-such-route")
     assert response.status_code == 404
@@ -105,6 +97,70 @@ def test_not_found_pages_have_one_labeled_heading_and_main(client):
         assert f">{label}</h1>" in response.text
         assert "back" not in response.text.split("<h1", 1)[1].split("</h1>", 1)[0]
         preload = re.search(r'<script id="preload" type="application/json">(.*?)</script>', response.text)[1]
-        assert json.loads(preload) == {"not-found": label}
+        assert json.loads(preload)["page"]["label"] == label
         assert '<footer><a href="/">neenerweener</a><a href="/timeline">timeline</a></footer></main>' in response.text
-        assert response.text.count('href="/"') == 2  # one home link (the back arrow on posts) plus the footer
+        assert response.text.count('href="/"') == 2  # the back arrow on posts, or the untabbable copy under the heading, plus the footer
+
+
+CASES = json.loads((Path(__file__).parents[1] / "frontend/src/route_cases.json").read_text())["rows"]
+
+
+@pytest.fixture
+def site(tmp_path, monkeypatch):
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text('<html><head><title>neenerweener</title></head><body><div id="root"></div></body></html>')
+    posts = tmp_path / "posts"
+    posts.mkdir()
+    (posts / "hello.md").write_text("---\ntitle: hello\ndate: 2026-01-01\n---\nbody\n")
+    (tmp_path / "code" / "demo").mkdir(parents=True)
+    (tmp_path / "code" / "demo" / "hello.py").write_text("print(1)\n")
+    for name, value in (("FRONTEND_DIST", dist), ("POSTS_DIR", posts), ("DRAFTS_DIR", tmp_path / "drafts"), ("CODE_DIR", tmp_path / "code")):
+        monkeypatch.setattr(app, name, value)
+    monkeypatch.delenv("SHOW_DRAFTS", raising=False)
+
+    class EmptyStore:
+        def list(self, before, limit):
+            return []
+
+    monkeypatch.setattr(app, "timeline_store", EmptyStore())
+    return TestClient(app.app)
+
+
+@pytest.mark.parametrize("case", CASES, ids=[case["path"] for case in CASES])
+def test_route_table(site, case):
+    get = site.get(case["path"], follow_redirects=False)
+    head = site.head(case["path"], follow_redirects=False)
+    for response in (get, head):
+        assert response.status_code == case["status"]
+        assert response.headers.get("location") == case.get("location")
+        assert (response.headers.get("X-Robots-Tag") == "noindex") == case["noindex"]
+    assert head.headers.get("content-type") == get.headers.get("content-type")
+    assert head.content == b""
+    if "page" not in case:
+        return
+    preload = json.loads(re.search(r'<script id="preload" type="application/json">(.*?)</script>', get.text)[1])
+    assert preload["page"] == case["page"]
+    assert set(preload) == {"page"} | set(case["data"])
+    markup = re.search(r'<div id="root">(.*)</div></body>', get.text, re.S)[1]
+    if markup:
+        assert [re.sub(r"<[^>]+>", "", h).strip() for h in re.findall(r"<h1[^>]*>(.*?)</h1>", markup)] == case["h1"]
+    if "markup" in case:
+        assert markup == case["markup"]
+
+
+def test_route_table_covers_every_page_kind():
+    assert {kind for kind, _ in routes.ROUTES} <= {case["page"]["kind"] for case in CASES if "page" in case}
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [("/", "/"), ("//admin", "/admin"), ("/a//b///", "/a/b"), ("///", "/"), ("/\\evil.com/", "/\\evil.com")],
+)
+def test_canonical_never_starts_with_two_slashes(path, expected):
+    # httpx rewrites a leading // into a host, so these cannot go through the test client.
+    assert routes.canonical(path) == expected
+
+
+def test_redirect_location_cannot_leave_the_site(site):
+    assert site.get("/%5Cevil.com/", follow_redirects=False).headers["location"] == "/%5Cevil.com"

@@ -7,7 +7,6 @@ import json
 import os
 import subprocess
 import sys
-import tomllib
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -15,6 +14,8 @@ from re import fullmatch
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse, urlunparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
+
+import tomllib
 
 from . import __version__
 
@@ -78,7 +79,9 @@ def _server(value):
         raise UsageConfigError("invalid server URL") from None
     if port is not None and not 1 <= port <= 65535:
         raise UsageConfigError("invalid server URL")
-    if p.scheme not in ("http", "https") or not p.netloc or p.username or p.password or p.query or p.fragment:
+    if not host or "@" in p.netloc:
+        raise UsageConfigError("invalid server URL")
+    if p.scheme not in ("http", "https") or not p.netloc or p.query or p.fragment:
         raise UsageConfigError("server must be an HTTPS URL (or HTTP localhost)")
     try:
         loopback = host == "localhost" or ipaddress.ip_address(host).is_loopback
@@ -266,7 +269,7 @@ def _token(data):
             or data.get("token_type") != "Bearer" or data.get("expires_in") != 600
             or not isinstance(scopes, list) or len(scopes) > 16
             or any(not isinstance(scope, str) or len(scope) > 128 for scope in scopes)
-            or len(scopes) != len(set(scopes)) or set(scopes) != {"timeline:write"}):
+            or len(scopes) != len(set(scopes)) or set(scopes) != {"timeline:create"}):
         raise NetworkError("server returned an invalid response")
     return token
 

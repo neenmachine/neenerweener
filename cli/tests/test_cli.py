@@ -71,6 +71,11 @@ class CliTests(unittest.TestCase):
             "https://[::1",
             "https://example.com: 443",
             "https://example.com:not-a-port/private-input",
+            "https://:443",
+            "https://@example.com",
+            "https://user@example.com",
+            "https://:password@example.com",
+            "https://user:@example.com",
         ]
         for server in cases:
             with self.subTest(server=server):
@@ -123,7 +128,7 @@ class CliTests(unittest.TestCase):
 
     def test_tweet_signs_server_message_with_exact_namespace_and_posts_bearer_request(self):
         calls=[]
-        responses = iter([Response({"challenge_id":"123e4567-e89b-12d3-a456-426614174000", "message":"line\nfinal\n", "namespace":cli.NAMESPACE, "expires_at":"2099-01-01T00:00:00Z"}), Response({"access_token":"tok-123", "token_type":"Bearer", "expires_in":600, "scopes":["timeline:write"]}), Response({"id":7})])
+        responses = iter([Response({"challenge_id":"123e4567-e89b-12d3-a456-426614174000", "message":"line\nfinal\n", "namespace":cli.NAMESPACE, "expires_at":"2099-01-01T00:00:00Z"}), Response({"access_token":"tok-123", "token_type":"Bearer", "expires_in":600, "scopes":["timeline:create"]}), Response({"id":7})])
         def open_(request, timeout): calls.append(request); return next(responses)
         def run(args, stdin=None):
             if args[1:3] == ["-lf", str(self.key)]: return subprocess.CompletedProcess(args, 0, b"256 SHA256:fp comment\n", b"")
@@ -182,7 +187,6 @@ class CliTests(unittest.TestCase):
             self.assertNotIn(secret, stderr.getvalue())
 
     def test_tweet_does_not_retry_ambiguous_create_failure(self):
-        calls=[]
         with patch.object(cli.OPENER, "open", side_effect=cli.HTTPError("https://s", 500, "x", {"X-Request-ID":"r"}, None)) as op:
             with self.assertRaisesRegex(cli.CliError, "server error") as cm: cli._request("https://s", "/api/admin/timeline", {"body_markdown":"x"}, "tok")
             self.assertEqual(cm.exception.code, 1); self.assertEqual(op.call_count, 1)
@@ -206,15 +210,13 @@ class CliTests(unittest.TestCase):
                 for secret in secrets:
                     with self.subTest(field=next(iter(payload)), bearer=bool(bearer), header=header):
                         error = cli.HTTPError("https://s", status, "x", {header: f"prefix-{secret}-suffix"}, None)
-                        with patch.object(cli.OPENER, "open", side_effect=error):
-                            with self.assertRaises(cli.CliError) as cm:
+                        with patch.object(cli.OPENER, "open", side_effect=error), self.assertRaises(cli.CliError) as cm:
                                 cli._request("https://s", "/api/admin/timeline", payload, bearer)
                         self.assertEqual(str(cm.exception), expected)
 
             error = cli.HTTPError("https://s", 422, "x", {}, None)
             error.read = lambda n=-1, secrets=secrets: json.dumps({"detail": "leak " + " ".join(secrets)}).encode()
-            with patch.object(cli.OPENER, "open", side_effect=error):
-                with self.assertRaises(cli.CliError) as cm:
+            with patch.object(cli.OPENER, "open", side_effect=error), self.assertRaises(cli.CliError) as cm:
                     cli._request("https://s", "/api/admin/timeline", payload, bearer)
             self.assertEqual(str(cm.exception), "server rejected the tweet")
 
@@ -228,8 +230,7 @@ class CliTests(unittest.TestCase):
             for value in cases:
                 with self.subTest(header=header, value_length=len(value)):
                     error = cli.HTTPError("https://s", status, "x", {header: value}, None)
-                    with patch.object(cli.OPENER, "open", side_effect=error):
-                        with self.assertRaises(cli.CliError) as cm:
+                    with patch.object(cli.OPENER, "open", side_effect=error), self.assertRaises(cli.CliError) as cm:
                             cli._request("https://s", "/path", {"body_markdown":"text"})
                     self.assertEqual(str(cm.exception), expected)
 
@@ -246,7 +247,7 @@ class CliTests(unittest.TestCase):
     def test_tweet_rejects_unknown_token_field_with_safe_exit(self):
         secret = "token-extra-secret"
         challenge = Response({"challenge_id":"123e4567-e89b-12d3-a456-426614174000", "message":"m", "namespace":cli.NAMESPACE, "expires_at":"2099-01-01T00:00:00Z"})
-        token = Response({"access_token":"token", "token_type":"Bearer", "expires_in":600, "scopes":["timeline:write"], "extra":secret})
+        token = Response({"access_token":"token", "token_type":"Bearer", "expires_in":600, "scopes":["timeline:create"], "extra":secret})
         stderr = io.StringIO()
         with patch.object(cli, "_fingerprint", return_value="SHA256:fp"), patch.object(cli.OPENER, "open", side_effect=[challenge, token]), patch.object(cli, "_run", return_value=subprocess.CompletedProcess([], 0, signature_bytes(), b"")), contextlib.redirect_stderr(stderr):
             result = cli.main(["--server", "https://s.example", "--key", str(self.key), "text"])
@@ -264,9 +265,9 @@ class CliTests(unittest.TestCase):
             with self.assertRaisesRegex(cli.CliError, "invalid response"):
                 cli._challenge(challenge)
         for token in [
-            {"access_token":"token", "token_type":"Basic", "expires_in":600, "scopes":["timeline:write"]},
-            {"access_token":"token", "token_type":"Bearer", "expires_in":601, "scopes":["timeline:write"]},
-            {"access_token":"token", "token_type":"Bearer", "expires_in":600, "scopes":["timeline:write", "admin"]},
+            {"access_token":"token", "token_type":"Basic", "expires_in":600, "scopes":["timeline:create"]},
+            {"access_token":"token", "token_type":"Bearer", "expires_in":601, "scopes":["timeline:create"]},
+            {"access_token":"token", "token_type":"Bearer", "expires_in":600, "scopes":["timeline:create", "admin"]},
         ]:
             with self.assertRaisesRegex(cli.CliError, "invalid response"):
                 cli._token(token)
@@ -276,11 +277,11 @@ class CliTests(unittest.TestCase):
         private = Path(self.tmp.name) / "id_ed25519"
         subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(private)], check=True)
         message = b"exact message\n"
-        signed = subprocess.run(["ssh-keygen", "-Y", "sign", "-n", cli.NAMESPACE, "-f", str(private)], input=message, stdout=subprocess.PIPE, check=True).stdout
+        signed = subprocess.run(["ssh-keygen", "-Y", "sign", "-n", cli.NAMESPACE, "-f", str(private)], input=message, capture_output=True, check=True).stdout
         allowed = Path(self.tmp.name) / "allowed"
         allowed.write_text(f"test {private.with_suffix('.pub').read_text().strip()}\n")
         sig = Path(self.tmp.name) / "sig"; sig.write_bytes(signed)
-        result = subprocess.run(["ssh-keygen", "-Y", "verify", "-n", cli.NAMESPACE, "-f", str(allowed), "-I", "test", "-s", str(sig)], input=message, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        result = subprocess.run(["ssh-keygen", "-Y", "verify", "-n", cli.NAMESPACE, "-f", str(allowed), "-I", "test", "-s", str(sig)], input=message, capture_output=True, check=False)
         self.assertEqual(result.returncode, 0, result.stderr.decode())
 
 if __name__ == "__main__": unittest.main()

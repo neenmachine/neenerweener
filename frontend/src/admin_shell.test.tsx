@@ -18,6 +18,7 @@ test("the loaded admin page keeps one server robots tag", { timeout: 5000 }, asy
   document.head.innerHTML = '<meta name="robots" content="noindex">';
   vi.stubGlobal("fetch", vi.fn(() => Promise.resolve({ ok: true, status: 200, headers: new Headers(), json: () => Promise.resolve({ authenticated: false }) })));
   document.body.innerHTML = `<script id="preload" type="application/json">{"page":{"kind":"admin"}}</script><div id="root"></div>`;
+  await import("./Admin");
   const { default: App } = await import("./App");
   await act(async () => {
     root = createRoot(document.getElementById("root")!);

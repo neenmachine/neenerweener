@@ -1,4 +1,5 @@
 import logging
+from datetime import date
 
 import pytest
 from fastapi.testclient import TestClient
@@ -415,6 +416,8 @@ def test_server_rendered_pages(tmp_path, monkeypatch):
     assert "<title>timeline</title>" in timeline
     assert '<meta name="description" content="timeline" />' in timeline
     assert 'id="entry-2"' in timeline
+    assert 'title="January 2, 2026 at 12:00 AM"' in timeline
+    assert '>jan 2<' in timeline
     assert "first &amp; &lt;safe&gt;" in timeline
     assert '"/api/timeline"' in timeline
     assert "<" not in timeline.split('<script id="preload" type="application/json">')[1].split("</script>")[0]
@@ -424,6 +427,45 @@ def test_server_rendered_pages(tmp_path, monkeypatch):
     assert '"/api/posts/nope": null' in missing and "<title>neenerweener</title>" in missing
     home = c.get("/?tag=a").text
     assert '"/api/posts": [' in home and '<div id="root"></div>' in home
+
+
+def test_timeline_empty_and_unavailable_are_distinct(tmp_path, monkeypatch):
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text(INDEX)
+    monkeypatch.setattr(app, "FRONTEND_DIST", dist)
+
+    class EmptyStore:
+        def list(self, before, limit):
+            return []
+
+    monkeypatch.setattr(app, "timeline_store", EmptyStore())
+    empty = TestClient(app.app).get("/timeline").text
+    assert '"/api/timeline": {"entries": [], "next_cursor": null}' in empty
+    assert "nothing here yet" in empty
+    assert "could not load timeline" not in empty
+
+    monkeypatch.setattr(app, "timeline_store", None)
+    unavailable = TestClient(app.app).get("/timeline").text
+    assert '"/api/timeline": null' in unavailable
+    assert "could not load timeline" in unavailable
+    assert "nothing here yet" not in unavailable
+
+    class BrokenStore:
+        def list(self, before, limit):
+            raise RuntimeError("database details must not reach the page")
+
+    monkeypatch.setattr(app, "timeline_store", BrokenStore())
+    broken = TestClient(app.app).get("/timeline")
+    assert broken.status_code == 200
+    assert "could not load timeline" in broken.text
+    assert "database details" not in broken.text
+
+
+def test_timeline_timestamp_format_is_utc_and_year_aware():
+    assert app.compact_timestamp("2025-03-01T23:30:00-05:00", date(2026, 11, 7)) == "mar 2, 2025"
+    assert app.compact_timestamp("2026-11-07T00:30:00-05:00", date(2026, 11, 7)) == "nov 7"
+    assert app.full_timestamp("2026-11-07T00:30:00-05:00") == "November 7, 2026 at 5:30 AM"
 
 
 def test_image_caption():

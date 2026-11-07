@@ -122,7 +122,22 @@ class TimelineStoreProtocol(Protocol):
 def validate_timeline_body(body: str) -> None:
     if "\x00" in body or not body.strip() or len(body) > 10_000:
         raise ValueError("invalid body")
+    try:
+        body.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ValueError("invalid body") from exc
     render_timeline(body)
+
+
+def validate_timeline_create(body: str, alts: Sequence[str]) -> None:
+    validate_timeline_body(body)
+    if any("\x00" in alt or len(alt) > MAX_ALT_CHARS for alt in alts):
+        raise InvalidAttachment
+    try:
+        for alt in alts:
+            alt.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise InvalidAttachment from exc
 
 
 def render_timeline(body: str) -> str:
@@ -173,8 +188,7 @@ class TimelineStore:
         ids = [asset_id for asset_id, _alt in attachments]
         if len(ids) > MAX_ATTACHMENTS or len(set(ids)) != len(ids):
             raise InvalidAttachment
-        if any("\x00" in alt or len(alt) > MAX_ALT_CHARS for _id, alt in attachments):
-            raise InvalidAttachment
+        validate_timeline_create(body_markdown, [alt for _id, alt in attachments])
         try:
             with self.engine.begin() as connection:
                 if ids:

@@ -78,6 +78,7 @@ from timeline import (
     TimelineStoreProtocol,
     serialize_entry,
     validate_timeline_body,
+    validate_timeline_create,
 )
 
 logger = logging.getLogger(__name__)
@@ -410,8 +411,8 @@ async def _bounded_json(
         raise HTTPException(415, "application/json required")
     body = await _bounded_body(request, limit)
     try:
-        return model.model_validate_json(body)
-    except ValidationError as exc:
+        return model.model_validate(json.loads(body))
+    except (ValidationError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise HTTPException(invalid_status, invalid_detail) from exc
 
 
@@ -588,18 +589,24 @@ async def _timeline_create_body(request: Request) -> TimelineCreate:
     return await _bounded_json(request, TimelineCreate, limit=MAX_TIMELINE_JSON_BYTES)
 
 
+async def _timeline_mutation_body(request: Request) -> TimelineMutation:
+    return await _bounded_json(request, TimelineMutation)
+
+
 @app.post("/api/admin/timeline", status_code=201)
 def create_admin_timeline(
     request: Request,
     access: Access = Depends(require_timeline_create),
     payload: TimelineCreate = Depends(_timeline_create_body),  # after access: no body is read before auth
 ):
+    attachments = [(attachment.id, attachment.alt) for attachment in payload.attachments]
     try:
-        validate_timeline_body(payload.body_markdown)
+        validate_timeline_create(payload.body_markdown, [alt for _id, alt in attachments])
+    except InvalidAttachment as exc:
+        raise HTTPException(422, "invalid attachment") from exc
     except ValueError as exc:
         raise HTTPException(422, "invalid timeline entry") from exc
     _permit_machine(request, access, "timeline_create", 30)
-    attachments = [(attachment.id, attachment.alt) for attachment in payload.attachments]
     try:
         return _admin_entry(_timeline_storage().create(payload.body_markdown, attachments))
     except InvalidAttachment as exc:
@@ -669,7 +676,7 @@ def get_admin_timeline(
 @app.patch("/api/admin/timeline/{entry_id}")
 def update_admin_timeline(
     entry_id: int,
-    payload: TimelineMutation,
+    payload: TimelineMutation = Depends(_timeline_mutation_body),
     _access: Access = Depends(require_browser_mutation),
 ):
     if entry_id <= 0:

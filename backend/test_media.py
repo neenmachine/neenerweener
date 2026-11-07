@@ -636,6 +636,27 @@ def test_nul_in_attachment_alt_is_rejected(author):
     assert (response.status_code, response.json()) == (422, {"detail": "invalid attachment"})
 
 
+def test_lone_surrogate_is_rejected_at_the_request_boundary(author):
+    client, store = author
+    asset_id = attachable(store)
+    headers = {"Content-Type": "application/json"}
+    body = client.post("/api/admin/timeline", headers=headers, content=b'{"body_markdown":"bad\\ud800"}')
+    alt = client.post(
+        "/api/admin/timeline",
+        headers=headers,
+        content=(f'{{"body_markdown":"valid","attachments":[{{"id":"{asset_id}","alt":"bad\\ud800"}}]}}').encode(),
+    )
+    created = create(client, [])
+    edited = client.patch(
+        f"/api/admin/timeline/{created.json()['id']}",
+        headers=headers,
+        content=b'{"body_markdown":"bad\\ud800"}',
+    )
+    assert (body.status_code, body.json()) == (422, {"detail": "invalid timeline entry"})
+    assert (alt.status_code, alt.json()) == (422, {"detail": "invalid attachment"})
+    assert (edited.status_code, edited.json()) == (422, {"detail": "invalid timeline entry"})
+
+
 def test_nul_in_timeline_body_is_rejected_on_create_and_edit(author):
     client, _store = author
     created = create(client, [], body="bad\x00body")

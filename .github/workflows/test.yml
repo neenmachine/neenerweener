@@ -44,6 +44,14 @@ jobs:
         working-directory: frontend
       - run: uv run --directory backend alembic upgrade head
       - run: make test
+      - run: docker build --tag neenerweener:test .
+      - name: Verify production image SSHSIG support
+        run: |
+          docker run --rm neenerweener:test sh -ec '
+            path=$(command -v ssh-keygen)
+            test -x "$path"
+            ssh-keygen -Y help 2>&1 | grep -F "ssh-keygen -Y verify"
+          '
 
   macos:
     if: >-

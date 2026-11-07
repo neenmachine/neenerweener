@@ -78,6 +78,7 @@ test.each([
   ["/code/nope", { "not-found": "project not found" }],
   ["/code/demo/nope.py", { "not-found": "file not found" }],
   ["/admin", { "/api/posts": [] }],
+  ["/admin/settings", { "not-found": "not found" }],
 ])("%s renders one level-1 heading", async (path, preload) => {
   history.replaceState(null, "", path);
   document.body.innerHTML = `<script id="preload" type="application/json">${JSON.stringify(preload)}</script><div id="root"></div>`;

@@ -514,25 +514,35 @@ article h3 {
   font-size: 1.85rem;
   letter-spacing: -0.01em;
   margin: 0 0 0.35rem;
+  line-height: 1.25;
+  text-wrap: balance;
 }
 
 .readme-body .readme-h2 {
   font-size: 1.35rem;
   margin: 2.5rem 0 0.75rem;
+  line-height: 1.25;
+  text-wrap: balance;
 }
 
 .readme-body .readme-h3 {
   font-size: 1.1rem;
   margin: 2rem 0 0.5rem;
+  line-height: 1.25;
+  text-wrap: balance;
 }
 
 .readme-body .readme-h4 {
   font-size: 1rem;
+  font-weight: bold;
+  line-height: 1.6;
   margin: 1.33em 0;
 }
 
 .readme-body .readme-h5 {
   font-size: 0.83rem;
+  font-weight: bold;
+  line-height: 1.6;
   margin: 1.67em 0;
 }
 

@@ -48,7 +48,7 @@ def test_admin_spa_is_noindex_and_public_pages_do_not_link_to_it(tmp_path, monke
     monkeypatch.setattr(app, "FRONTEND_DIST", dist)
 
     with TestClient(app.app) as client:
-        for path in ("/admin", "/admin/", "/admin/anything"):
+        for path in ("/admin", "/admin/"):
             admin = client.get(path)
             assert admin.status_code == 200
             assert admin.headers["X-Robots-Tag"] == "noindex"
@@ -56,6 +56,13 @@ def test_admin_spa_is_noindex_and_public_pages_do_not_link_to_it(tmp_path, monke
             head = client.head(path)
             assert head.status_code == 200
             assert head.headers["X-Robots-Tag"] == "noindex"
+        for path in ("/admin/settings", "/admin/a/b"):
+            missing = client.get(path)
+            assert missing.status_code == 404
+            assert missing.headers["X-Robots-Tag"] == "noindex"
+            assert h1s(missing.text) == ["not found"]
+            assert client.head(path).status_code == 404
+            assert client.head(path).headers["X-Robots-Tag"] == "noindex"
         missing = client.get("/missing")
         assert missing.status_code == 404
         assert missing.headers["X-Content-Type-Options"] == "nosniff"
@@ -337,12 +344,15 @@ def test_code_raw_head(code_dir):
 
 def test_readme_headings_are_demoted_for_markdown_and_raw_html(code_dir):
     readme = code_dir / "demo" / "README.md"
-    readme.write_text('# markdown\n\n<h1>raw</h1><h3 class="custom">three</h3>')
+    readme.write_text('# one\n\n## two\n\n### three\n\n#### four\n\n##### five\n\n###### six\n\n```html\n# x\n<h1>literal</h1>\n```\n\n<h1 title="a > b">raw</h1><pre><code><h1>literal</h1></code></pre><script>"<h1>literal</h1>"</script><h10>ten</h10>\n')
     html = TestClient(app.app).get("/api/code/demo").json()["readme_html"]
-    assert "<h1" not in html
-    assert '<h2 class="readme-h1">markdown</h2>' in html
-    assert '<h2 class="readme-h1">raw</h2>' in html
-    assert '<h4 class="custom readme-h3">three</h4>' in html
+    for source, target in ((1, 2), (2, 3), (3, 4), (4, 5), (5, 6), (6, 6)):
+        assert f'<h{target} class="readme-h{source}">' in html
+    assert "# x" in html and "<h1>literal</h1>" in html
+    assert '<h1 title="a > b">raw</h1>' in html
+    assert '<pre><code><h1>literal</h1></code></pre>' in html
+    assert '<script>"<h1>literal</h1>"</script>' in html
+    assert '<h10>ten</h10>' in html
 
 
 def test_readme_parent_links_blocked(code_dir):
@@ -705,6 +715,7 @@ def test_home_ssr_has_one_h1(tmp_path, monkeypatch):
         ("/code/demo", 0),
         ("/code/demo/hello.py", 0),
         ("/admin", 0),
+        ("/admin/settings", 1),
     ],
 )
 def test_ssr_route_heading_table(tmp_path, monkeypatch, url, expected_h1s):

@@ -798,11 +798,23 @@ def rewrite_readme_link(project: str, url: str, prefix: str) -> str | None:
     return f"{prefix}/{project}/{target}"
 
 
+def _demote_readme_heading_tokens(tokens):
+    for token in tokens:
+        if token.type not in {"heading_open", "heading_close"}:
+            continue
+        source = token.tag[1]
+        token.tag = f"h{min(int(source) + 1, 6)}"
+        if token.type == "heading_open":
+            token.attrSet("class", f"readme-h{source}")
+
+
 def readme_html(project: str, root: Path) -> str | None:
     readme = contained_file(root, "README.md")
     if not readme:
         return None
     tokens = md.parse(readme.read_text(encoding="utf-8-sig"))
+    # The project name in the page crumbs is the page's one h1, so README headings sit one level below it.
+    _demote_readme_heading_tokens(tokens)
     # Relative README links point into the snapshot: images load raw bytes, links open the code view.
     for token in tokens:
         for child in token.children or []:
@@ -860,7 +872,7 @@ def frontend(path: str, request: Request):
     if path == "api" or path.startswith("api/"):
         raise HTTPException(404, "not found")
     kind = page_kind(path)
-    headers = {"X-Robots-Tag": "noindex"} if kind and kind[0] == "admin" else None
+    headers = {"X-Robots-Tag": "noindex"} if path.strip("/") == "admin" or path.strip("/").startswith("admin/") else None
     root = FRONTEND_DIST.resolve()
     if not root.is_dir():
         raise HTTPException(404, "not found")
@@ -903,7 +915,7 @@ def page_data(kind: tuple[str, ...] | None, before: int | None = None) -> tuple[
     if kind is None:
         return None
     if kind[0] == "home":
-        return {"/api/posts": list_posts()}, {"title": "neenerweener"}, "", 200
+        return {"/api/posts": list_posts()}, {"title": "neenerweener"}, '<main><h1 class="sr-only">neenerweener</h1></main>', 200
     if kind[0] == "timeline":
         page, markup, status_code = timeline_page(before)
         return {"/api/timeline": page}, {"title": "timeline", "description": "timeline"}, markup, status_code
@@ -1013,8 +1025,8 @@ def post_markup(post: dict) -> str:
     # Mirrors PostPage in App.tsx so the swap to the React page is not visible.
     tags = "".join(f'<a href="/?tag={quote(t)}">#{escape(t)}</a>' for t in post["tags"])
     return (
-        '<main><article><h1 class="has-back"><a class="back" href="/" aria-label="back">←</a>'
-        f'{escape(post["title"])}</h1><div class="meta"><span class="tags">{tags}</span></div>'
+        '<main><article><div class="has-back post-head"><a class="back" href="/" aria-label="back">←</a>'
+        f'<h1>{escape(post["title"])}</h1></div><div class="meta"><span class="tags">{tags}</span></div>'
         f'<div>{post["html"]}</div></article><footer><a href="/">neenerweener</a><a href="/timeline">timeline</a></footer></main>'
     )
 

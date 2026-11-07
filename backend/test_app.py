@@ -48,7 +48,7 @@ def test_admin_spa_is_noindex_and_public_pages_do_not_link_to_it(tmp_path, monke
     monkeypatch.setattr(app, "FRONTEND_DIST", dist)
 
     with TestClient(app.app) as client:
-        for path in ("/admin", "/admin/", "/admin/anything"):
+        for path in ("/admin", "/admin/"):
             admin = client.get(path)
             assert admin.status_code == 200
             assert admin.headers["X-Robots-Tag"] == "noindex"
@@ -56,6 +56,13 @@ def test_admin_spa_is_noindex_and_public_pages_do_not_link_to_it(tmp_path, monke
             head = client.head(path)
             assert head.status_code == 200
             assert head.headers["X-Robots-Tag"] == "noindex"
+        for path in ("/admin/settings", "/admin/a/b"):
+            missing = client.get(path)
+            assert missing.status_code == 404
+            assert missing.headers["X-Robots-Tag"] == "noindex"
+            assert h1s(missing.text) == ["not found"]
+            assert client.head(path).status_code == 404
+            assert client.head(path).headers["X-Robots-Tag"] == "noindex"
         missing = client.get("/missing")
         assert missing.status_code == 404
         assert missing.headers["X-Content-Type-Options"] == "nosniff"
@@ -304,7 +311,8 @@ def test_code_api(code_dir):
     assert project["name"] == "demo"
     assert project["files"] == ["README.md", "data.bin", "labels.idx", "main.py", "notes.md", "src/plot.png"]
     readme = project["readme_html"]
-    assert "<h1>demo</h1>" in readme
+    assert '<h2 class="readme-h1">demo</h2>' in readme  # the page crumbs are the one h1
+    assert "<h1" not in readme
     assert '<img src="/code-raw/demo/src/plot.png" alt="plot"' in readme
     assert 'href="/code/demo/main.py"' in readme
     assert 'href="https://example.com"' in readme and 'href="/x"' in readme
@@ -332,6 +340,35 @@ def test_code_raw_head(code_dir):
         assert head.status_code == 200
         assert head.headers["content-type"] == get.headers["content-type"]
         assert head.headers["content-security-policy"] == "sandbox"
+
+
+def test_readme_markdown_headings_are_demoted_with_source_classes(code_dir):
+    readme = code_dir / "demo" / "README.md"
+    readme.write_text("# one\n\n## two\n\n### three\n\n#### four\n\n##### five\n\n###### six\n")
+    html = TestClient(app.app).get("/api/code/demo").json()["readme_html"]
+    assert html == (
+        '<h2 class="readme-h1">one</h2>\n<h3 class="readme-h2">two</h3>\n<h4 class="readme-h3">three</h4>\n'
+        '<h5 class="readme-h4">four</h5>\n<h6 class="readme-h5">five</h6>\n<h6 class="readme-h6">six</h6>\n'
+    )
+
+
+@pytest.mark.parametrize(
+    "source, expected",
+    [
+        # shortcut: raw HTML headings are trusted README content and keep their level; demoting them needs an HTML parser.
+        (
+            '<h1 title="a > b">raw</h1><pre><code><h1>literal</h1></code></pre><script>"<h1>literal</h1>"</script><div><h10>ten</h10></div>\n',
+            '<h1 title="a > b">raw</h1><pre><code><h1>literal</h1></code></pre><script>"<h1>literal</h1>"</script><div><h10>ten</h10></div>\n',
+        ),
+        (
+            "```\n# x\n<h1>literal</h1>\n```\n",
+            "<pre><code># x\n&lt;h1&gt;literal&lt;/h1&gt;\n</code></pre>\n",
+        ),
+    ],
+)
+def test_readme_raw_html_and_code_keep_their_headings(code_dir, source, expected):
+    (code_dir / "demo" / "README.md").write_text(source)
+    assert TestClient(app.app).get("/api/code/demo").json()["readme_html"] == expected
 
 
 def test_readme_parent_links_blocked(code_dir):
@@ -494,7 +531,7 @@ def test_server_rendered_pages(tmp_path, monkeypatch):
     assert "<title>Hi &amp; &lt;bye&gt;</title>" in page
     assert page.count("<title>") == 1
     assert '<meta property="og:description" content="First para here." />' in page
-    assert '<div id="root"><main><article><h1 class="has-back">' in page
+    assert '<div id="root"><main><article><div class="has-back post-head">' in page
     assert '<footer><a href="/">neenerweener</a><a href="/timeline">timeline</a></footer>' in page
     assert '<a href="/?tag=a">#a</a>' in page
     preload = page.split('<script id="preload" type="application/json">')[1].split("</script>")[0]
@@ -522,7 +559,7 @@ def test_server_rendered_pages(tmp_path, monkeypatch):
     assert missing.status_code == 404
     assert '{"not-found": "post not found"}' in missing.text and '<meta name="robots" content="noindex">' in missing.text
     home = c.get("/?tag=a").text
-    assert '"/api/posts": [' in home and '<div id="root"></div>' in home
+    assert '"/api/posts": [' in home and '<div id="root"><main><h1 class="sr-only">neenerweener</h1></main></div>' in home
 
 
 @pytest.mark.parametrize(
@@ -564,6 +601,7 @@ def test_timeline_ssr_and_preload_share_one_initial_page(tmp_path, monkeypatch, 
         assert 'id="preload"' not in response.text
         return
     html = response.text
+    assert len(h1s(html)) == 1
     preload = html.split('<script id="preload" type="application/json">')[1].split("</script>")[0]
     data = __import__("json").loads(preload)
     assert set(data) == {"/api/timeline"}
@@ -642,3 +680,78 @@ def test_image_caption():
     html = app.render_post('![a plot](/images/p.png "the caption")\n\n![no title](/images/q.png)')
     assert '<figure><img src="/images/p.png" alt="a plot" title="the caption" /><figcaption>the caption</figcaption></figure>' in html
     assert '<p><img src="/images/q.png" alt="no title" /></p>' in html
+
+
+def h1s(page: str) -> list[str]:
+    import re
+    return re.findall(r"<h1[^>]*>(.*?)</h1>", page.split('<div id="root">')[1], re.S)
+
+
+def test_post_ssr_h1_contains_only_title(tmp_path, monkeypatch):
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text(INDEX)
+    posts = tmp_path / "posts"
+    posts.mkdir()
+    (posts / "hello.md").write_text("---\ntitle: Hi & <bye>\ndate: 2026-01-01\n---\nbody")
+    monkeypatch.setattr(app, "FRONTEND_DIST", dist)
+    monkeypatch.setattr(app, "POSTS_DIR", posts)
+    page = TestClient(app.app).get("/posts/hello").text
+    assert h1s(page) == ["Hi &amp; &lt;bye&gt;"]
+    # The back link stays first in the article, just outside the heading.
+    assert '<article><div class="has-back post-head"><a class="back" href="/" aria-label="back">←</a><h1>' in page
+
+
+def test_home_ssr_has_one_h1(tmp_path, monkeypatch):
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text(INDEX)
+    posts = tmp_path / "posts"
+    posts.mkdir()
+    monkeypatch.setattr(app, "FRONTEND_DIST", dist)
+    monkeypatch.setattr(app, "POSTS_DIR", posts)
+    c = TestClient(app.app)
+    for url in ("/", "/?tag=a"):
+        page = c.get(url).text
+        assert h1s(page) == ["neenerweener"]
+        assert '<h1 class="sr-only">neenerweener</h1>' in page
+
+
+@pytest.mark.parametrize(
+    ("url", "expected_h1s"),
+    [
+        ("/", 1),
+        ("/?tag=a", 1),
+        ("/posts/hello", 1),
+        ("/timeline", 1),
+        ("/nope", 1),
+        ("/posts/missing", 1),
+        ("/code/missing", 1),
+        ("/code/demo/missing.py", 1),
+        ("/code/demo", 0),
+        ("/code/demo/hello.py", 0),
+        ("/admin", 0),
+        ("/admin/settings", 1),
+    ],
+)
+def test_ssr_route_heading_table(tmp_path, monkeypatch, url, expected_h1s):
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text(INDEX)
+    posts = tmp_path / "posts"
+    posts.mkdir()
+    (posts / "hello.md").write_text("---\ntitle: Hi\ndate: 2026-01-01\ntags: [a]\n---\nbody")
+    code = tmp_path / "code" / "demo"
+    code.mkdir(parents=True)
+    (code / "hello.py").write_text("print('hello')")
+    monkeypatch.setattr(app, "FRONTEND_DIST", dist)
+    monkeypatch.setattr(app, "POSTS_DIR", posts)
+    monkeypatch.setattr(app, "CODE_DIR", tmp_path / "code")
+
+    class Store:
+        def list(self, before, limit):
+            return []
+
+    monkeypatch.setattr(app, "timeline_store", Store())
+    page = TestClient(app.app).get(url).text
+    assert len(h1s(page)) == expected_h1s

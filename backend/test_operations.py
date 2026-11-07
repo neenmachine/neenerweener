@@ -153,14 +153,21 @@ def test_exception_log_has_safe_structured_stack(caplog):
     assert event["request_id"] == "safe-request-id"
 
 
-def test_security_headers(monkeypatch):
-    monkeypatch.setenv("ENVIRONMENT", "production")
-    response = client.get("/healthz", headers={"X-Forwarded-Proto": "https"})
+def test_security_headers():
+    response = client.get("/healthz")
     assert response.headers["X-Content-Type-Options"] == "nosniff"
     assert response.headers["Referrer-Policy"] == "strict-origin-when-cross-origin"
     assert response.headers["Permissions-Policy"] == "camera=(), geolocation=(), microphone=(), payment=(), usb=()"
+    assert response.headers["X-Frame-Options"] == "DENY"
     assert response.headers["Strict-Transport-Security"] == "max-age=31536000; includeSubDomains"
     assert "unsafe-inline" not in response.headers["Content-Security-Policy-Report-Only"]
+
+
+def test_security_headers_cover_page_and_error_responses():
+    for path in ("/", "/definitely-not-found"):
+        response = client.get(path)
+        assert response.headers["X-Frame-Options"] == "DENY"
+        assert response.headers["Strict-Transport-Security"] == "max-age=31536000; includeSubDomains"
 
 
 def test_csp_blocks_inline_script_without_breaking_preload(monkeypatch, tmp_path):

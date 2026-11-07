@@ -1,4 +1,6 @@
 import pytest
+from fastapi.testclient import TestClient
+
 import app
 from cache import cache_control
 from test_auth import admin_password, authenticated_client, configured_app, make_client

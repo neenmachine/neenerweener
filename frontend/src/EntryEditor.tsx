@@ -1,7 +1,6 @@
 import { type ReactNode, type Ref, type RefObject, useEffect, useRef, useState } from "react";
 import { compact, EntryMedia, full } from "./App";
 import { type AdminEntry, type Result, hasText, LIMIT, length } from "./adminApi";
-import { Attachments, useAttachments } from "./attachments";
 import type { Entry } from "./timelineTypes";
 
 // The admin-only entry controls shared by /admin and /timeline: edit in place and inline delete confirm.
@@ -64,7 +63,6 @@ export function Editor({
   onSubmit,
   onCancel,
   cancelName,
-  escapeOff = false,
   attachments,
   children,
 }: {
@@ -78,7 +76,6 @@ export function Editor({
   onSubmit: () => void;
   onCancel?: () => void;
   cancelName?: string;
-  escapeOff?: boolean;
   attachments?: ReactNode;
   children: ReactNode;
 }) {
@@ -91,7 +88,7 @@ export function Editor({
         e.preventDefault();
         submit();
       }}
-      onKeyDown={(e) => e.key === "Escape" && onCancel && !busy && !escapeOff && onCancel()}
+      onKeyDown={(e) => e.key === "Escape" && onCancel && !busy && onCancel()}
     >
       <textarea
         ref={textarea}
@@ -134,17 +131,14 @@ export function EntryRow({
   send,
   onSaved,
   onGone,
-  expire,
 }: {
   entry: Entry;
   send: Send;
   onSaved: (entry: Entry) => void;
   onGone: (id: number, message: string) => void;
-  expire: () => void;
 }) {
   const [mode, setMode] = useState<"view" | "opening" | "edit" | "confirm" | "deleting">("view");
-  // The private entry from GET, the start of the edit form.
-  const [opened, setOpened] = useState<AdminEntry | null>(null);
+  const [text, setText] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const inFlight = useRef(false);
@@ -177,16 +171,16 @@ export function EntryRow({
     run(
       () => send<AdminEntry>("GET", `/api/admin/timeline/${entry.id}`),
       (data) => {
-        setOpened(data);
+        setText(data.body_markdown);
         setMode("edit");
       },
     ).then((r) => r === false && setMode("view"));
   };
 
-  const save = (edit: object) => {
+  const save = () => {
     setSaving(true);
     run(
-      () => send<AdminEntry>("PATCH", `/api/admin/timeline/${entry.id}`, edit),
+      () => send<AdminEntry>("PATCH", `/api/admin/timeline/${entry.id}`, { body_markdown: text }),
       (data) => {
         onSaved(data);
         refocus.current = editButton;
@@ -211,22 +205,32 @@ export function EntryRow({
 
   return (
     <article className="timeline-entry" id={`entry-${entry.id}`}>
-      {mode === "edit" && opened ? (
-        <EditForm
-          entry={opened}
-          expire={expire}
-          saving={saving}
+      {mode === "edit" ? (
+        <Editor
+          id={`edit-${entry.id}`}
+          name={`edit entry ${entry.id}`}
+          text={text}
+          setText={setText}
+          busy={saving}
           error={error}
-          onSave={save}
+          onSubmit={save}
           onCancel={cancel(editButton)}
-        />
+          cancelName={`cancel edit entry ${entry.id}`}
+        >
+          <Button
+            type="submit"
+            busy={saving}
+            off={!hasText(text)}
+            label="save"
+            busyLabel="saving"
+            name={`save entry ${entry.id}`}
+          />
+        </Editor>
       ) : (
         // Rendered server side from Henry's entry, with raw HTML disabled.
-        <>
-          <div dangerouslySetInnerHTML={{ __html: entry.html }} />
-          <EntryMedia media={entry.media} />
-        </>
+        <div dangerouslySetInnerHTML={{ __html: entry.html }} />
       )}
+      <EntryMedia media={entry.media} />
       <footer>
         <a href={`/timeline#entry-${entry.id}`} aria-label={full(entry.created_at)}>
           <time dateTime={new Date(entry.created_at).toISOString()} title={full(entry.created_at)}>
@@ -287,50 +291,5 @@ export function EntryRow({
         {mode !== "edit" && error}
       </p>
     </article>
-  );
-}
-
-// The open edit: text plus the full image list (kept, removed, added), sent as one PATCH replacement.
-function EditForm({
-  entry,
-  expire,
-  saving,
-  error,
-  onSave,
-  onCancel,
-}: {
-  entry: AdminEntry;
-  expire: () => void;
-  saving: boolean;
-  error: string;
-  onSave: (edit: object) => void;
-  onCancel: () => void;
-}) {
-  const [text, setText] = useState(entry.body_markdown);
-  const images = useAttachments(expire, entry.media);
-  const id = `edit-${entry.id}`;
-  return (
-    <Editor
-      id={id}
-      name={`edit entry ${entry.id}`}
-      text={text}
-      setText={setText}
-      busy={saving}
-      error={error}
-      onSubmit={() => images.uploading || onSave({ body_markdown: text, attachments: images.payload() })}
-      onCancel={onCancel}
-      cancelName={`cancel edit entry ${entry.id}`}
-      escapeOff={images.uploading}
-      attachments={<Attachments state={images} busy={saving} id={id} />}
-    >
-      <Button
-        type="submit"
-        busy={saving}
-        off={!hasText(text) || images.uploading}
-        label="save"
-        busyLabel="saving"
-        name={`save entry ${entry.id}`}
-      />
-    </Editor>
   );
 }

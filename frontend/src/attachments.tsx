@@ -1,20 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import { type Attachment, uploadMedia } from "./adminApi";
-import type { Media } from "./timelineTypes";
 
-// Images attached to a timeline entry: upload on pick, a local preview, alt text, and the create or edit payload.
-// An edit starts from the entry's media, shown from the server; only new picks get blob previews.
+// Images attached to a new timeline entry: upload on pick, a local preview, alt text, and the create payload.
 // Admin only (lazy chunks). The server decides type and size; the client checks only the count.
 
 export const MAX_IMAGES = 4;
 type Item = { key: number; url: string; id: string | null; alt: string };
 
-export function useAttachments(onExpired: () => void, initial: Media[] = []) {
-  const [items, setItems] = useState<Item[]>(() =>
-    initial.map((m, key) => ({ key, url: `/media/${m.id}/sm.webp`, id: m.id, alt: m.alt })),
-  );
+export function useAttachments(onExpired: () => void) {
+  const [items, setItems] = useState<Item[]>([]);
   const [error, setError] = useState("");
-  const nextKey = useRef(initial.length);
+  const nextKey = useRef(0);
   // The live preview URL of each row, revoked once here, never inside a state updater (StrictMode runs those twice).
   const urls = useRef(new Map<number, string>());
   const revoke = (keys: Iterable<number>) => {

@@ -57,6 +57,13 @@ def test_known_routes_stay_200(client):
     assert client.get("/now", follow_redirects=False).status_code == 301
 
 
+def test_admin_routes_are_known_pages():
+    from routes import page_kind
+
+    for path in ("admin", "admin/", "admin/settings", "/admin/anything/deeper"):
+        assert page_kind(path) == ("admin",)
+
+
 def test_api_404_stays_json(client):
     response = client.get("/api/no-such-route")
     assert response.status_code == 404

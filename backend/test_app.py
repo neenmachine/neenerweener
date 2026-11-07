@@ -35,10 +35,14 @@ def test_admin_spa_is_noindex_and_public_pages_do_not_link_to_it(tmp_path, monke
     monkeypatch.setattr(app, "FRONTEND_DIST", dist)
 
     with TestClient(app.app) as client:
-        for path in ("/admin", "/admin/settings"):
+        for path in ("/admin", "/admin/", "/admin/anything"):
             admin = client.get(path)
             assert admin.status_code == 200
             assert admin.headers["X-Robots-Tag"] == "noindex"
+            assert '"not-found"' not in admin.text
+            head = client.head(path)
+            assert head.status_code == 200
+            assert head.headers["X-Robots-Tag"] == "noindex"
         missing = client.get("/missing")
         assert missing.status_code == 404
         assert missing.headers["X-Content-Type-Options"] == "nosniff"

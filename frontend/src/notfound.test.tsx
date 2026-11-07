@@ -16,6 +16,17 @@ afterEach(() => {
   vi.resetModules();
 });
 
+test("an admin page without not-found preload does not render not found", async () => {
+  history.replaceState(null, "", "/admin");
+  document.body.innerHTML = `<script id="preload" type="application/json">${JSON.stringify({ "/api/posts": [] })}</script><div id="root"></div>`;
+  const { default: App } = await import("./App");
+  await act(async () => {
+    root = createRoot(document.getElementById("root")!);
+    root.render(<App />);
+  });
+  expect(document.querySelector("main")?.textContent ?? "").not.toContain("not found");
+});
+
 test.each([
   ["/does-not-exist", "not found"],
   ["/posts/nope", "post not found"],

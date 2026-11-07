@@ -646,7 +646,8 @@ app.include_router(discovery_router)
 def frontend(path: str, request: Request):
     if path == "api" or path.startswith("api/"):
         raise HTTPException(404, "not found")
-    headers = {"X-Robots-Tag": "noindex"} if path == "admin" or path.startswith("admin/") else None
+    kind = page_kind(path)
+    headers = {"X-Robots-Tag": "noindex"} if kind and kind[0] == "admin" else None
     root = FRONTEND_DIST.resolve()
     if not root.is_dir():
         raise HTTPException(404, "not found")
@@ -661,12 +662,9 @@ def frontend(path: str, request: Request):
     index = contained_file(root, "index.html")
     if not index:
         raise HTTPException(404, "not found")
-    kind = page_kind(path)
     before_cursor = timeline_before(request) if kind and kind[0] == "timeline" else None
     page = page_data(kind, before_cursor)
-    if page is None and (path == "admin" or path.startswith("admin/")):
-        preload, head, markup, status_code = {}, {"title": "neenerweener"}, "", 200
-    elif page is None:
+    if page is None:
         preload, head, markup, status_code = not_found_page("not found")
     else:
         preload, head, markup, status_code = page
@@ -695,6 +693,8 @@ def page_data(kind: tuple[str, ...] | None, before: int | None = None) -> tuple[
     if kind[0] == "timeline":
         page, markup, status_code = timeline_page(before)
         return {"/api/timeline": page}, {"title": "timeline", "description": "timeline"}, markup, status_code
+    if kind[0] == "admin":
+        return {}, {"title": "neenerweener"}, "", 200
     if kind[0] == "post":
         return post_page_data(kind[1])
     return code_page_data(*kind[1:])

@@ -25,7 +25,8 @@ const preloaded: Record<string, unknown> = JSON.parse(document.getElementById("p
 const notFound = preloaded["not-found"] as string | undefined;
 
 export default function App() {
-  if (notFound || !(code || slug || timeline || home)) return <NotFound label={notFound ?? "not found"} />;
+  // The server decides not-found; the client has no second route list.
+  if (notFound) return <NotFound label={notFound} />;
   // Project pages are wider, like a repo browser, so long code lines fit.
   if (code)
     return (

@@ -16,6 +16,8 @@ def page_kind(path: str) -> tuple[str, ...] | None:
         return ("home",)
     if normalized == "timeline":
         return ("timeline",)
+    if normalized == "admin" or normalized.startswith("admin/"):
+        return ("admin",)
     if match := _POST.fullmatch(normalized):
         return ("post", match[1])
     if match := _CODE.fullmatch(normalized):

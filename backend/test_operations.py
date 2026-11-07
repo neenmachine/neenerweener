@@ -8,6 +8,8 @@ from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+import pytest
+
 import app
 from auth import hash_password
 from fastapi.testclient import TestClient
@@ -366,3 +368,49 @@ def test_csp_blocks_inline_script_without_breaking_preload(monkeypatch, tmp_path
     assert response.headers["Content-Security-Policy-Report-Only"].startswith("default-src 'self'")
     assert '<script id="preload" type="application/json">' in response.text
     assert "script-src 'self'" in response.headers["Content-Security-Policy-Report-Only"]
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        None,
+        "Zq9shortRLK",
+        "deadbeefZq9" + "0" * 53,  # `openssl rand -hex 32` shape: 64 hex-like characters
+        "\u00f1" * 14 + "Zq9w",  # non-ASCII, 32 UTF-8 bytes
+    ],
+    ids=["missing", "too-short", "64-hex", "non-ascii"],
+)
+def test_bad_rate_limit_key_names_format_at_startup_without_leaking_value(monkeypatch, caplog, key):
+    class Available:
+        def schema_revisions(self):
+            return app.EXPECTED_SCHEMA_REVISIONS
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(app, "timeline_store", Available())
+    monkeypatch.setenv("ADMIN_ORIGIN", "http://127.0.0.1")
+    monkeypatch.setenv("ADMIN_PASSWORD_HASH", hash_password("test-password"))
+    if key is None:
+        monkeypatch.delenv("RATE_LIMIT_KEY", raising=False)
+    else:
+        monkeypatch.setenv("RATE_LIMIT_KEY", key)
+    caplog.clear()
+    with TestClient(app.app, base_url="http://127.0.0.1") as started:
+        readiness = started.get("/readyz")
+        login = started.post(
+            "/api/admin/login", headers={"Origin": "http://127.0.0.1"}, json={"password": "test-password"}
+        )
+
+    warnings = [record.getMessage() for record in caplog.records if "RATE_LIMIT_KEY" in record.getMessage()]
+    assert warnings, "startup must name RATE_LIMIT_KEY in an operator log line"
+    assert all("exactly 32 ASCII characters" in m and "openssl rand -hex 16" in m for m in warnings)
+    assert readiness.status_code == 503
+    assert readiness.json() == {"status": "not_ready", "reason": "invalid authentication configuration"}
+    assert login.status_code == 401
+    assert login.json() == {"detail": "invalid credentials"}
+    assert "RATE_LIMIT_KEY" not in readiness.text + login.text
+    if key is not None:
+        # "Zq9" is in every fake value, so any fragment of the value in output fails here.
+        for leaked in (key, "Zq9"):
+            assert leaked not in caplog.text + readiness.text + login.text

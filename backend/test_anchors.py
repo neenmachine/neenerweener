@@ -18,6 +18,26 @@ def test_post_heading_ids_and_anchor_links():
     assert '<h1 id=' not in html
 
 
+def test_heading_ids_are_unique_and_avoid_shell_ids():
+    html = app.render_post(
+        "## Foo\n\n## Foo\n\n## Foo-1\n\n## Root\n\n## preload"
+    )
+
+    assert '<h2 id="foo"><a' in html
+    assert '<h2 id="foo-1"><a' in html
+    assert '<h2 id="foo-1-1"><a' in html
+    assert '<h2 id="root-1"><a' in html
+    assert '<h2 id="preload-1"><a' in html
+    assert html.count('<h2 id="foo-1">') == 1
+
+
+def test_raw_html_heading_is_untouched():
+    html = app.render_post("<h2>Raw</h2>")
+
+    assert "<h2>Raw</h2>" in html
+    assert '<h2 id="raw">' not in html
+
+
 def test_post_request_renders_stable_heading_ids(tmp_path, monkeypatch):
     (tmp_path / "anchors.md").write_text(
         "---\ntitle: Anchors\ndate: 2026-01-01\n---\n\n## A section\n"

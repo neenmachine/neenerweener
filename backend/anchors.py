@@ -6,6 +6,9 @@ import unicodedata
 from markdown_it.token import Token
 
 
+_RESERVED_IDS = frozenset({"root", "preload"})
+
+
 def _plain_text(token: Token) -> str:
     if token.type == "text" or token.type == "code_inline":
         return token.content
@@ -28,16 +31,18 @@ def _slug(text: str) -> str:
 def add_heading_anchors(state) -> None:
     if not state.env.get("heading_anchors"):
         return
-    used: dict[str, int] = {}
+    used = set(_RESERVED_IDS)
     for index, token in enumerate(state.tokens):
         if token.type != "heading_open" or token.tag == "h1":
             continue
         inline = state.tokens[index + 1]
-        slug = _slug(_plain_text(inline))
-        count = used.get(slug, 0)
-        used[slug] = count + 1
-        if count:
-            slug = f"{slug}-{count}"
+        base = _slug(_plain_text(inline))
+        slug = base
+        suffix = 1
+        while slug in used:
+            slug = f"{base}-{suffix}"
+            suffix += 1
+        used.add(slug)
         token.attrSet("id", slug)
         anchor_open = Token("link_open", "a", 1)
         anchor_open.attrs = {"class": "anchor", "href": f"#{slug}", "aria-label": "link to section"}

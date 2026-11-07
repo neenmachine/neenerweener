@@ -29,6 +29,7 @@ CODE_DIR = Path(os.environ.get("CODE_DIR", Path(__file__).parent.parent / "code"
 FRONTEND_DIST = Path(os.environ.get("FRONTEND_DIST", Path(__file__).parent.parent / "frontend" / "dist"))
 FILENAME = re.compile(r"^([a-z0-9-]+)\.md$")
 PROJECT = re.compile(r"[a-z0-9-]+")
+from anchors import add_heading_anchors
 from operations import configure_logging
 
 logger = logging.getLogger(__name__)
@@ -55,6 +56,7 @@ def highlight(code: str, lang: str, _attrs) -> str:
 # CommonMark + GitHub tables and strikethrough. Raw HTML is on: posts are Henry's own trusted files.
 md = MarkdownIt("commonmark", {"highlight": highlight}).enable(["table", "strikethrough"])
 dollarmath_plugin(md, allow_digits=False)
+md.core.ruler.after("inline", "heading_anchors", add_heading_anchors)
 
 app = FastAPI()
 configure_logging()
@@ -212,7 +214,8 @@ CAPTIONED = re.compile(r'<p>(<img [^>]*?title="([^"]*)"[^>]*>)</p>')
 
 
 def render_post(body: str) -> str:
-    return CAPTIONED.sub(r"<figure>\1<figcaption>\2</figcaption></figure>", md.render(body))
+    html = md.render(body, {"heading_anchors": True})
+    return CAPTIONED.sub(r"<figure>\1<figcaption>\2</figcaption></figure>", html)
 
 
 @app.get("/api/posts")

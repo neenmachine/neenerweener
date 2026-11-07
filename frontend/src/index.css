@@ -662,6 +662,30 @@ main.wide {
   background: color-mix(in srgb, #e8b500 16%, var(--bg));
 }
 
+/* Post headings expose small, keyboard-accessible links to their section. */
+article :is(h2, h3, h4, h5, h6) {
+  scroll-margin-top: 1.5rem;
+}
+
+article :is(h2, h3, h4, h5, h6) .anchor {
+  margin-left: -1.25em;
+  padding-right: 0.35em;
+  color: var(--faint);
+  text-decoration: none;
+  opacity: 0;
+}
+
+article :is(h2, h3, h4, h5, h6):hover .anchor,
+article :is(h2, h3, h4, h5, h6) .anchor:focus-visible {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  article :is(h2, h3, h4, h5, h6) .anchor {
+    opacity: 1;
+  }
+}
+
 @media (max-width: 480px) {
   .box-head {
     padding: 0.5rem 0.75rem;

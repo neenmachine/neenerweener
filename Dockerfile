@@ -7,6 +7,9 @@ COPY frontend/ ./
 RUN pnpm build
 
 FROM python:3.13.9-slim
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends openssh-client \
+    && rm -rf /var/lib/apt/lists/*
 COPY --from=ghcr.io/astral-sh/uv:0.12.17 /uv /uvx /usr/local/bin/
 WORKDIR /app
 COPY backend/ /app/backend/

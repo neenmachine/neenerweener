@@ -9,6 +9,7 @@ import getpass
 import hashlib
 import hmac
 import ipaddress
+import json
 import math
 import os
 import secrets
@@ -425,9 +426,18 @@ def _hash_password_command() -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["hash-password"])
+    parser.add_argument("command", choices=["hash-password", "validate-ssh-keys"])
     args = parser.parse_args(argv)
-    return _hash_password_command() if args.command == "hash-password" else 2
+    if args.command == "hash-password":
+        return _hash_password_command()
+    from machine_auth import safe_config_summary
+
+    try:
+        print(json.dumps(safe_config_summary(), separators=(",", ":")))
+        return 0
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

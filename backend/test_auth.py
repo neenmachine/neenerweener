@@ -234,6 +234,65 @@ def test_login_sets_host_secure_httponly_strict_cookie(configured_app, monkeypat
     assert "Max-Age=43200" in cookie
 
 
+def hint_cookies(response):
+    return [c for c in response.headers.get_list("set-cookie") if c.startswith("admin_hint=")]
+
+
+@pytest.mark.parametrize(("origin", "secure"), [("https://www.example.test", True), ("http://127.0.0.1", False)])
+def test_login_sets_a_script_readable_admin_hint_beside_the_session(configured_app, monkeypatch, make_client, origin, secure):
+    password, _, _ = configured_app
+    monkeypatch.setenv("ADMIN_ORIGIN", origin)
+    client = make_client(base_url=origin)
+    response = login(client, password, origin)
+    assert response.status_code == 204
+    [hint] = hint_cookies(response)
+    attributes = [a.strip() for a in hint.split(";")]
+    assert attributes[0] == "admin_hint=1"
+    assert "Max-Age=43200" in attributes
+    assert any(a.startswith("expires=") for a in attributes)
+    assert "Path=/" in attributes
+    assert "SameSite=strict" in attributes
+    assert ("Secure" in attributes) is secure
+    assert "HttpOnly" not in attributes
+    assert not any(a.startswith("Domain=") for a in attributes)
+
+
+def assert_hint_cleared(response, secure=False):
+    [hint] = hint_cookies(response)
+    attributes = [a.strip() for a in hint.split(";")]
+    assert attributes[0] == 'admin_hint=""'
+    assert "Max-Age=0" in attributes
+    assert "Path=/" in attributes
+    assert "SameSite=strict" in attributes
+    assert ("Secure" in attributes) is secure
+
+
+def test_signed_out_session_expiry_and_logout_clear_the_admin_hint(configured_app, monkeypatch, make_client):
+    password, auth_store, _ = configured_app
+    anonymous = make_client(base_url="http://127.0.0.1")
+    anonymous.cookies.set("admin_hint", "1")
+    response = anonymous.get("/api/admin/session")
+    assert response.json() == {"authenticated": False}
+    assert_hint_cleared(response)
+
+    client, csrf = authenticated_client(password, make_client)
+    assert hint_cookies(client.get("/api/admin/session")) == []
+    response = client.post("/api/admin/logout", headers=mutation_headers(csrf))
+    assert response.status_code == 204
+    assert_hint_cleared(response)
+
+    client, _ = authenticated_client(password, make_client)
+    with auth_store.engine.begin() as connection:
+        connection.execute(update(admin_sessions).values(expires_at=datetime.now(timezone.utc) - timedelta(seconds=1)))
+    response = client.get("/api/admin/session")
+    assert response.json() == {"authenticated": False}
+    assert_hint_cleared(response)
+
+    monkeypatch.setenv("ADMIN_ORIGIN", "https://www.example.test")
+    secure = make_client(base_url="https://www.example.test")
+    assert_hint_cleared(secure.get("/api/admin/session"), secure=True)
+
+
 def test_session_persists_as_digests_and_survives_store_restart(configured_app, make_client):
     password, auth_store, _ = configured_app
     client, csrf = authenticated_client(password, make_client)

@@ -292,6 +292,14 @@ def _clear_session_cookie(response: Response, config: AdminConfig) -> None:
     )
 
 
+# A non-secret hint that tells /timeline whether to check the session; never used for authorization.
+ADMIN_HINT_COOKIE = "admin_hint"
+
+
+def _clear_hint_cookie(response: Response, config: AdminConfig) -> None:
+    response.delete_cookie(ADMIN_HINT_COOKIE, path="/", secure=config.secure_cookie, samesite="strict")
+
+
 def _machine_config(request: Request) -> MachineAuthConfig:
     return request.app.state.machine_auth_config
 
@@ -510,10 +518,9 @@ async def machine_token(request: Request):
 @app.get("/api/admin/session")
 def admin_session(request: Request, response: Response):
     config = _admin_config()
-    if not config.valid:
-        return {"authenticated": False}
     token = request.cookies.get(config.cookie_name)
-    if not token:
+    if not config.valid or not token:
+        _clear_hint_cookie(response, config)
         return {"authenticated": False}
     if auth_store is None:
         raise HTTPException(503, "admin unavailable")
@@ -524,6 +531,7 @@ def admin_session(request: Request, response: Response):
         raise HTTPException(503, "admin unavailable") from exc
     if session is None:
         _clear_session_cookie(response, config)
+        _clear_hint_cookie(response, config)
         return {"authenticated": False}
     return {"authenticated": True, "csrf_token": session.csrf_token}
 
@@ -566,6 +574,15 @@ def admin_login(payload: LoginRequest, request: Request, response: Response):
         httponly=True,
         samesite="strict",
     )
+    response.set_cookie(
+        ADMIN_HINT_COOKIE,
+        "1",
+        max_age=12 * 60 * 60,
+        expires=session.expires_at,
+        path="/",
+        secure=config.secure_cookie,
+        samesite="strict",
+    )
 
 
 @app.post("/api/admin/logout", status_code=204)
@@ -582,6 +599,7 @@ def admin_logout(
         logger.warning("admin storage unavailable: %s", type(exc).__name__)
         raise HTTPException(503, "admin unavailable") from exc
     _clear_session_cookie(response, config)
+    _clear_hint_cookie(response, config)
 
 
 async def _timeline_create_body(request: Request) -> TimelineCreate:

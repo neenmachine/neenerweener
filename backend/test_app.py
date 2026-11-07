@@ -597,6 +597,33 @@ def test_server_rendered_pages(tmp_path, monkeypatch):
     assert '"/api/posts": [' in home and '<div id="root"><main><h1 class="sr-only">neenerweener</h1></main></div>' in home
 
 
+def test_timeline_html_is_the_same_for_visitors_and_admins(tmp_path, monkeypatch):
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text(INDEX)
+    monkeypatch.setattr(app, "FRONTEND_DIST", dist)
+
+    class Store:
+        def list(self, before, limit):
+            from datetime import datetime, timezone
+            return [{"id": 2, "body_markdown": "entry", "created_at": datetime(2026, 1, 2, tzinfo=timezone.utc), "edited_at": None, "media": []}]
+
+    monkeypatch.setattr(app, "timeline_store", Store())
+    responses = []
+    # No cookies, a hint alone (maybe forged), and a hint with session cookies.
+    for cookies in ({}, {"admin_hint": "1"}, {"admin_hint": "1", "__Host-ween_session": "x", "ween_session_dev": "x"}):
+        client = TestClient(app.app, cookies=cookies)
+        responses.append(client.get("/timeline"))
+        client.close()
+    assert all(r.status_code == 200 for r in responses)
+    assert responses[0].content == responses[1].content == responses[2].content
+    for r in responses:
+        assert "set-cookie" not in r.headers
+        assert "cookie" not in r.headers.get("vary", "").lower()
+    preload = responses[0].text.split('<script id="preload" type="application/json">')[1].split("</script>")[0]
+    assert "admin" not in preload and "csrf" not in preload
+
+
 @pytest.mark.parametrize(
     ("query", "expected_id", "next_cursor", "status_code"),
     [

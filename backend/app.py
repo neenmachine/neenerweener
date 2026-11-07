@@ -79,6 +79,7 @@ from timeline import (
     TimelineStoreProtocol,
     serialize_entry,
     validate_timeline_body,
+    validate_timeline_create,
 )
 
 logger = logging.getLogger(__name__)
@@ -546,7 +547,11 @@ def admin_login(payload: LoginRequest, request: Request, response: Response):
         retry = auth_store.retry_after(identity)
         if retry is not None:
             raise HTTPException(429, "too many login attempts", headers={"Retry-After": str(retry)})
-        if not verify_password(payload.password, config.password_hash):
+        try:
+            verified = verify_password(payload.password, config.password_hash)
+        except UnicodeEncodeError:
+            verified = False
+        if not verified:
             retry = auth_store.record_failure(identity)
             if retry is not None:
                 raise HTTPException(429, "too many login attempts", headers={"Retry-After": str(retry)})
@@ -595,12 +600,14 @@ def create_admin_timeline(
     access: Access = Depends(require_timeline_create),
     payload: TimelineCreate = Depends(_timeline_create_body),  # after access: no body is read before auth
 ):
+    attachments = [(attachment.id, attachment.alt) for attachment in payload.attachments]
     try:
-        validate_timeline_body(payload.body_markdown)
+        validate_timeline_create(payload.body_markdown, [alt for _id, alt in attachments])
+    except InvalidAttachment as exc:
+        raise HTTPException(422, "invalid attachment") from exc
     except ValueError as exc:
         raise HTTPException(422, "invalid timeline entry") from exc
     _permit_machine(request, access, "timeline_create", 30)
-    attachments = [(attachment.id, attachment.alt) for attachment in payload.attachments]
     try:
         return _admin_entry(_timeline_storage().create(payload.body_markdown, attachments))
     except InvalidAttachment as exc:

@@ -208,6 +208,34 @@ def test_login_rejects_missing_or_wrong_size_rate_key(monkeypatch, configured_ap
     assert response.json() == {"detail": "invalid credentials"}
 
 
+def test_login_rejects_unencodable_password_like_wrong_password(configured_app, make_client):
+    password, auth_store, _ = configured_app
+    client = make_client(base_url="http://127.0.0.1")
+
+    def attempt(value, ip):
+        headers = {"Origin": "http://127.0.0.1", "X-Forwarded-For": ip}
+        if "\ud800" in value:
+            headers["Content-Type"] = "application/json"
+            return client.post(
+                "/api/admin/login", headers=headers, content=b'{"password":"bad\\ud800"}'
+            )
+        return client.post("/api/admin/login", headers=headers, json={"password": value})
+
+    wrong = attempt(password + "-wrong", "198.51.100.10")
+    surrogate = attempt("bad\ud800", "198.51.100.11")
+    assert (surrogate.status_code, surrogate.content) == (wrong.status_code, wrong.content)
+    for name in ("cache-control", "content-type"):
+        assert surrogate.headers[name] == wrong.headers[name]
+
+    with auth_store.engine.begin() as connection:
+        connection.execute(delete(admin_login_failures))
+    wrong_statuses = [attempt(password + "-wrong", "198.51.100.10").status_code for _ in range(6)]
+    with auth_store.engine.begin() as connection:
+        connection.execute(delete(admin_login_failures))
+    surrogate_statuses = [attempt("bad\ud800", "198.51.100.11").status_code for _ in range(6)]
+    assert surrogate_statuses == wrong_statuses
+
+
 def test_login_rejects_wrong_password_without_detail(configured_app, make_client):
     password, _, _ = configured_app
     client = make_client(base_url="http://127.0.0.1")

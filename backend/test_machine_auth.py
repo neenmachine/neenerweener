@@ -491,6 +491,16 @@ def test_rotation_and_scope_removal_revoke_existing_token(machine_app, monkeypat
     assert store.authenticate(token, MachineAuthConfig.from_env()) is None
 
 
+def test_challenge_rejects_unencodable_fingerprint_as_invalid_request(machine_app):
+    client = TestClient(app.app, base_url="http://127.0.0.1")
+    response = client.post(
+        "/api/cli/auth/challenge",
+        headers={"Content-Type": "application/json"},
+        content=b'{"key_fingerprint":"bad\\ud800"}',
+    )
+    assert (response.status_code, response.json()) == (422, {"detail": "invalid request"})
+
+
 def test_bearer_create_and_authorization_precedence(machine_app, monkeypatch):
     private, _public, _store, _secret = machine_app
     password = "fixture-password"

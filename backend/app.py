@@ -5,6 +5,7 @@ import posixpath
 import re
 import time
 import uuid
+from contextlib import asynccontextmanager
 from datetime import date, datetime
 from html import escape, unescape
 from urllib.parse import quote
@@ -12,7 +13,7 @@ from pathlib import Path
 
 import yaml
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from markdown_it import MarkdownIt
@@ -30,7 +31,8 @@ FRONTEND_DIST = Path(os.environ.get("FRONTEND_DIST", Path(__file__).parent.paren
 FILENAME = re.compile(r"^([a-z0-9-]+)\.md$")
 PROJECT = re.compile(r"[a-z0-9-]+")
 from anchors import add_heading_anchors
-from operations import configure_logging
+from operations import check_readiness, configure_logging
+from timeline import TimelineStore, TimelineStoreProtocol, serialize_entry
 
 logger = logging.getLogger(__name__)
 
@@ -58,8 +60,18 @@ md = MarkdownIt("commonmark", {"highlight": highlight}).enable(["table", "strike
 dollarmath_plugin(md, allow_digits=False)
 md.core.ruler.after("inline", "heading_anchors", add_heading_anchors)
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(_app):
+    yield
+    if timeline_store is not None:
+        timeline_store.close()
+
+
+app = FastAPI(lifespan=lifespan)
 configure_logging()
+timeline_store: TimelineStoreProtocol | None = (
+    TimelineStore(os.environ["DATABASE_URL"]) if os.environ.get("DATABASE_URL") else None
+)
 
 
 @app.middleware("http")
@@ -109,6 +121,29 @@ async def security_middleware(request: Request, call_next):
 async def healthz():
     return {"status": "ok"}
 
+
+@app.get("/api/timeline")
+def list_timeline(
+    before: int | None = Query(default=None, gt=0),
+    limit: int = Query(default=20, ge=1, le=20),
+):
+    if timeline_store is None:
+        raise HTTPException(503, "timeline unavailable")
+    rows = timeline_store.list(before, limit)
+    has_next = len(rows) > limit
+    entries = [serialize_entry(row) for row in rows[:limit]]
+    return {
+        "entries": entries,
+        "next_cursor": entries[-1]["id"] if has_next else None,
+    }
+
+
+@app.get("/readyz")
+async def readyz():
+    ready, reason = await check_readiness(timeline_store)
+    if not ready:
+        return JSONResponse({"status": "not_ready", "reason": reason or "dependency unavailable"}, status_code=503)
+    return {"status": "ok"}
 
 def split_frontmatter(text: str) -> tuple[dict | None, str]:
     match = re.match(r"^---\r?\n(.*?)(?:\r?\n)---(?:\r?\n|$)", text, re.S)

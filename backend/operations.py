@@ -15,7 +15,7 @@ class JsonFormatter(logging.Formatter):
             "level": record.levelname.lower(),
             "event": record.getMessage(),
         }
-        for key in ("request_id", "method", "route", "status", "duration"):
+        for key in ("request_id", "method", "route", "status", "duration_ms"):
             if hasattr(record, key):
                 event[key] = getattr(record, key)
         if record.exc_info:

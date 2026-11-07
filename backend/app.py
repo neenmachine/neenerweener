@@ -85,7 +85,7 @@ async def operational_middleware(request: Request, call_next):
                 "method": request.method,
                 "route": route_template(request),
                 "status": status,
-                "duration": round((time.perf_counter() - started) * 1000, 2),
+                "duration_ms": round((time.perf_counter() - started) * 1000, 2),
             },
         )
 

@@ -3,7 +3,7 @@
 # Ctrl-C stops both servers.
 dev:
 	@trap 'kill $$(jobs -p) 2>/dev/null' EXIT; \
-	(cd backend && SHOW_DRAFTS=1 uv run uvicorn app:app --reload) & \
+	(cd backend && SHOW_DRAFTS=1 uv run uvicorn app:app --reload --no-access-log) & \
 	(cd frontend && pnpm dev) & \
 	wait
 

@@ -1,4 +1,11 @@
 import json
+import os
+import socket
+import subprocess
+import sys
+import time
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 from fastapi.testclient import TestClient
 
@@ -60,6 +67,81 @@ def test_request_log_uses_route_template_and_safe_unknown_fallback(caplog):
     assert app.route_template(type("Request", (), {"scope": {"path": "/secret-prose"}})()) == "<unknown>"
     assert "not-a-secret" not in JsonFormatter().format(records[-2])
     assert "secret-prose" not in JsonFormatter().format(records[-1])
+
+
+def test_uvicorn_writes_only_allowlisted_request_events():
+    cases = [
+        ("query", "query-secret-marker"),
+        ("header", "header-secret-marker"),
+        ("body", "body-secret-marker"),
+    ]
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "app:app",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+            "--no-access-log",
+        ],
+        cwd=os.path.dirname(__file__),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        env={**os.environ, "PYTHONUNBUFFERED": "1"},
+    )
+    output = ""
+    try:
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            try:
+                with urlopen(f"http://127.0.0.1:{port}/healthz", timeout=1) as response:
+                    assert response.status == 200
+                    break
+            except (URLError, OSError):
+                if process.poll() is not None:
+                    raise AssertionError("uvicorn exited before becoming ready")
+                time.sleep(0.05)
+        else:
+            raise AssertionError("uvicorn did not become ready")
+
+        for kind, marker in cases:
+            query = f"?token={marker}" if kind == "query" else ""
+            headers = {"Authorization": f"Bearer {marker}"} if kind == "header" else {}
+            body = marker.encode() if kind == "body" else None
+            request = Request(
+                f"http://127.0.0.1:{port}/healthz{query}",
+                data=body,
+                headers=headers,
+                method="POST" if body else "GET",
+            )
+            try:
+                with urlopen(request, timeout=2) as response:
+                    assert response.status == 200
+            except HTTPError as error:
+                assert error.code == 405
+    finally:
+        process.terminate()
+        try:
+            output = process.communicate(timeout=5)[0]
+        except subprocess.TimeoutExpired:
+            process.kill()
+            output = process.communicate(timeout=5)[0]
+
+    for _, marker in cases:
+        assert marker not in output
+    events = [json.loads(line) for line in output.splitlines() if '"event":"request"' in line]
+    assert len(events) == len(cases) + 1  # includes the readiness request
+    allowed = {"timestamp", "level", "event", "request_id", "method", "route", "status", "duration_ms"}
+    for event in events:
+        assert set(event) == allowed
+        assert event["route"] == "/healthz"
 
 
 def test_exception_log_has_safe_structured_stack(caplog):

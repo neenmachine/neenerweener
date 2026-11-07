@@ -1,10 +1,12 @@
+import asyncio
 import logging
+import threading
+import time
 from datetime import date
 
+import app
 import pytest
 from fastapi.testclient import TestClient
-
-import app
 
 
 def test_spa_fallback(tmp_path, monkeypatch):
@@ -22,6 +24,57 @@ def test_spa_fallback(tmp_path, monkeypatch):
     assert c.get("/api/nope").status_code == 404
     assert c.get("/api/nope").json() == {"detail": "not found"}
     assert c.get("/api/posts").status_code == 200
+
+
+def test_admin_spa_is_noindex_and_public_pages_do_not_link_to_it(tmp_path, monkeypatch):
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text(
+        '<html><head><title>app</title></head><body><div id="root"></div></body></html>'
+    )
+    monkeypatch.setattr(app, "FRONTEND_DIST", dist)
+
+    with TestClient(app.app) as client:
+        for path in ("/admin", "/admin/settings"):
+            admin = client.get(path)
+            assert admin.status_code == 200
+            assert admin.headers["X-Robots-Tag"] == "noindex"
+        missing = client.get("/missing")
+        assert missing.status_code == 404
+        assert missing.headers["X-Content-Type-Options"] == "nosniff"
+        assert missing.headers["Referrer-Policy"] == "strict-origin-when-cross-origin"
+        assert missing.headers["X-Frame-Options"] == "DENY"
+        assert client.head("/admin").headers["X-Robots-Tag"] == "noindex"
+        for path in ("/", "/timeline"):
+            public = client.get(path)
+            assert "X-Robots-Tag" not in public.headers
+            assert 'href="/admin"' not in public.text
+
+
+def test_lifespan_closes_stores_sequentially_off_event_loop(monkeypatch):
+    close_calls = []
+
+    class BlockingStore:
+        def __init__(self, name):
+            self.name = name
+
+        def close(self):
+            time.sleep(0.01)
+            close_calls.append((self.name, threading.get_ident()))
+
+    monkeypatch.setattr(app, "timeline_store", BlockingStore("timeline"))
+    monkeypatch.setattr(app, "auth_store", BlockingStore("auth"))
+
+    async def run_lifespan():
+        loop_thread = threading.get_ident()
+        async with app.lifespan(app.app):
+            pass
+        return loop_thread
+
+    loop_thread = asyncio.run(run_lifespan())
+
+    assert [name for name, _ in close_calls] == ["timeline", "auth"]
+    assert all(thread_id != loop_thread for _, thread_id in close_calls)
 
 
 def test_spa_index_symlink_blocked(tmp_path, monkeypatch):

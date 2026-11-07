@@ -68,7 +68,9 @@ li {
   text-wrap: pretty;
 }
 
+/* border-box on every main, so the server markup and the React page (with its footer) have the same width. */
 main {
+  box-sizing: border-box;
   max-width: 52rem;
   margin: 0 auto;
   padding: 3rem 1.25rem 6rem;
@@ -79,11 +81,10 @@ main:has(> footer) {
   display: flex;
   flex-direction: column;
   min-height: 100dvh;
-  box-sizing: border-box;
   padding-bottom: 2.5rem;
 }
 
-footer {
+main > footer {
   display: flex;
   gap: 1.5rem;
   margin-top: auto;
@@ -91,18 +92,28 @@ footer {
   font-size: 0.9em;
 }
 
-footer a {
+/* A 44px tap target; the negative margin keeps the footer looking the same. */
+main > footer a {
+  padding-block: 0.8rem;
+  margin-block: -0.8rem;
   color: var(--muted);
   text-decoration: none;
 }
 
-footer a:first-child {
+main > footer a:first-child {
   font-weight: 600;
 }
 
-footer a:hover,
-footer a[aria-current] {
+main > footer a:hover,
+main > footer a[aria-current] {
   color: var(--accent);
+}
+
+/* The current page is also underlined: the site name is always bold, so color alone did not show it. */
+main > footer a[aria-current] {
+  text-decoration: underline;
+  text-decoration-color: var(--faint);
+  text-underline-offset: 0.3em;
 }
 
 /* The back arrow hangs in the left margin so the title stays aligned with the text. */
@@ -185,6 +196,124 @@ a {
 
 .excerpt {
   font-size: 0.9em;
+}
+
+/* Timeline: a plain stream of entries split by hairlines, the time and "edited" below each. */
+.timeline-entry {
+  padding: 1.1rem 0;
+  scroll-margin-top: 1.5rem;
+}
+
+.timeline-entry + .timeline-entry {
+  border-top: 1px solid color-mix(in srgb, var(--fg) 8%, transparent);
+}
+
+.timeline-entry > div {
+  overflow-wrap: anywhere;
+}
+
+.timeline-entry > div > :first-child {
+  margin-top: 0;
+}
+
+.timeline-entry > div > :last-child {
+  margin-bottom: 0;
+}
+
+.timeline-entry footer {
+  display: flex;
+  gap: 1ch;
+  margin-top: 0.4rem;
+  color: var(--muted);
+  font-size: 0.85em;
+  font-variant-numeric: tabular-nums;
+}
+
+.timeline-entry footer a {
+  text-decoration: none;
+}
+
+.timeline-entry footer a:hover {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-color: var(--faint);
+}
+
+/* The entry a /timeline#entry-<id> link points to gets the "you are here" accent. */
+.timeline-entry:is(:target, .target) footer a {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.load-more {
+  display: flex;
+  align-items: center;
+  gap: 1.5ch;
+  margin-top: 1.5rem;
+  font-size: 0.9em;
+}
+
+.load-more a {
+  padding: 0.2rem 0.75rem;
+  border: 1px solid color-mix(in srgb, var(--fg) 14%, transparent);
+  border-radius: 4px;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, scale 0.1s;
+  /* The two labels share one cell, so "loading" does not change the width. */
+  display: inline-grid;
+}
+
+.load-more a > span {
+  grid-area: 1 / 1;
+}
+
+.load-more a > span[hidden] {
+  display: block;
+  visibility: hidden;
+}
+
+/* A finger-sized target on phones and touch screens. */
+@media (max-width: 760px), (pointer: coarse) {
+  .load-more a {
+    min-height: 40px;
+    align-items: center;
+  }
+}
+
+.load-more a:hover {
+  color: var(--fg);
+  border-color: color-mix(in srgb, var(--fg) 28%, transparent);
+}
+
+.load-more a:active {
+  scale: 0.97;
+}
+
+.load-more a[aria-busy="true"] {
+  cursor: progress;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .load-more a {
+    transition: none;
+  }
+
+  .load-more a:active {
+    scale: none;
+  }
+}
+
+/* Read by screen readers, not shown. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 h1,
@@ -438,8 +567,9 @@ hr {
 }
 
 /* Code browser: bordered boxes like a repo browser, in the site's own type and colors. */
+/* 84rem of content plus the side padding (main is border-box). */
 main.wide {
-  max-width: 84rem;
+  max-width: 86.5rem;
 }
 
 /* Repo layout: a file tree on the left, the folder or file on the right. */

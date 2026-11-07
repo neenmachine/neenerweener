@@ -749,6 +749,10 @@ def parse_date(value) -> str | None:
     return None
 
 
+def _is_scalar_text(value: str) -> bool:
+    return not any("\ud800" <= char <= "\udfff" for char in value)
+
+
 def parse_tags(value) -> list[str] | None:
     """`tags: [a, b]` or `tags: a`, lowercased and deduplicated; None if invalid."""
     if value is None:
@@ -757,6 +761,8 @@ def parse_tags(value) -> list[str] | None:
     if any(item is None or isinstance(item, (list, dict)) for item in items):
         return None
     tags = [t for item in items if (t := str(item).strip().lower())]
+    if any(not _is_scalar_text(tag) for tag in tags):
+        return None
     return list(dict.fromkeys(tags))
 
 
@@ -784,7 +790,7 @@ def load(path: Path, draft: bool = False) -> dict | None:
         title = str(title).strip()
     else:
         title = slug if draft else ""
-    if not title:
+    if not title or not _is_scalar_text(title):
         logger.warning("invalid post metadata in %s", path.name)
         return None
 
@@ -798,6 +804,9 @@ def load(path: Path, draft: bool = False) -> dict | None:
             logger.warning("invalid post metadata in %s", path.name)
             return None
         excerpt = str(excerpt)
+        if not _is_scalar_text(excerpt):
+            logger.warning("invalid post metadata in %s", path.name)
+            return None
     else:
         excerpt = None
     tags = parse_tags(metadata.get("tags"))

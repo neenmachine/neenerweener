@@ -25,6 +25,7 @@ def _tag_filter(posts: list[dict], selected_tag: str | None) -> str:
     links.extend(
         f'<a href="/?tag={_url_tag(tag)}"'
         f'{" aria-current=\"page\"" if tag == selected_tag else ""}>#{escape(tag, quote=False)}<span class="muted"> {count}</span></a>'
+        # The post loader guarantees that tags contain only Unicode scalar values.
         for tag, count in sorted(counts.items(), key=lambda item: item[0].encode("utf-16-be"))
     )
     return f'<nav class="tag-filter" aria-label="tags">{"".join(links)}</nav>'

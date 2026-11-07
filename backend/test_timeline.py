@@ -132,6 +132,7 @@ def test_alembic_upgrade_from_empty():
         assert 'timeline_entries' in inspect(engine).get_table_names()
     finally:
         engine.dispose()
+        app.configure_logging()
 
 
 @pytest.mark.skipif(not os.environ.get('DATABASE_URL'), reason='DATABASE_URL not configured')
@@ -151,3 +152,4 @@ def test_alembic_upgrade_down_up_is_repeatable():
             assert connection.execute(text('select version_num from alembic_version')).scalar() == '003_machine_auth'
     finally:
         engine.dispose()
+        app.configure_logging()

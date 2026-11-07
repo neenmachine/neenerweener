@@ -7,16 +7,24 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import delete, event, func, inspect, insert, select, text, update
+from sqlalchemy import delete, event, func, insert, inspect, select, text, update
 
 import app
-from auth import AuthStore, admin_login_failures, admin_sessions, hash_password, main as auth_main
+from auth import (
+    AuthStore,
+    admin_login_failures,
+    admin_sessions,
+    hash_password,
+)
+from auth import (
+    main as auth_main,
+)
 from client_identity import railway_client_ip, rate_limit_key
 from machine_auth import (
     NAMESPACE,
+    InvalidProof,
     MachineAuthConfig,
     MachineAuthStore,
-    InvalidProof,
     machine_auth_challenges,
     machine_auth_events,
     machine_auth_tokens,
@@ -24,14 +32,15 @@ from machine_auth import (
 )
 from timeline import TimelineStore, timeline_entries
 
-
 SCOPES = ["timeline:create", "timeline:media"]
 
 
 @pytest.fixture
 def key_pair(tmp_path):
     private = tmp_path / "key"
-    subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(private)], check=True)
+    subprocess.run(
+        ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(private)], check=True
+    )
     parts = private.with_suffix(".pub").read_text().split()
     return private, " ".join(parts[:2])
 
@@ -45,14 +54,22 @@ def machine_app(monkeypatch, key_pair):
     rate_secret = b"r" * 32
     monkeypatch.setenv("ADMIN_ORIGIN", "http://127.0.0.1")
     monkeypatch.setenv("RATE_LIMIT_KEY", rate_secret.decode("ascii"))
-    monkeypatch.setenv("ADMIN_SSH_KEYS", json.dumps([{
-        "name": "fixture-key", "public_key": public, "scopes": SCOPES
-    }]))
+    monkeypatch.setenv(
+        "ADMIN_SSH_KEYS",
+        json.dumps([{"name": "fixture-key", "public_key": public, "scopes": SCOPES}]),
+    )
     machine_store = MachineAuthStore(database_url)
     auth_store = AuthStore(database_url)
     timeline_store = TimelineStore(database_url)
     with machine_store.engine.begin() as connection:
-        for table in (machine_auth_events, machine_auth_tokens, machine_auth_challenges, admin_login_failures, admin_sessions, timeline_entries):
+        for table in (
+            machine_auth_events,
+            machine_auth_tokens,
+            machine_auth_challenges,
+            admin_login_failures,
+            admin_sessions,
+            timeline_entries,
+        ):
             connection.execute(delete(table))
     monkeypatch.setattr(app, "machine_auth_store", machine_store)
     monkeypatch.setattr(app, "auth_store", auth_store)
@@ -66,44 +83,73 @@ def machine_app(monkeypatch, key_pair):
 def sign(private, message, namespace=NAMESPACE):
     return subprocess.run(
         ["ssh-keygen", "-Y", "sign", "-n", namespace, "-f", str(private)],
-        input=message, text=True, capture_output=True, check=True,
+        input=message,
+        text=True,
+        capture_output=True,
+        check=True,
     ).stdout
 
 
 def challenge_and_token(client, private, fingerprint=None):
     config = MachineAuthConfig.from_env()
     fingerprint = fingerprint or next(iter(config.keys))
-    challenge = client.post("/api/cli/auth/challenge", json={"key_fingerprint": fingerprint})
+    challenge = client.post(
+        "/api/cli/auth/challenge", json={"key_fingerprint": fingerprint}
+    )
     assert challenge.status_code == 201
     payload = challenge.json()
     signature = sign(private, payload["message"])
-    token = client.post("/api/cli/auth/token", json={"challenge_id": payload["challenge_id"], "signature": signature})
+    token = client.post(
+        "/api/cli/auth/token",
+        json={"challenge_id": payload["challenge_id"], "signature": signature},
+    )
     return challenge, token
 
 
 def test_strict_key_config_and_safe_helper(machine_app, monkeypatch, tmp_path):
     _private, public, _store, _secret = machine_app
     second_private = tmp_path / "second-key"
-    subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(second_private)], check=True)
+    subprocess.run(
+        ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(second_private)],
+        check=True,
+    )
     second_public = " ".join(second_private.with_suffix(".pub").read_text().split()[:2])
     config = MachineAuthConfig.from_env()
     summary = safe_config_summary(config.keys)
     assert config.valid
-    assert summary == [{"name": "fixture-key", "fingerprint": next(iter(config.keys)), "scopes": SCOPES}]
+    assert summary == [
+        {
+            "name": "fixture-key",
+            "fingerprint": next(iter(config.keys)),
+            "scopes": SCOPES,
+        }
+    ]
     bad_values = [
-        None, "", "{}", "[]", "null",
-        json.dumps([{"name": "x", "public_key": public + " comment", "scopes": SCOPES}]),
+        None,
+        "",
+        "{}",
+        "[]",
+        "null",
+        json.dumps(
+            [{"name": "x", "public_key": public + " comment", "scopes": SCOPES}]
+        ),
         json.dumps([{"name": "x", "public_key": public, "scopes": []}]),
         json.dumps([{"name": "x", "public_key": public, "scopes": ["timeline:read"]}]),
-        json.dumps([{"name": "x", "public_key": public, "scopes": SCOPES, "extra": True}]),
-        json.dumps([
-            {"name": "x", "public_key": public, "scopes": SCOPES},
-            {"name": "x", "public_key": second_public, "scopes": SCOPES},
-        ]),
-        json.dumps([
-            {"name": "x", "public_key": public, "scopes": SCOPES},
-            {"name": "y", "public_key": public, "scopes": SCOPES},
-        ]),
+        json.dumps(
+            [{"name": "x", "public_key": public, "scopes": SCOPES, "extra": True}]
+        ),
+        json.dumps(
+            [
+                {"name": "x", "public_key": public, "scopes": SCOPES},
+                {"name": "x", "public_key": second_public, "scopes": SCOPES},
+            ]
+        ),
+        json.dumps(
+            [
+                {"name": "x", "public_key": public, "scopes": SCOPES},
+                {"name": "y", "public_key": public, "scopes": SCOPES},
+            ]
+        ),
     ]
     for value in bad_values:
         if value is None:
@@ -129,19 +175,31 @@ def test_challenge_known_and_unknown_are_indistinguishable(machine_app):
     client = TestClient(app.app, base_url="http://127.0.0.1")
     known = next(iter(MachineAuthConfig.from_env().keys))
     unknown = "SHA256:" + "a" * 43
-    responses = [client.post("/api/cli/auth/challenge", json={"key_fingerprint": value}) for value in (known, unknown)]
+    responses = [
+        client.post("/api/cli/auth/challenge", json={"key_fingerprint": value})
+        for value in (known, unknown)
+    ]
     for response in responses:
         assert response.status_code == 201
         assert response.headers["Cache-Control"] == "no-store"
-        assert set(response.json()) == {"challenge_id", "message", "namespace", "expires_at"}
+        assert set(response.json()) == {
+            "challenge_id",
+            "message",
+            "namespace",
+            "expires_at",
+        }
         assert response.json()["namespace"] == NAMESPACE
     with store.engine.connect() as connection:
         rows = connection.execute(select(machine_auth_challenges)).mappings().all()
     assert len(rows) == 1
     assert rows[0]["key_fingerprint"] == known
-    unknown_exchange = client.post("/api/cli/auth/token", json={
-        "challenge_id": responses[1].json()["challenge_id"], "signature": "not a signature"
-    })
+    unknown_exchange = client.post(
+        "/api/cli/auth/token",
+        json={
+            "challenge_id": responses[1].json()["challenge_id"],
+            "signature": "not a signature",
+        },
+    )
     assert unknown_exchange.status_code == 401
     assert unknown_exchange.json() == {"detail": "invalid key proof"}
 
@@ -173,7 +231,11 @@ def test_malformed_exchange_fields_are_generic(machine_app):
     for body in (
         {"challenge_id": "not-a-uuid", "signature": "bad"},
         {"challenge_id": "00000000-0000-0000-0000-000000000000"},
-        {"challenge_id": "00000000-0000-0000-0000-000000000000", "signature": "bad", "extra": True},
+        {
+            "challenge_id": "00000000-0000-0000-0000-000000000000",
+            "signature": "bad",
+            "extra": True,
+        },
     ):
         response = client.post("/api/cli/auth/token", json=body)
         assert response.status_code == 401
@@ -186,7 +248,10 @@ def test_malformed_exchange_is_persistently_rate_limited(machine_app):
     headers = {"X-Forwarded-For": "198.51.100.7"}
     body = {"challenge_id": "not-a-uuid", "signature": "bad"}
     for _ in range(5):
-        assert client.post("/api/cli/auth/token", headers=headers, json=body).status_code == 401
+        assert (
+            client.post("/api/cli/auth/token", headers=headers, json=body).status_code
+            == 401
+        )
     limited = client.post("/api/cli/auth/token", headers=headers, json=body)
     assert limited.status_code == 429
     assert limited.headers["Retry-After"].isdigit()
@@ -197,9 +262,18 @@ def test_wrong_namespace_and_signature_are_generic(machine_app):
     client = TestClient(app.app, base_url="http://127.0.0.1")
     fingerprint = next(iter(MachineAuthConfig.from_env().keys))
     for namespace in ("wrong", NAMESPACE):
-        challenge = client.post("/api/cli/auth/challenge", json={"key_fingerprint": fingerprint}).json()
-        signature = sign(private, challenge["message"] + ("changed" if namespace == NAMESPACE else ""), namespace)
-        response = client.post("/api/cli/auth/token", json={"challenge_id": challenge["challenge_id"], "signature": signature})
+        challenge = client.post(
+            "/api/cli/auth/challenge", json={"key_fingerprint": fingerprint}
+        ).json()
+        signature = sign(
+            private,
+            challenge["message"] + ("changed" if namespace == NAMESPACE else ""),
+            namespace,
+        )
+        response = client.post(
+            "/api/cli/auth/token",
+            json={"challenge_id": challenge["challenge_id"], "signature": signature},
+        )
         assert response.status_code == 401
         assert response.json() == {"detail": "invalid key proof"}
 
@@ -208,15 +282,24 @@ def test_challenge_is_one_use_concurrently_and_survives_restart(machine_app):
     private, _public, store, _secret = machine_app
     client = TestClient(app.app, base_url="http://127.0.0.1")
     fingerprint = next(iter(MachineAuthConfig.from_env().keys))
-    challenge = client.post("/api/cli/auth/challenge", json={"key_fingerprint": fingerprint}).json()
+    challenge = client.post(
+        "/api/cli/auth/challenge", json={"key_fingerprint": fingerprint}
+    ).json()
     signature = sign(private, challenge["message"])
     restarted = MachineAuthStore(os.environ["DATABASE_URL"])
     try:
+
         def exchange(_):
             try:
-                return restarted.exchange(__import__("uuid").UUID(challenge["challenge_id"]), signature, "198.51.100.7", MachineAuthConfig.from_env()).access_token
+                return restarted.exchange(
+                    __import__("uuid").UUID(challenge["challenge_id"]),
+                    signature,
+                    "198.51.100.7",
+                    MachineAuthConfig.from_env(),
+                ).access_token
             except InvalidProof:
                 return None
+
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
             results = list(executor.map(exchange, range(2)))
         assert sum(value is not None for value in results) == 1
@@ -236,20 +319,31 @@ def test_challenge_publish_failure_rolls_back_rate_event(machine_app):
 
     event.listen(store.engine, "before_cursor_execute", fail_insert)
     try:
-        response = client.post("/api/cli/auth/challenge", json={"key_fingerprint": next(iter(MachineAuthConfig.from_env().keys))})
+        response = client.post(
+            "/api/cli/auth/challenge",
+            json={"key_fingerprint": next(iter(MachineAuthConfig.from_env().keys))},
+        )
         assert response.status_code == 503
     finally:
         event.remove(store.engine, "before_cursor_execute", fail_insert)
     with store.engine.connect() as connection:
-        assert connection.scalar(select(func.count()).select_from(machine_auth_events)) == 0
-        assert connection.scalar(select(func.count()).select_from(machine_auth_challenges)) == 0
+        assert (
+            connection.scalar(select(func.count()).select_from(machine_auth_events))
+            == 0
+        )
+        assert (
+            connection.scalar(select(func.count()).select_from(machine_auth_challenges))
+            == 0
+        )
 
 
 def test_token_publish_failure_does_not_consume_challenge(machine_app):
     private, _public, store, _secret = machine_app
     client = TestClient(app.app, base_url="http://127.0.0.1")
     fingerprint = next(iter(MachineAuthConfig.from_env().keys))
-    challenge = client.post("/api/cli/auth/challenge", json={"key_fingerprint": fingerprint}).json()
+    challenge = client.post(
+        "/api/cli/auth/challenge", json={"key_fingerprint": fingerprint}
+    ).json()
     signature = sign(private, challenge["message"])
 
     def fail_insert(_connection, _cursor, statement, _parameters, _context, _many):
@@ -258,11 +352,17 @@ def test_token_publish_failure_does_not_consume_challenge(machine_app):
 
     event.listen(store.engine, "before_cursor_execute", fail_insert)
     try:
-        response = client.post("/api/cli/auth/token", json={"challenge_id": challenge["challenge_id"], "signature": signature})
+        response = client.post(
+            "/api/cli/auth/token",
+            json={"challenge_id": challenge["challenge_id"], "signature": signature},
+        )
         assert response.status_code == 503
     finally:
         event.remove(store.engine, "before_cursor_execute", fail_insert)
-    retry = client.post("/api/cli/auth/token", json={"challenge_id": challenge["challenge_id"], "signature": signature})
+    retry = client.post(
+        "/api/cli/auth/token",
+        json={"challenge_id": challenge["challenge_id"], "signature": signature},
+    )
     assert retry.status_code == 200
 
 
@@ -270,20 +370,38 @@ def test_expired_challenge_and_token_digest_only(machine_app):
     private, _public, store, _secret = machine_app
     client = TestClient(app.app, base_url="http://127.0.0.1")
     fingerprint = next(iter(MachineAuthConfig.from_env().keys))
-    challenge = client.post("/api/cli/auth/challenge", json={"key_fingerprint": fingerprint}).json()
+    challenge = client.post(
+        "/api/cli/auth/challenge", json={"key_fingerprint": fingerprint}
+    ).json()
     with store.engine.begin() as connection:
-        connection.execute(update(machine_auth_challenges).values(expires_at=datetime.now(timezone.utc) - timedelta(seconds=1)))
-    response = client.post("/api/cli/auth/token", json={"challenge_id": challenge["challenge_id"], "signature": sign(private, challenge["message"])})
+        connection.execute(
+            update(machine_auth_challenges).values(
+                expires_at=datetime.now(timezone.utc) - timedelta(seconds=1)
+            )
+        )
+    response = client.post(
+        "/api/cli/auth/token",
+        json={
+            "challenge_id": challenge["challenge_id"],
+            "signature": sign(private, challenge["message"]),
+        },
+    )
     assert response.status_code == 401
 
     _challenge, token_response = challenge_and_token(client, private)
     token = token_response.json()["access_token"]
     with store.engine.connect() as connection:
         row = connection.execute(select(machine_auth_tokens)).mappings().one()
-    assert token.encode() not in b"".join(value for value in row.values() if isinstance(value, bytes))
+    assert token.encode() not in b"".join(
+        value for value in row.values() if isinstance(value, bytes)
+    )
     assert len(row["token_digest"]) == 32
     with store.engine.begin() as connection:
-        connection.execute(update(machine_auth_tokens).values(expires_at=datetime.now(timezone.utc) - timedelta(seconds=1)))
+        connection.execute(
+            update(machine_auth_tokens).values(
+                expires_at=datetime.now(timezone.utc) - timedelta(seconds=1)
+            )
+        )
     assert store.authenticate(token, MachineAuthConfig.from_env()) is None
 
 
@@ -295,7 +413,10 @@ def test_rotation_and_scope_removal_revoke_existing_token(machine_app, monkeypat
     assert store.authenticate(token, MachineAuthConfig.from_env()) is not None
     monkeypatch.setenv("ADMIN_SSH_KEYS", "[]")
     assert store.authenticate(token, MachineAuthConfig.from_env()) is None
-    monkeypatch.setenv("ADMIN_SSH_KEYS", json.dumps([{"name": "fixture-key", "public_key": public, "scopes": []}]))
+    monkeypatch.setenv(
+        "ADMIN_SSH_KEYS",
+        json.dumps([{"name": "fixture-key", "public_key": public, "scopes": []}]),
+    )
     assert store.authenticate(token, MachineAuthConfig.from_env()) is None
 
 
@@ -306,7 +427,11 @@ def test_bearer_create_and_authorization_precedence(machine_app, monkeypatch):
     client = TestClient(app.app, base_url="http://127.0.0.1")
     _challenge, response = challenge_and_token(client, private)
     token = response.json()["access_token"]
-    created = client.post("/api/admin/timeline", headers={"Authorization": f"Bearer {token}"}, json={"body_markdown": "fixture"})
+    created = client.post(
+        "/api/admin/timeline",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"body_markdown": "fixture"},
+    )
     assert created.status_code == 201
     entry_id = created.json()["id"]
     for method, path, body in (
@@ -314,11 +439,34 @@ def test_bearer_create_and_authorization_precedence(machine_app, monkeypatch):
         ("patch", f"/api/admin/timeline/{entry_id}", {"body_markdown": "changed"}),
         ("delete", f"/api/admin/timeline/{entry_id}", None),
     ):
-        assert client.request(method, path, headers={"Authorization": f"Bearer {token}"}, json=body).status_code == 401
-    login = client.post("/api/admin/login", headers={"Origin": "http://127.0.0.1", "X-Forwarded-For": "198.51.100.7"}, json={"password": password})
+        assert (
+            client.request(
+                method, path, headers={"Authorization": f"Bearer {token}"}, json=body
+            ).status_code
+            == 401
+        )
+    login = client.post(
+        "/api/admin/login",
+        headers={"Origin": "http://127.0.0.1", "X-Forwarded-For": "198.51.100.7"},
+        json={"password": password},
+    )
     assert login.status_code == 204
-    assert client.post("/api/admin/timeline", headers={"Authorization": "invalid", "Origin": "http://127.0.0.1"}, json={"body_markdown": "fixture"}).status_code == 401
-    assert client.post("/api/admin/timeline", headers={"Authorization": "Bearer invalid", "Origin": "http://127.0.0.1"}, json={"body_markdown": "fixture"}).status_code == 401
+    assert (
+        client.post(
+            "/api/admin/timeline",
+            headers={"Authorization": "invalid", "Origin": "http://127.0.0.1"},
+            json={"body_markdown": "fixture"},
+        ).status_code
+        == 401
+    )
+    assert (
+        client.post(
+            "/api/admin/timeline",
+            headers={"Authorization": "Bearer invalid", "Origin": "http://127.0.0.1"},
+            json={"body_markdown": "fixture"},
+        ).status_code
+        == 401
+    )
 
 
 def test_current_scope_is_rechecked_for_every_bearer_request(machine_app):
@@ -343,9 +491,20 @@ def test_bearer_is_not_accepted_from_query_form_or_cookie(machine_app):
     _challenge, response = challenge_and_token(client, private)
     token = response.json()["access_token"]
     for client_kwargs in ({}, {"cookies": {"access_token": token}}):
-        request_client = TestClient(app.app, base_url="http://127.0.0.1", **client_kwargs)
-        assert request_client.post(f"/api/admin/timeline?access_token={token}", json={"body_markdown": "fixture"}).status_code == 401
-        assert request_client.post("/api/admin/timeline", data={"access_token": token, "body_markdown": "fixture"}).status_code in (401, 422)
+        request_client = TestClient(
+            app.app, base_url="http://127.0.0.1", **client_kwargs
+        )
+        assert (
+            request_client.post(
+                f"/api/admin/timeline?access_token={token}",
+                json={"body_markdown": "fixture"},
+            ).status_code
+            == 401
+        )
+        assert request_client.post(
+            "/api/admin/timeline",
+            data={"access_token": token, "body_markdown": "fixture"},
+        ).status_code in (401, 422)
 
 
 def test_create_rate_is_persistent_per_fingerprint(machine_app):
@@ -355,8 +514,17 @@ def test_create_rate_is_persistent_per_fingerprint(machine_app):
     token = response.json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
     for index in range(30):
-        assert client.post("/api/admin/timeline", headers=headers, json={"body_markdown": f"fixture-{index}"}).status_code == 201
-    limited = client.post("/api/admin/timeline", headers=headers, json={"body_markdown": "fixture-last"})
+        assert (
+            client.post(
+                "/api/admin/timeline",
+                headers=headers,
+                json={"body_markdown": f"fixture-{index}"},
+            ).status_code
+            == 201
+        )
+    limited = client.post(
+        "/api/admin/timeline", headers=headers, json={"body_markdown": "fixture-last"}
+    )
     assert limited.status_code == 429
     assert limited.headers["Retry-After"].isdigit()
 
@@ -366,14 +534,39 @@ def test_challenge_and_exchange_rates_persist(machine_app):
     client = TestClient(app.app, base_url="http://127.0.0.1")
     fingerprint = next(iter(MachineAuthConfig.from_env().keys))
     headers = {"X-Forwarded-For": "spoofed, 198.51.100.7"}
-    challenges = [client.post("/api/cli/auth/challenge", headers=headers, json={"key_fingerprint": fingerprint}) for _ in range(30)]
+    challenges = [
+        client.post(
+            "/api/cli/auth/challenge",
+            headers=headers,
+            json={"key_fingerprint": fingerprint},
+        )
+        for _ in range(30)
+    ]
     assert all(response.status_code == 201 for response in challenges)
-    limited = client.post("/api/cli/auth/challenge", headers=headers, json={"key_fingerprint": fingerprint})
+    limited = client.post(
+        "/api/cli/auth/challenge",
+        headers=headers,
+        json={"key_fingerprint": fingerprint},
+    )
     assert limited.status_code == 429
     first = challenges[0].json()
     for _ in range(5):
-        assert client.post("/api/cli/auth/token", headers=headers, json={"challenge_id": first["challenge_id"], "signature": "bad"}).status_code == 401
-    assert client.post("/api/cli/auth/token", headers=headers, json={"challenge_id": first["challenge_id"], "signature": "bad"}).status_code == 429
+        assert (
+            client.post(
+                "/api/cli/auth/token",
+                headers=headers,
+                json={"challenge_id": first["challenge_id"], "signature": "bad"},
+            ).status_code
+            == 401
+        )
+    assert (
+        client.post(
+            "/api/cli/auth/token",
+            headers=headers,
+            json={"challenge_id": first["challenge_id"], "signature": "bad"},
+        ).status_code
+        == 429
+    )
 
 
 def test_successful_exchange_clears_ip_and_fingerprint_failures(machine_app):
@@ -381,24 +574,50 @@ def test_successful_exchange_clears_ip_and_fingerprint_failures(machine_app):
     client = TestClient(app.app, base_url="http://127.0.0.1")
     fingerprint = next(iter(MachineAuthConfig.from_env().keys))
     headers = {"X-Forwarded-For": "198.51.100.7"}
-    challenge = client.post("/api/cli/auth/challenge", headers=headers, json={"key_fingerprint": fingerprint}).json()
+    challenge = client.post(
+        "/api/cli/auth/challenge",
+        headers=headers,
+        json={"key_fingerprint": fingerprint},
+    ).json()
     for _ in range(4):
-        assert client.post("/api/cli/auth/token", headers=headers, json={"challenge_id": challenge["challenge_id"], "signature": "bad"}).status_code == 401
+        assert (
+            client.post(
+                "/api/cli/auth/token",
+                headers=headers,
+                json={"challenge_id": challenge["challenge_id"], "signature": "bad"},
+            ).status_code
+            == 401
+        )
     valid = sign(private, challenge["message"])
-    assert client.post("/api/cli/auth/token", headers=headers, json={"challenge_id": challenge["challenge_id"], "signature": valid}).status_code == 200
+    assert (
+        client.post(
+            "/api/cli/auth/token",
+            headers=headers,
+            json={"challenge_id": challenge["challenge_id"], "signature": valid},
+        ).status_code
+        == 200
+    )
     with store.engine.connect() as connection:
-        failures = connection.execute(select(machine_auth_events).where(machine_auth_events.c.event == "exchange_failure")).all()
+        failures = connection.execute(
+            select(machine_auth_events).where(
+                machine_auth_events.c.event == "exchange_failure"
+            )
+        ).all()
     assert failures == []
 
 
 def test_client_identity_final_field_hmac_and_no_raw_ip(machine_app):
     _private, _public, store, secret = machine_app
     from starlette.requests import Request
+
     cases = [
         ([], None),
         ([(b"x-forwarded-for", b"198.51.100.7")], "198.51.100.7"),
         ([(b"x-forwarded-for", b"attacker, 198.51.100.7")], "198.51.100.7"),
-        ([(b"x-forwarded-for", b"attacker"), (b"x-forwarded-for", b"2001:0db8::1")], "2001:db8::1"),
+        (
+            [(b"x-forwarded-for", b"attacker"), (b"x-forwarded-for", b"2001:0db8::1")],
+            "2001:db8::1",
+        ),
         ([(b"x-forwarded-for", b"198.51.100.7,")], None),
         ([(b"x-forwarded-for", b"unknown")], None),
         ([(b"x-forwarded-for", b"198.51.100.7:443")], None),
@@ -415,29 +634,56 @@ def test_client_identity_final_field_hmac_and_no_raw_ip(machine_app):
     assert b"198.51.100.7" not in row["ip_key"]
 
 
-def test_invalid_machine_config_only_breaks_machine_and_readiness(machine_app, monkeypatch):
+def test_invalid_machine_config_only_breaks_machine_and_readiness(
+    machine_app, monkeypatch
+):
     monkeypatch.delenv("RATE_LIMIT_KEY")
     client = TestClient(app.app, base_url="http://127.0.0.1")
-    challenge = client.post("/api/cli/auth/challenge", json={"key_fingerprint": "SHA256:" + "a" * 43})
+    challenge = client.post(
+        "/api/cli/auth/challenge", json={"key_fingerprint": "SHA256:" + "a" * 43}
+    )
     assert challenge.status_code == 503
     assert challenge.json() == {"detail": "machine authentication unavailable"}
     assert client.get("/api/timeline").status_code == 200
     readiness = client.get("/readyz")
     assert readiness.status_code == 503
-    assert readiness.json() == {"status": "not_ready", "reason": "authentication configuration invalid"}
+    assert readiness.json() == {
+        "status": "not_ready",
+        "reason": "invalid authentication configuration",
+    }
 
 
 def test_request_caps_and_errors_do_not_echo_sensitive_inputs(machine_app, caplog):
     private, _public, _store, _secret = machine_app
     client = TestClient(app.app, base_url="http://127.0.0.1")
     marker = "sensitive-marker"
-    too_large = client.post("/api/cli/auth/challenge", content=json.dumps({"key_fingerprint": marker * 2000}), headers={"Content-Type": "application/json"})
+    too_large = client.post(
+        "/api/cli/auth/challenge",
+        content=json.dumps({"key_fingerprint": marker * 2000}),
+        headers={"Content-Type": "application/json"},
+    )
     assert too_large.status_code == 413
     assert marker not in too_large.text
-    assert client.post("/api/cli/auth/challenge", content="x", headers={"Content-Type": "text/plain"}).status_code == 415
-    challenge = client.post("/api/cli/auth/challenge", json={"key_fingerprint": next(iter(MachineAuthConfig.from_env().keys))}).json()
+    assert (
+        client.post(
+            "/api/cli/auth/challenge",
+            content="x",
+            headers={"Content-Type": "text/plain"},
+        ).status_code
+        == 415
+    )
+    challenge = client.post(
+        "/api/cli/auth/challenge",
+        json={"key_fingerprint": next(iter(MachineAuthConfig.from_env().keys))},
+    ).json()
     signature = sign(private, challenge["message"])
-    response = client.post("/api/cli/auth/token", json={"challenge_id": challenge["challenge_id"], "signature": signature + marker})
+    response = client.post(
+        "/api/cli/auth/token",
+        json={
+            "challenge_id": challenge["challenge_id"],
+            "signature": signature + marker,
+        },
+    )
     assert response.status_code == 401
     output = response.text + "\n".join(record.getMessage() for record in caplog.records)
     for value in (marker, challenge["message"], signature):
@@ -448,23 +694,32 @@ def test_cleanup_work_is_bounded(machine_app):
     _private, _public, store, _secret = machine_app
     config = MachineAuthConfig.from_env()
     now = datetime.now(timezone.utc)
-    rows = [{
-        "challenge_id": __import__("uuid").uuid4(),
-        "key_fingerprint": next(iter(config.keys)),
-        "nonce": bytes([index % 256]) * 32,
-        "audience": config.audience,
-        "expires_at": now - timedelta(minutes=1),
-    } for index in range(101)]
+    rows = [
+        {
+            "challenge_id": __import__("uuid").uuid4(),
+            "key_fingerprint": next(iter(config.keys)),
+            "nonce": bytes([index % 256]) * 32,
+            "audience": config.audience,
+            "expires_at": now - timedelta(minutes=1),
+        }
+        for index in range(101)
+    ]
     with store.engine.begin() as connection:
         connection.execute(insert(machine_auth_challenges), rows)
     store.issue_challenge(next(iter(config.keys)), None, config)
     with store.engine.connect() as connection:
-        expired = connection.scalar(select(func.count()).select_from(machine_auth_challenges).where(machine_auth_challenges.c.expires_at < now))
+        expired = connection.scalar(
+            select(func.count())
+            .select_from(machine_auth_challenges)
+            .where(machine_auth_challenges.c.expires_at < now)
+        )
     assert expired == 1
 
 
 def test_runtime_disables_framework_proxy_header_rewriting():
-    dockerfile = (__import__("pathlib").Path(__file__).parent.parent / "Dockerfile").read_text()
+    dockerfile = (
+        __import__("pathlib").Path(__file__).parent.parent / "Dockerfile"
+    ).read_text()
     assert "--no-proxy-headers" in dockerfile
     assert "--forwarded-allow-ips" not in dockerfile
     assert "TRUSTED_PROXY_IPS" not in dockerfile
@@ -473,31 +728,75 @@ def test_runtime_disables_framework_proxy_header_rewriting():
 def test_machine_schema_indexes_and_query_plans(machine_app):
     _private, _public, store, _secret = machine_app
     inspector = inspect(store.engine)
-    indexes = {table: {item["name"] for item in inspector.get_indexes(table)} for table in (
-        "machine_auth_challenges", "machine_auth_tokens", "machine_auth_events"
-    )}
+    indexes = {
+        table: {item["name"] for item in inspector.get_indexes(table)}
+        for table in (
+            "machine_auth_challenges",
+            "machine_auth_tokens",
+            "machine_auth_events",
+        )
+    }
     assert "ix_machine_auth_challenges_expires_at" in indexes["machine_auth_challenges"]
-    assert {"ix_machine_auth_tokens_expires_at", "ix_machine_auth_tokens_key_fingerprint"} <= indexes["machine_auth_tokens"]
+    assert {
+        "ix_machine_auth_tokens_expires_at",
+        "ix_machine_auth_tokens_key_fingerprint",
+    } <= indexes["machine_auth_tokens"]
     assert len(indexes["machine_auth_events"]) == 3
     with store.engine.begin() as connection:
-        connection.execute(insert(machine_auth_events), [
-            {"event": "timeline_create", "fingerprint_key": index.to_bytes(32, "big"), "ip_key": None}
-            for index in range(501)
-        ] + [
-            {"event": "challenge", "ip_key": index.to_bytes(32, "big"), "fingerprint_key": None}
-            for index in range(501)
-        ])
+        connection.execute(
+            insert(machine_auth_events),
+            [
+                {
+                    "event": "timeline_create",
+                    "fingerprint_key": index.to_bytes(32, "big"),
+                    "ip_key": None,
+                }
+                for index in range(501)
+            ]
+            + [
+                {
+                    "event": "challenge",
+                    "ip_key": index.to_bytes(32, "big"),
+                    "fingerprint_key": None,
+                }
+                for index in range(501)
+            ],
+        )
         connection.execute(text("ANALYZE machine_auth_events"))
         connection.execute(text("SET LOCAL enable_seqscan = off"))
-        ip_plan = "\n".join(row[0] for row in connection.execute(text(
-            "EXPLAIN SELECT * FROM machine_auth_events WHERE ip_key = decode(repeat('00', 32), 'hex') AND event = 'challenge' AND occurred_at > now() - INTERVAL '15 minutes' ORDER BY ip_key, event, occurred_at"
-        )))
-        fingerprint_plan = "\n".join(row[0] for row in connection.execute(text(
-            "EXPLAIN SELECT * FROM machine_auth_events WHERE fingerprint_key = decode(repeat('00', 32), 'hex') AND event = 'timeline_create' AND occurred_at > now() - INTERVAL '1 hour' ORDER BY fingerprint_key, event, occurred_at"
-        )))
-        token_plan = "\n".join(row[0] for row in connection.execute(text(
-            "EXPLAIN SELECT * FROM machine_auth_tokens WHERE token_digest = decode(repeat('00', 32), 'hex')"
-        )))
+        ip_plan = "\n".join(
+            row[0]
+            for row in connection.execute(
+                text(
+                    "EXPLAIN SELECT * FROM machine_auth_events "
+                    "WHERE ip_key = decode(repeat('00', 32), 'hex') "
+                    "AND event = 'challenge' "
+                    "AND occurred_at > now() - INTERVAL '15 minutes' "
+                    "ORDER BY ip_key, event, occurred_at"
+                )
+            )
+        )
+        fingerprint_plan = "\n".join(
+            row[0]
+            for row in connection.execute(
+                text(
+                    "EXPLAIN SELECT * FROM machine_auth_events "
+                    "WHERE fingerprint_key = decode(repeat('00', 32), 'hex') "
+                    "AND event = 'timeline_create' "
+                    "AND occurred_at > now() - INTERVAL '1 hour' "
+                    "ORDER BY fingerprint_key, event, occurred_at"
+                )
+            )
+        )
+        token_plan = "\n".join(
+            row[0]
+            for row in connection.execute(
+                text(
+                    "EXPLAIN SELECT * FROM machine_auth_tokens "
+                    "WHERE token_digest = decode(repeat('00', 32), 'hex')"
+                )
+            )
+        )
     assert "ix_machine_auth_events_ip_event_occurred_at" in ip_plan
     assert "ix_machine_auth_events_key_event_occurred_at" in fingerprint_plan
     assert "machine_auth_tokens_pkey" in token_plan

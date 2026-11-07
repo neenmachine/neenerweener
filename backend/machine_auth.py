@@ -19,7 +19,22 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import BigInteger, Column, DateTime, Index, LargeBinary, Table, Text, and_, delete, func, insert, select, text, update
+from sqlalchemy import (
+    BigInteger,
+    Column,
+    DateTime,
+    Index,
+    LargeBinary,
+    Table,
+    Text,
+    and_,
+    delete,
+    func,
+    insert,
+    select,
+    text,
+    update,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.engine import Engine
 
@@ -33,7 +48,9 @@ TOKEN_SECONDS = 600
 RATE_WINDOW_MINUTES = 15
 MAX_REQUEST_BYTES = 16_384
 _ARMORED_SIGNATURE = re.compile(
-    r"\A-----BEGIN SSH SIGNATURE-----\n(?:[A-Za-z0-9+/]+={0,2}\n)+-----END SSH SIGNATURE-----\n\Z"
+    r"\A-----BEGIN SSH SIGNATURE-----\n"
+    r"(?:[A-Za-z0-9+/]+={0,2}\n)+"
+    r"-----END SSH SIGNATURE-----\n\Z"
 )
 
 machine_auth_challenges = Table(
@@ -68,11 +85,30 @@ machine_auth_events = Table(
     Column("event", Text, nullable=False),
     Column("ip_key", LargeBinary(32)),
     Column("fingerprint_key", LargeBinary(32)),
-    Column("occurred_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column(
+        "occurred_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    ),
 )
-Index("ix_machine_auth_events_event_occurred_at", machine_auth_events.c.event, machine_auth_events.c.occurred_at)
-Index("ix_machine_auth_events_ip_event_occurred_at", machine_auth_events.c.ip_key, machine_auth_events.c.event, machine_auth_events.c.occurred_at)
-Index("ix_machine_auth_events_key_event_occurred_at", machine_auth_events.c.fingerprint_key, machine_auth_events.c.event, machine_auth_events.c.occurred_at)
+Index(
+    "ix_machine_auth_events_event_occurred_at",
+    machine_auth_events.c.event,
+    machine_auth_events.c.occurred_at,
+)
+Index(
+    "ix_machine_auth_events_ip_event_occurred_at",
+    machine_auth_events.c.ip_key,
+    machine_auth_events.c.event,
+    machine_auth_events.c.occurred_at,
+)
+Index(
+    "ix_machine_auth_events_key_event_occurred_at",
+    machine_auth_events.c.fingerprint_key,
+    machine_auth_events.c.event,
+    machine_auth_events.c.occurred_at,
+)
 
 
 @dataclass(frozen=True)
@@ -107,7 +143,11 @@ class MachineAuthConfig:
             admin = AdminConfig.from_env()
             audience = _valid_audience(os.environ.get("ADMIN_ORIGIN"))
             keys = authorized_keys_from_env()
-            if audience is None or admin.rate_limit_key is None or shutil.which("ssh-keygen") is None:
+            if (
+                audience is None
+                or admin.rate_limit_key is None
+                or shutil.which("ssh-keygen") is None
+            ):
                 raise ValueError
             return cls(keys, audience, admin.rate_limit_key, True)
         except (TypeError, ValueError, NotImplementedError):
@@ -157,11 +197,23 @@ def _parse_keys(raw: str | None) -> dict[str, AuthorizedKey]:
         if not isinstance(item, dict) or set(item) != {"name", "public_key", "scopes"}:
             raise ValueError
         name, public_key_text, scopes = item["name"], item["public_key"], item["scopes"]
-        if not isinstance(name, str) or not name or name.strip() != name or len(name) > 100 or not isinstance(public_key_text, str):
+        if (
+            not isinstance(name, str)
+            or not name
+            or name.strip() != name
+            or len(name) > 100
+            or not isinstance(public_key_text, str)
+        ):
             raise ValueError
-        if len(public_key_text.split()) != 2 or not public_key_text.startswith("ssh-ed25519 "):
+        if (
+            len(public_key_text) > 1024
+            or len(public_key_text.split()) != 2
+            or not public_key_text.startswith("ssh-ed25519 ")
+        ):
             raise ValueError
-        if not isinstance(scopes, list) or any(type(scope) is not str for scope in scopes):
+        if not isinstance(scopes, list) or any(
+            type(scope) is not str for scope in scopes
+        ):
             raise ValueError
         if len(scopes) != len(set(scopes)) or set(scopes) != SUPPORTED_SCOPES:
             raise ValueError
@@ -169,7 +221,9 @@ def _parse_keys(raw: str | None) -> dict[str, AuthorizedKey]:
         if name in names or fingerprint in keys:
             raise ValueError
         names.add(name)
-        keys[fingerprint] = AuthorizedKey(name, public_key_text, fingerprint, frozenset(scopes))
+        keys[fingerprint] = AuthorizedKey(
+            name, public_key_text, fingerprint, frozenset(scopes)
+        )
     return keys
 
 
@@ -180,11 +234,23 @@ def _ed25519_fingerprint(public_key: str) -> str:
         algorithm_end = 4 + algorithm_length
         key_length = struct.unpack(">I", blob[algorithm_end : algorithm_end + 4])[0]
         key_end = algorithm_end + 4 + key_length
-    except (binascii.Error, IndexError, struct.error, ValueError) as exc:
+    except (
+        binascii.Error,
+        IndexError,
+        struct.error,
+        UnicodeEncodeError,
+        ValueError,
+    ) as exc:
         raise ValueError from exc
-    if blob[4:algorithm_end] != b"ssh-ed25519" or key_length != 32 or key_end != len(blob):
+    if (
+        blob[4:algorithm_end] != b"ssh-ed25519"
+        or key_length != 32
+        or key_end != len(blob)
+    ):
         raise ValueError
-    encoded = base64.b64encode(hashlib.sha256(blob).digest()).rstrip(b"=").decode("ascii")
+    encoded = (
+        base64.b64encode(hashlib.sha256(blob).digest()).rstrip(b"=").decode("ascii")
+    )
     return f"SHA256:{encoded}"
 
 
@@ -227,10 +293,20 @@ def _digest(value: str) -> bytes:
 
 
 def _rfc3339(value: datetime) -> str:
-    return value.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    return (
+        value.astimezone(timezone.utc)
+        .isoformat(timespec="seconds")
+        .replace("+00:00", "Z")
+    )
 
 
-def _message(challenge_id: uuid.UUID, fingerprint: str, nonce: bytes, audience: str, expires_at: datetime) -> str:
+def _message(
+    challenge_id: uuid.UUID,
+    fingerprint: str,
+    nonce: bytes,
+    audience: str,
+    expires_at: datetime,
+) -> str:
     encoded_nonce = base64.urlsafe_b64encode(nonce).rstrip(b"=").decode("ascii")
     return (
         "ween-cli-auth-v1\n"
@@ -253,7 +329,9 @@ class MachineAuthStore:
             connect_args={"connect_timeout": 2, "options": "-c statement_timeout=2000"},
         )
 
-    def issue_challenge(self, fingerprint: str, client_ip: str | None, config: MachineAuthConfig) -> Challenge:
+    def issue_challenge(
+        self, fingerprint: str, client_ip: str | None, config: MachineAuthConfig
+    ) -> Challenge:
         if not config.valid or config.audience is None or config.rate_secret is None:
             raise RuntimeError("machine authentication unavailable")
         now = datetime.now(timezone.utc)
@@ -261,41 +339,106 @@ class MachineAuthStore:
         dummy_id = uuid.uuid4()
         nonce = secrets.token_bytes(32)
         expires_at = now + timedelta(seconds=CHALLENGE_SECONDS)
-        ip_key = rate_limit_key(config.rate_secret, "ip", client_ip) if client_ip else None
+        ip_key = (
+            rate_limit_key(config.rate_secret, "ip", client_ip) if client_ip else None
+        )
         with self.engine.begin() as connection:
             self._lock(connection)
-            retry = self._retry_after(connection, "challenge", (("ip_key", ip_key, 30), (None, None, 300)), now, 15)
+            retry = self._retry_after(
+                connection,
+                "challenge",
+                (("ip_key", ip_key, 30), (None, None, 300)),
+                now,
+                15,
+            )
             if retry:
                 raise Throttled(retry)
-            connection.execute(insert(machine_auth_events).values(event="challenge", ip_key=ip_key))
-            connection.execute(insert(machine_auth_challenges).values(
-                challenge_id=challenge_id, key_fingerprint=fingerprint, nonce=nonce,
-                audience=config.audience, expires_at=expires_at,
-            ))
+            connection.execute(
+                insert(machine_auth_events).values(event="challenge", ip_key=ip_key)
+            )
+            connection.execute(
+                insert(machine_auth_challenges).values(
+                    challenge_id=challenge_id,
+                    key_fingerprint=fingerprint,
+                    nonce=nonce,
+                    audience=config.audience,
+                    expires_at=expires_at,
+                )
+            )
             discard_id = dummy_id if fingerprint in config.keys else challenge_id
-            connection.execute(delete(machine_auth_challenges).where(machine_auth_challenges.c.challenge_id == discard_id))
+            connection.execute(
+                delete(machine_auth_challenges).where(
+                    machine_auth_challenges.c.challenge_id == discard_id
+                )
+            )
             self._cleanup(connection, now)
-        return Challenge(challenge_id, _message(challenge_id, fingerprint, nonce, config.audience, expires_at), expires_at)
+        return Challenge(
+            challenge_id,
+            _message(challenge_id, fingerprint, nonce, config.audience, expires_at),
+            expires_at,
+        )
 
-    def exchange(self, challenge_id: uuid.UUID, signature: str, client_ip: str | None, config: MachineAuthConfig) -> Token:
+    def exchange(
+        self,
+        challenge_id: uuid.UUID,
+        signature: str,
+        client_ip: str | None,
+        config: MachineAuthConfig,
+    ) -> Token:
         if not config.valid or config.rate_secret is None:
             raise RuntimeError("machine authentication unavailable")
         now = datetime.now(timezone.utc)
         with self.engine.connect() as connection:
-            row = connection.execute(select(machine_auth_challenges).where(machine_auth_challenges.c.challenge_id == challenge_id)).mappings().one_or_none()
+            row = (
+                connection.execute(
+                    select(machine_auth_challenges).where(
+                        machine_auth_challenges.c.challenge_id == challenge_id
+                    )
+                )
+                .mappings()
+                .one_or_none()
+            )
         fingerprint = row["key_fingerprint"] if row else None
-        ip_key = rate_limit_key(config.rate_secret, "ip", client_ip) if client_ip else None
-        fingerprint_key = rate_limit_key(config.rate_secret, "fingerprint", fingerprint) if fingerprint else None
+        ip_key = (
+            rate_limit_key(config.rate_secret, "ip", client_ip) if client_ip else None
+        )
+        fingerprint_key = (
+            rate_limit_key(config.rate_secret, "fingerprint", fingerprint)
+            if fingerprint
+            else None
+        )
         with self.engine.begin() as connection:
             self._lock(connection)
-            retry = self._retry_after(connection, "exchange_failure", (("ip_key", ip_key, 5), ("fingerprint_key", fingerprint_key, 5), (None, None, 30)), now, 15)
+            retry = self._retry_after(
+                connection,
+                "exchange_failure",
+                (
+                    ("ip_key", ip_key, 5),
+                    ("fingerprint_key", fingerprint_key, 5),
+                    (None, None, 30),
+                ),
+                now,
+                15,
+            )
             if retry:
                 raise Throttled(retry)
         key = config.keys.get(fingerprint or "")
-        valid = bool(row and key and row["expires_at"] > now and row["consumed_at"] is None and row["audience"] == config.audience)
+        valid = bool(
+            row
+            and key
+            and row["expires_at"] > now
+            and row["consumed_at"] is None
+            and row["audience"] == config.audience
+        )
         valid = valid and bool(_ARMORED_SIGNATURE.fullmatch(signature))
         if valid:
-            message = _message(challenge_id, fingerprint, row["nonce"], row["audience"], row["expires_at"])
+            message = _message(
+                challenge_id,
+                fingerprint,
+                row["nonce"],
+                row["audience"],
+                row["expires_at"],
+            )
             valid = _verify_signature(message.encode(), signature, key)
         if not valid:
             self._record_failure(ip_key, fingerprint_key, now)
@@ -306,36 +449,66 @@ class MachineAuthStore:
         with self.engine.begin() as connection:
             result = connection.execute(
                 update(machine_auth_challenges)
-                .where(and_(machine_auth_challenges.c.challenge_id == challenge_id, machine_auth_challenges.c.consumed_at.is_(None), machine_auth_challenges.c.expires_at > now))
+                .where(
+                    and_(
+                        machine_auth_challenges.c.challenge_id == challenge_id,
+                        machine_auth_challenges.c.consumed_at.is_(None),
+                        machine_auth_challenges.c.expires_at > now,
+                    )
+                )
                 .values(consumed_at=now)
             )
             if result.rowcount != 1:
                 raise InvalidProof
-            connection.execute(insert(machine_auth_tokens).values(
-                token_digest=_digest(access_token), key_fingerprint=fingerprint,
-                scopes=sorted(key.scopes), issued_at=now, expires_at=expires_at,
-            ))
+            connection.execute(
+                insert(machine_auth_tokens).values(
+                    token_digest=_digest(access_token),
+                    key_fingerprint=fingerprint,
+                    scopes=sorted(key.scopes),
+                    issued_at=now,
+                    expires_at=expires_at,
+                )
+            )
             clear_failures = machine_auth_events.c.fingerprint_key == fingerprint_key
             if ip_key is not None:
-                clear_failures = clear_failures | (machine_auth_events.c.ip_key == ip_key)
-            connection.execute(delete(machine_auth_events).where(and_(
-                machine_auth_events.c.event == "exchange_failure", clear_failures
-            )))
+                clear_failures = clear_failures | (
+                    machine_auth_events.c.ip_key == ip_key
+                )
+            connection.execute(
+                delete(machine_auth_events).where(
+                    and_(
+                        machine_auth_events.c.event == "exchange_failure",
+                        clear_failures,
+                    )
+                )
+            )
         return Token(access_token, tuple(sorted(key.scopes)))
 
-    def reject_exchange(self, client_ip: str | None, config: MachineAuthConfig) -> int | None:
+    def reject_exchange(
+        self, client_ip: str | None, config: MachineAuthConfig
+    ) -> int | None:
         if not config.valid or config.rate_secret is None:
             raise RuntimeError("machine authentication unavailable")
         now = datetime.now(timezone.utc)
-        ip_key = rate_limit_key(config.rate_secret, "ip", client_ip) if client_ip else None
+        ip_key = (
+            rate_limit_key(config.rate_secret, "ip", client_ip) if client_ip else None
+        )
         with self.engine.begin() as connection:
             self._lock(connection)
             retry = self._retry_after(
-                connection, "exchange_failure", (("ip_key", ip_key, 5), (None, None, 30)), now, 15
+                connection,
+                "exchange_failure",
+                (("ip_key", ip_key, 5), (None, None, 30)),
+                now,
+                15,
             )
             if retry is not None:
                 return retry
-            connection.execute(insert(machine_auth_events).values(event="exchange_failure", ip_key=ip_key))
+            connection.execute(
+                insert(machine_auth_events).values(
+                    event="exchange_failure", ip_key=ip_key
+                )
+            )
             self._cleanup(connection, now)
             return None
 
@@ -344,7 +517,15 @@ class MachineAuthStore:
             return None
         now = datetime.now(timezone.utc)
         with self.engine.begin() as connection:
-            row = connection.execute(select(machine_auth_tokens).where(machine_auth_tokens.c.token_digest == _digest(token))).mappings().one_or_none()
+            row = (
+                connection.execute(
+                    select(machine_auth_tokens).where(
+                        machine_auth_tokens.c.token_digest == _digest(token)
+                    )
+                )
+                .mappings()
+                .one_or_none()
+            )
             if not row or row["expires_at"] <= now or row["revoked_at"] is not None:
                 return None
             key = config.keys.get(row["key_fingerprint"])
@@ -360,25 +541,47 @@ class MachineAuthStore:
         fingerprint_key = rate_limit_key(config.rate_secret, "fingerprint", fingerprint)
         with self.engine.begin() as connection:
             self._lock(connection)
-            retry = self._retry_after(connection, "timeline_create", (("fingerprint_key", fingerprint_key, 30),), now, 60)
+            retry = self._retry_after(
+                connection,
+                "timeline_create",
+                (("fingerprint_key", fingerprint_key, 30),),
+                now,
+                60,
+            )
             if retry:
                 return retry
-            connection.execute(insert(machine_auth_events).values(event="timeline_create", fingerprint_key=fingerprint_key))
+            connection.execute(
+                insert(machine_auth_events).values(
+                    event="timeline_create", fingerprint_key=fingerprint_key
+                )
+            )
             return None
 
-    def _record_failure(self, ip_key: bytes | None, fingerprint_key: bytes | None, now: datetime) -> None:
+    def _record_failure(
+        self, ip_key: bytes | None, fingerprint_key: bytes | None, now: datetime
+    ) -> None:
         with self.engine.begin() as connection:
             self._lock(connection)
             retry = self._retry_after(
                 connection,
                 "exchange_failure",
-                (("ip_key", ip_key, 5), ("fingerprint_key", fingerprint_key, 5), (None, None, 30)),
+                (
+                    ("ip_key", ip_key, 5),
+                    ("fingerprint_key", fingerprint_key, 5),
+                    (None, None, 30),
+                ),
                 now,
                 15,
             )
             if retry is not None:
                 raise Throttled(retry)
-            connection.execute(insert(machine_auth_events).values(event="exchange_failure", ip_key=ip_key, fingerprint_key=fingerprint_key))
+            connection.execute(
+                insert(machine_auth_events).values(
+                    event="exchange_failure",
+                    ip_key=ip_key,
+                    fingerprint_key=fingerprint_key,
+                )
+            )
             self._cleanup(connection, now)
 
     @staticmethod
@@ -386,40 +589,72 @@ class MachineAuthStore:
         connection.execute(text("SELECT pg_advisory_xact_lock(843921771)"))
 
     @staticmethod
-    def _retry_after(connection, event: str, limits: tuple[tuple[str | None, bytes | None, int], ...], now: datetime, window_minutes: int) -> int | None:
+    def _retry_after(
+        connection,
+        event: str,
+        limits: tuple[tuple[str | None, bytes | None, int], ...],
+        now: datetime,
+        window_minutes: int,
+    ) -> int | None:
         cutoff = now - timedelta(minutes=window_minutes)
         relevant: datetime | None = None
         for column, value, limit in limits:
             if column is not None and value is None:
                 continue
-            query = select(machine_auth_events.c.occurred_at).where(machine_auth_events.c.event == event, machine_auth_events.c.occurred_at > cutoff)
+            query = select(machine_auth_events.c.occurred_at).where(
+                machine_auth_events.c.event == event,
+                machine_auth_events.c.occurred_at > cutoff,
+            )
             if column:
                 query = query.where(getattr(machine_auth_events.c, column) == value)
-            rows = connection.execute(query.order_by(machine_auth_events.c.occurred_at.desc()).limit(limit)).scalars().all()
+            rows = (
+                connection.execute(
+                    query.order_by(machine_auth_events.c.occurred_at.desc()).limit(
+                        limit
+                    )
+                )
+                .scalars()
+                .all()
+            )
             if len(rows) >= limit:
                 oldest = rows[-1]
                 relevant = max(relevant, oldest) if relevant else oldest
         if relevant is None:
             return None
-        return max(1, math.ceil((relevant + timedelta(minutes=window_minutes) - now).total_seconds()))
+        return max(
+            1,
+            math.ceil(
+                (relevant + timedelta(minutes=window_minutes) - now).total_seconds()
+            ),
+        )
 
     @staticmethod
     def _cleanup(connection, now: datetime) -> None:
         for table, condition in (
             (machine_auth_challenges, machine_auth_challenges.c.expires_at < now),
             (machine_auth_tokens, machine_auth_tokens.c.expires_at < now),
-            (machine_auth_events, machine_auth_events.c.occurred_at < now - timedelta(hours=1)),
+            (
+                machine_auth_events,
+                machine_auth_events.c.occurred_at < now - timedelta(hours=1),
+            ),
         ):
             ids = select(*(table.primary_key.columns)).where(condition).limit(100)
-            connection.execute(delete(table).where(tuple(table.primary_key.columns)[0].in_(ids)))
+            connection.execute(
+                delete(table).where(next(iter(table.primary_key.columns)).in_(ids))
+            )
 
     def close(self) -> None:
         self.engine.dispose()
 
 
-def safe_config_summary(keys: dict[str, AuthorizedKey] | None = None) -> list[dict[str, Any]]:
+def safe_config_summary(
+    keys: dict[str, AuthorizedKey] | None = None,
+) -> list[dict[str, Any]]:
     try:
         parsed = keys if keys is not None else authorized_keys_from_env()
     except (TypeError, ValueError, NotImplementedError) as exc:
         raise ValueError("invalid ADMIN_SSH_KEYS configuration") from exc
-    return [{"name": key.name, "fingerprint": key.fingerprint, "scopes": sorted(key.scopes)} for key in parsed.values()]
+    return [
+        {"name": key.name, "fingerprint": key.fingerprint, "scopes": sorted(key.scopes)}
+        for key in parsed.values()
+    ]

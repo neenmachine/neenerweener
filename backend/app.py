@@ -1,5 +1,4 @@
 import asyncio
-import asyncio
 import json
 import logging
 import os
@@ -57,7 +56,12 @@ from machine_auth import (
     Principal,
     Throttled,
 )
-from timeline import TimelineStore, TimelineStoreProtocol, serialize_entry, validate_timeline_body
+from timeline import (
+    TimelineStore,
+    TimelineStoreProtocol,
+    serialize_entry,
+    validate_timeline_body,
+)
 
 logger = logging.getLogger(__name__)
 

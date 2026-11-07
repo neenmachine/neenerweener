@@ -120,11 +120,15 @@ def _key(path):
     return p
 
 
-def _run(args, stdin=None):
+def _run(args, stdin=None, timeout=TIMEOUT):
     try:
-        return subprocess.run(args, input=stdin, capture_output=True, timeout=TIMEOUT, check=False, shell=False)
-    except (OSError, subprocess.TimeoutExpired) as e:
-        raise SignerAuthError("ssh-keygen is unavailable or timed out") from e
+        return subprocess.run(args, input=stdin, capture_output=True, timeout=timeout, check=False, shell=False)
+    except FileNotFoundError:
+        raise SignerAuthError("ssh-keygen not found") from None
+    except OSError:
+        raise SignerAuthError("cannot run ssh-keygen") from None
+    except subprocess.TimeoutExpired:
+        raise SignerAuthError("ssh-keygen timed out") from None
 
 
 def _fingerprint(key):
@@ -185,9 +189,9 @@ def _safe_server_value(value, sensitive, limit):
             and not any(secret in value for secret in sensitive) else None)
 
 
-def _http_error(error, sensitive):
+def _http_error(error, sensitive, rejected):
     if error.code == 422:
-        detail = "server rejected the tweet"
+        detail = rejected
         try:
             candidate = _json_response(error).get("detail")
             detail = _safe_server_value(candidate, sensitive, 120) or detail
@@ -217,7 +221,7 @@ def _request(server, path, payload, bearer=None):
     try:
         response = OPENER.open(request, timeout=TIMEOUT)
     except HTTPError as error:
-        raise _http_error(error, sensitive)
+        raise _http_error(error, sensitive, "server rejected the tweet" if bearer else "server rejected the sign-in request")
     except (URLError, TimeoutError, OSError) as error:
         raise NetworkError("network or TLS error; retry") from error
     return _json_response(response)
@@ -281,7 +285,9 @@ def post(server, key, text):
     fingerprint = _fingerprint(key)
     challenge = _request(server, "/api/cli/auth/challenge", {"key_fingerprint": fingerprint})
     challenge_id, message = _challenge(challenge)
-    signed = _run(["ssh-keygen", "-Y", "sign", "-n", NAMESPACE, "-f", str(key)], message)
+    # No timeout when interactive: a passphrase prompt is not a hang, and killing it leaves the tty without echo.
+    timeout = None if sys.stdin.isatty() else TIMEOUT
+    signed = _run(["ssh-keygen", "-Y", "sign", "-n", NAMESPACE, "-f", str(key)], message, timeout)
     signature = _signature(signed)
     token_data = _request(server, "/api/cli/auth/token", {"challenge_id": challenge_id, "signature": signature})
     token = _token(token_data)
@@ -306,12 +312,15 @@ def main(argv=None):
         args = parser().parse_args(argv)
         cfg = _config()
         server = _server(args.server or os.environ.get("WEEN_SERVER") or cfg.get("server", "https://www.neenerweener.ca"))
-        key = _key(args.key or os.environ.get("WEEN_SSH_KEY") or cfg.get("key", "~/.ssh/ween_tweet_ed25519.pub"))
+        key = _key(args.key or os.environ.get("WEEN_SSH_KEY") or cfg.get("key", "~/.ssh/ween_tweet_ed25519"))
         print(post(server, key, args.text))
         return 0
     except tuple(ERROR_CODES) as error:
         print(f"tweet: {error}", file=sys.stderr)
         return ERROR_CODES[type(error)]
-    except (Exception, KeyboardInterrupt):  # noqa: BLE001 - final public safety boundary
+    except KeyboardInterrupt:
+        print("tweet: interrupted", file=sys.stderr)
+        return 130
+    except Exception:  # noqa: BLE001 - final public safety boundary
         print("tweet: internal error", file=sys.stderr)
         return 1

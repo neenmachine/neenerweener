@@ -6,7 +6,9 @@ import os
 import shutil
 import subprocess
 import tempfile
+import threading
 import unittest
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
@@ -139,7 +141,7 @@ class CliTests(unittest.TestCase):
                 error = cli.HTTPError("https://s", status, "private reason", headers, None)
                 error.read = lambda n=-1: b"{}"
                 stderr = io.StringIO()
-                with patch.object(cli, "_config", return_value={}), patch.object(cli, "post", side_effect=cli._http_error(error, set())), contextlib.redirect_stderr(stderr):
+                with patch.object(cli, "_config", return_value={}), patch.object(cli, "post", side_effect=cli._http_error(error, set(), "server rejected the tweet")), contextlib.redirect_stderr(stderr):
                     result = cli.main(["--server", "https://s.example", "--key", str(self.key), "private tweet input"])
                 self.assertEqual(result, expected_code)
                 self.assertEqual(stderr.getvalue(), expected_message)
@@ -159,7 +161,7 @@ class CliTests(unittest.TestCase):
         calls=[]
         responses = iter([Response({"challenge_id":"123e4567-e89b-12d3-a456-426614174000", "message":"line\nfinal\n", "namespace":cli.NAMESPACE, "expires_at":"2099-01-01T00:00:00Z"}), Response({"access_token":"tok-123", "token_type":"Bearer", "expires_in":600, "scopes":["timeline:create", "timeline:read"]}), Response({"id":7})])
         def open_(request, timeout): calls.append(request); return next(responses)
-        def run(args, stdin=None):
+        def run(args, stdin=None, timeout=cli.TIMEOUT):
             if args[1:3] == ["-lf", str(self.key)]: return subprocess.CompletedProcess(args, 0, b"256 SHA256:fp comment\n", b"")
             self.assertEqual(args, ["ssh-keygen", "-Y", "sign", "-n", cli.NAMESPACE, "-f", str(self.key)])
             self.assertEqual(stdin, b"line\nfinal\n")
@@ -195,13 +197,17 @@ class CliTests(unittest.TestCase):
                 self.assertNotIn("private", stderr.getvalue())
                 self.assertNotIn(str(self.key), stderr.getvalue())
 
-        for signer_error in [OSError("private path"), subprocess.TimeoutExpired("private command", 15)]:
+        for signer_error, message in [
+            (FileNotFoundError("private path"), "ssh-keygen not found"),
+            (OSError("private path"), "cannot run ssh-keygen"),
+            (subprocess.TimeoutExpired("private command", 15), "ssh-keygen timed out"),
+        ]:
             with self.subTest(error=type(signer_error).__name__):
                 stderr = io.StringIO()
                 with patch.object(cli, "_fingerprint", return_value="SHA256:fp"), patch.object(cli, "_request", return_value=challenge), patch("subprocess.run", side_effect=signer_error), contextlib.redirect_stderr(stderr):
                     result = cli.main(["--server", "https://s.example", "--key", str(self.key), "private tweet input"])
                 self.assertEqual(result, 3)
-                self.assertEqual(stderr.getvalue(), "tweet: ssh-keygen is unavailable or timed out\n")
+                self.assertEqual(stderr.getvalue(), f"tweet: {message}\n")
                 self.assertNotIn("private", stderr.getvalue())
                 self.assertNotIn(str(self.key), stderr.getvalue())
 
@@ -247,7 +253,7 @@ class CliTests(unittest.TestCase):
             error.read = lambda n=-1, secrets=secrets: json.dumps({"detail": "leak " + " ".join(secrets)}).encode()
             with patch.object(cli.OPENER, "open", side_effect=error), self.assertRaises(cli.CliError) as cm:
                     cli._request("https://s", "/api/admin/timeline", payload, bearer)
-            self.assertEqual(str(cm.exception), "server rejected the tweet")
+            self.assertEqual(str(cm.exception), "server rejected the tweet" if bearer else "server rejected the sign-in request")
 
     def test_tweet_omits_unsafe_server_headers(self):
         cases = ["line\nbreak", "null\x00byte", "delete\x7fbyte", "x" * 81]
@@ -300,6 +306,82 @@ class CliTests(unittest.TestCase):
         ]:
             with self.assertRaisesRegex(cli.CliError, "invalid response"):
                 cli._token(token)
+
+    def _post_with_signer(self, isatty, run):
+        challenge = {"challenge_id":"123e4567-e89b-12d3-a456-426614174000", "message":"m", "namespace":cli.NAMESPACE, "expires_at":"2099-01-01T00:00:00Z"}
+        token = {"access_token":"tok", "token_type":"Bearer", "expires_in":600, "scopes":["timeline:create", "timeline:read"]}
+        with patch.object(cli, "_fingerprint", return_value="SHA256:fp"), patch.object(cli, "_request", side_effect=[challenge, token, {"id":1}]), \
+                patch.object(cli.sys.stdin, "isatty", return_value=isatty), patch("subprocess.run", side_effect=run) as run_mock:
+            return cli.post("https://s.example", self.key, "text"), run_mock
+
+    def test_tweet_sign_has_no_timeout_only_when_interactive(self):
+        for isatty, expected in [(True, None), (False, cli.TIMEOUT)]:
+            with self.subTest(isatty=isatty):
+                _, run = self._post_with_signer(isatty, lambda *a, **k: subprocess.CompletedProcess([], 0, signature_bytes(), b""))
+                self.assertEqual(run.call_args.args[0][:3], ["ssh-keygen", "-Y", "sign"])
+                self.assertIs(run.call_args.kwargs["timeout"], expected)
+
+    def test_tweet_ctrl_c_exits_130_without_traceback(self):
+        stderr = io.StringIO()
+        with patch.object(cli, "_config", return_value={}), patch.object(cli, "_fingerprint", return_value="SHA256:fp"), \
+                patch.object(cli, "_request", return_value={"challenge_id":"123e4567-e89b-12d3-a456-426614174000", "message":"m", "namespace":cli.NAMESPACE, "expires_at":"2099-01-01T00:00:00Z"}), \
+                patch("subprocess.run", side_effect=KeyboardInterrupt), contextlib.redirect_stderr(stderr):
+            result = cli.main(["--server", "https://s.example", "--key", str(self.key), "text"])
+        self.assertEqual(result, 130)
+        self.assertEqual(stderr.getvalue(), "tweet: interrupted\n")
+
+    def test_tweet_422_message_names_the_failed_step(self):
+        challenge = Response({"challenge_id":"123e4567-e89b-12d3-a456-426614174000", "message":"m", "namespace":cli.NAMESPACE, "expires_at":"2099-01-01T00:00:00Z"})
+        token = Response({"access_token":"tok", "token_type":"Bearer", "expires_in":600, "scopes":["timeline:create", "timeline:read"]})
+        signed = subprocess.CompletedProcess([], 0, signature_bytes(), b"")
+        for step, expected in [(0, "sign-in request"), (1, "sign-in request"), (2, "tweet")]:
+            with self.subTest(step=step):
+                error = cli.HTTPError("https://s", 422, "x", {}, None)
+                error.read = lambda n=-1: b"{}"
+                stderr = io.StringIO()
+                with patch.object(cli, "_config", return_value={}), patch.object(cli, "_fingerprint", return_value="SHA256:fp"), \
+                        patch.object(cli, "_run", return_value=signed), patch.object(cli.OPENER, "open", side_effect=[challenge, token][:step] + [error]), \
+                        contextlib.redirect_stderr(stderr):
+                    result = cli.main(["--server", "https://s.example", "--key", str(self.key), "text"])
+                self.assertEqual(result, 4)
+                self.assertEqual(stderr.getvalue(), f"tweet: server rejected the {expected}\n")
+
+    def test_tweet_refuses_redirects(self):
+        followed = []
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                self.send_response(302); self.send_header("Location", "/elsewhere"); self.send_header("Content-Length", "0"); self.end_headers()
+            def do_GET(self):
+                followed.append(self.path)
+                body = b'{"id": 1}'
+                self.send_response(200); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
+            do_PUT = do_POST
+            def log_message(self, *args): pass
+        server = HTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with self.assertRaises(cli.NetworkError) as cm:
+                cli._request(f"http://127.0.0.1:{server.server_port}", "/api/cli/auth/challenge", {"key_fingerprint":"SHA256:fp"})
+        finally:
+            server.shutdown(); server.server_close(); thread.join(10)
+        self.assertEqual(str(cm.exception), "server redirect rejected; retry with the configured server")
+        self.assertEqual(followed, [])
+
+    def test_tweet_key_path_expands_home_in_config_and_default(self):
+        home = Path(self.tmp.name)
+        (home / ".ssh").mkdir()
+        config = home / ".config" / "ween" / "config.toml"
+        config.parent.mkdir(parents=True)
+        for key_name, config_text in [("custom_key", 'key = "~/.ssh/custom_key"\n'), ("ween_tweet_ed25519", "")]:
+            with self.subTest(key=key_name):
+                key = home / ".ssh" / key_name
+                key.write_text("private key\n"); key.chmod(0o600)
+                config.write_text(config_text)
+                env = {k: v for k, v in os.environ.items() if k not in ("WEEN_SSH_KEY", "WEEN_SERVER")}
+                with patch.dict(os.environ, {**env, "HOME": str(home)}, clear=True), patch.object(cli, "post", return_value="ok") as post:
+                    self.assertEqual(cli.main(["text"]), 0)
+                post.assert_called_once_with("https://www.neenerweener.ca", key, "text")
 
     @unittest.skipUnless(shutil.which("ssh-keygen"), "ssh-keygen unavailable")
     def test_real_interoperability_signature_verifies(self):

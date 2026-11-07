@@ -203,7 +203,8 @@ async def security_middleware(request: Request, call_next):
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     response.headers["Content-Security-Policy-Report-Only"] = (
-        "default-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; "
+        # blob: for the local previews of images being attached in the admin compose form
+        "default-src 'self'; script-src 'self'; img-src 'self' blob:; connect-src 'self'; object-src 'none'; "
         "base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
     )
     return response

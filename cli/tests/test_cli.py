@@ -409,6 +409,22 @@ class CliTests(unittest.TestCase):
                 cli.post("https://s.example", self.key, "hello", tuple([first] * 5), ())
         self.assertEqual(str(error.exception), "at most 4 images")
 
+    def test_tweet_pairs_two_alts_in_order(self):
+        first = Path(self.tmp.name) / "one.png"; first.write_bytes(b"\x89PNG\r\n\x1a\ntest")
+        second = Path(self.tmp.name) / "two.webp"; second.write_bytes(b"RIFFxxxxWEBPtest")
+        created = {"id": 7}
+        requests = []
+        def request(server, path, payload, bearer=None):
+            requests.append((path, payload))
+            if path.endswith("challenge"):
+                return {"challenge_id":"123e4567-e89b-12d3-a456-426614174000", "message":"m", "namespace":cli.NAMESPACE, "expires_at":"2099-01-01T00:00:00Z"}
+            if path.endswith("token"):
+                return {"access_token":"tok", "token_type":"Bearer", "expires_in":600, "scopes":["timeline:create", "timeline:read"]}
+            return created
+        with patch.object(cli, "_fingerprint", return_value="fp"), patch.object(cli, "_request", side_effect=request), patch.object(cli, "_upload", side_effect=["123e4567-e89b-12d3-a456-426614174000", "223e4567-e89b-12d3-a456-426614174000"]), patch.object(cli, "_run", return_value=subprocess.CompletedProcess([], 0, signature_bytes(), b"")):
+            cli.post("https://s.example", self.key, "hello", (first, second), ("first", "second"))
+        self.assertEqual(requests[-1][1]["attachments"], [{"id":"123e4567-e89b-12d3-a456-426614174000", "alt":"first"}, {"id":"223e4567-e89b-12d3-a456-426614174000", "alt":"second"}])
+
     def test_tweet_rejects_invalid_or_large_images_before_network(self):
         bad = Path(self.tmp.name) / "bad.jpg"; bad.write_bytes(b"not image")
         with patch.object(cli, "_fingerprint", side_effect=AssertionError("network")):

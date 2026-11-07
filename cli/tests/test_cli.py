@@ -377,7 +377,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(str(cm.exception), "server redirect rejected; retry with the configured server")
         self.assertEqual(followed, [])
 
-    def run_attachment_cli(self, args, responses):
+    def run_attachment_cli(self, args, responses, authenticate=True):
         calls = []
         responses = iter(responses)
 
@@ -390,8 +390,9 @@ class CliTests(unittest.TestCase):
 
         stderr = io.StringIO()
         stdout = io.StringIO()
-        with patch.object(cli.OPENER, "open", side_effect=open_), \
-                patch.object(cli, "_fingerprint", return_value="SHA256:fp"), \
+        fingerprint = patch.object(cli, "_fingerprint", return_value="SHA256:fp") if authenticate else \
+            patch.object(cli, "_fingerprint", side_effect=AssertionError("authentication"))
+        with patch.object(cli.OPENER, "open", side_effect=open_), fingerprint, \
                 patch.object(cli, "_run", return_value=subprocess.CompletedProcess([], 0, signature_bytes(), b"")), \
                 contextlib.redirect_stderr(stderr), contextlib.redirect_stdout(stdout):
             result = cli.main(["--server", "https://s.example", "--key", str(self.key), *args])
@@ -583,7 +584,7 @@ class CliTests(unittest.TestCase):
         ]
         for args, message in cases:
             with self.subTest(message=message):
-                result, stderr, _, calls = self.run_attachment_cli(args, [])
+                result, stderr, _, calls = self.run_attachment_cli(args, [], authenticate=False)
                 self.assertEqual(result, 2)
                 self.assertEqual(stderr, f"tweet: {message}\n")
                 self.assertEqual(calls, [])

@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 import threading
 import time
 from datetime import date
@@ -77,11 +78,14 @@ def test_only_admin_page_has_no_javascript_notice(tmp_path, monkeypatch):
     (posts / "hello.md").write_text("---\ntitle: Hi\ndate: 2026-01-01\n---\nbody\n")
     monkeypatch.setattr(app, "FRONTEND_DIST", dist)
     monkeypatch.setattr(app, "POSTS_DIR", posts)
-    notice = "<noscript><main><p class=\"muted\">the admin panel needs JavaScript</p></main></noscript>"
-
     with TestClient(app.app) as client:
         for path in ("/admin", "/admin/"):
-            assert notice in client.get(path).text
+            page = client.get(path).text
+            assert "<title>admin</title>" in page
+            noscript = re.search(r"<noscript>(.*?)</noscript>", page, re.S)[1]
+            assert '<p class="muted">the admin panel needs JavaScript</p>' in noscript
+            assert "<h1>admin</h1>" in noscript
+            assert '<footer><a href="/">neenerweener</a><a href="/timeline">timeline</a></footer>' in noscript
         for path in ("/", "/timeline", "/posts/hello"):
             page = client.get(path)
             assert page.status_code in (200, 503)  # 503: /timeline has no database in tests

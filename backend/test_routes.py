@@ -99,7 +99,7 @@ def test_not_found_pages_have_one_labeled_heading_and_main(client):
         preload = re.search(r'<script id="preload" type="application/json">(.*?)</script>', response.text)[1]
         assert json.loads(preload)["page"]["label"] == label
         assert '<footer><a href="/">neenerweener</a><a href="/timeline">timeline</a></footer></main>' in response.text
-        assert response.text.count('href="/"') == 2  # the back arrow on posts, or the untabbable copy under the heading, plus the footer
+        assert response.text.count('href="/"') == 2  # the back arrow on posts, or the link under the heading, plus the footer
 
 
 CASES = json.loads((Path(__file__).parents[1] / "frontend/src/route_cases.json").read_text())["rows"]
@@ -110,6 +110,7 @@ def site(tmp_path, monkeypatch):
     dist = tmp_path / "dist"
     dist.mkdir()
     (dist / "index.html").write_text('<html><head><title>neenerweener</title></head><body><div id="root"></div></body></html>')
+    (dist / "favicon.svg").write_text("<svg/>")
     posts = tmp_path / "posts"
     posts.mkdir()
     (posts / "hello.md").write_text("---\ntitle: hello\ndate: 2026-01-01\n---\nbody\n")
@@ -140,6 +141,9 @@ def test_route_table(site, case):
     if "page" not in case:
         return
     markup = re.search(r'<div id="root">(.*)</div></body>', get.text, re.S)[1]
+    # Pages kept out of search say so in the markup too, so it matches the header without JavaScript.
+    if case["noindex"]:
+        assert '<meta name="robots" content="noindex">' in get.text
     if "markup" in case:
         assert markup == case["markup"]
     if markup:
@@ -149,6 +153,10 @@ def test_route_table(site, case):
     preload = json.loads(re.search(r'<script id="preload" type="application/json">(.*?)</script>', get.text)[1])
     assert preload["page"] == case["page"]
     assert set(preload) == {"page"} | set(case["data"])
+
+
+def test_every_page_kind_has_a_renderer():
+    assert set(app.RENDERERS) == {kind for kind, _ in routes.ROUTES}
 
 
 def test_route_table_covers_every_page_kind():

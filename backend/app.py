@@ -876,14 +876,14 @@ def frontend(path: str, request: Request):
     index = contained_file(root, "index.html")
     if not index:
         raise HTTPException(404, "not found", headers=headers)
+    # One redirect to the one URL form, files included: extra slashes go, and /index.html is /.
+    target = routes.canonical("/" + path)
     file = contained_file(root, path)
-    if file and file != index:
-        return FileResponse(file, headers=headers)
-    # One redirect to the one URL form: /index.html is /, and extra slashes go.
-    target = "/" if file == index else routes.canonical("/" + path)
-    if target != "/" + path:
+    if target != "/" + path or file == index:
         query = f"?{request.url.query}" if request.url.query else ""
-        return RedirectResponse(quote(target, safe="/") + query, status_code=301, headers=headers)
+        return RedirectResponse(quote("/" if file == index else target, safe="/") + query, status_code=301, headers=headers)
+    if file:
+        return FileResponse(file, headers=headers)
     preload, head, markup, status_code = render_page(routes.match(target), request)
     return HTMLResponse(fill_index(index.read_text(encoding="utf-8"), preload, head, markup), status_code=status_code, headers=headers)
 
@@ -893,14 +893,9 @@ def render_page(match: tuple[str, dict[str, str]] | None, request: Request) -> t
     if match is None:
         return not_found_page("not found")
     kind, params = match
-    preload, head, markup, status_code = RENDERERS.get(kind, shell_page)(request, **params)
+    preload, head, markup, status_code = RENDERERS[kind](request, **params)
     # A renderer that answers not-found sets its own page.
     return {"page": {"kind": kind, **params}} | preload, head, markup, status_code
-
-
-def shell_page(request: Request) -> tuple[dict, dict, str, int]:
-    """A page React renders alone, with no server markup."""
-    return {}, {"title": "neenerweener"}, "", 200
 
 
 def home_page(request: Request) -> tuple[dict, dict, str, int]:
@@ -922,7 +917,7 @@ def timeline_before(request: Request) -> int | None:
 
 
 def admin_page(request: Request) -> tuple[dict, dict, str, int]:
-    return {}, {"title": "admin"}, ADMIN_NOSCRIPT, 200
+    return {}, {"title": "admin", "robots": "noindex"}, ADMIN_NOSCRIPT, 200
 
 
 # The server footer for pages other than /timeline; Footer in App.tsx renders the same links.
@@ -957,8 +952,7 @@ RENDERERS = {"home": home_page, "timeline": timeline_page_data, "admin": admin_p
 def not_found_page(label: str, back: bool = False) -> tuple[dict, dict, str, int]:
     """The one not-found view; the React app reads it from the preload and renders the same markup."""
     heading = f'<h1 class="muted">{escape(label)}</h1>'
-    # The footer already links home, so this visible copy is skipped by Tab and screen readers.
-    heading = f'<div class="has-back"><a class="back" href="/" aria-label="back">←</a>{heading}</div>' if back else f'{heading}<a href="/" tabindex="-1" aria-hidden="true">neenerweener</a>'
+    heading = f'<div class="has-back"><a class="back" href="/" aria-label="back">←</a>{heading}</div>' if back else f'{heading}<a href="/">neenerweener</a>'
     markup = f'<main>{heading}{SITE_FOOTER}</main>'
     page = {"kind": "not-found", "label": label, "back": back}
     return {"page": page}, {"title": "not found", "robots": "noindex"}, markup, 404

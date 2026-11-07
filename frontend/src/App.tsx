@@ -65,7 +65,9 @@ export default function App() {
         </Shell>
       );
     default:
-      return page satisfies never;
+      // A kind this bundle does not know (a newer server) shows not found; `satisfies never` keeps the switch exhaustive.
+      page satisfies never;
+      return <NotFound label="not found" back={false} />;
   }
 }
 
@@ -90,10 +92,7 @@ function NotFound({ label, back }: { label: string; back: boolean }) {
       ) : (
         <>
           <h1 className="muted">{label}</h1>
-          {/* The footer already links home, so this visible copy is skipped by Tab and screen readers. */}
-          <a href="/" tabIndex={-1} aria-hidden="true">
-            neenerweener
-          </a>
+          <a href="/">neenerweener</a>
         </>
       )}
       <Footer />

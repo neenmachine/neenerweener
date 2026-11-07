@@ -63,3 +63,8 @@ test("the admin page shows its login form", async () => {
   await render("/admin", { page: { kind: "admin" } }, { "/api/admin/session": { authenticated: false } });
   expect(document.querySelector('input[type="password"]')).not.toBeNull();
 });
+
+test("a page kind this bundle does not know shows not found", async () => {
+  await render("/new", { page: { kind: "from-a-newer-server" } });
+  expect([...document.querySelectorAll("h1")].map((h) => h.textContent)).toEqual(["not found"]);
+});

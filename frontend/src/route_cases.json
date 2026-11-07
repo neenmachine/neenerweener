@@ -1,5 +1,5 @@
 {
- "_comment": "Every page URL case, run by backend/test_routes.py (server) and src/routes.test.tsx (React). `data` is the server's preload besides `page`; `fetched` is what the React page then fetches. Fixtures: post hello, code project demo with hello.py, empty timeline. `noscript` is the text the server shows without JavaScript.",
+ "_comment": "Every page URL case, run by backend/test_routes.py (server) and src/routes.test.tsx (React). `data` is the server's preload besides `page`; `fetched` is what the React page then fetches. Fixtures: post hello, code project demo with hello.py, empty timeline, favicon.svg in dist. `noscript` is the text the server shows without JavaScript.",
  "rows": [
   {
    "path": "/",
@@ -167,7 +167,7 @@
    "h1": [
     "not found"
    ],
-   "markup": "<main><h1 class=\"muted\">not found</h1><a href=\"/\" tabindex=\"-1\" aria-hidden=\"true\">neenerweener</a><footer><a href=\"/\">neenerweener</a><a href=\"/timeline\">timeline</a></footer></main>"
+   "markup": "<main><h1 class=\"muted\">not found</h1><a href=\"/\">neenerweener</a><footer><a href=\"/\">neenerweener</a><a href=\"/timeline\">timeline</a></footer></main>"
   },
   {
    "path": "/posts/nope",
@@ -197,7 +197,7 @@
    "h1": [
     "project not found"
    ],
-   "markup": "<main><h1 class=\"muted\">project not found</h1><a href=\"/\" tabindex=\"-1\" aria-hidden=\"true\">neenerweener</a><footer><a href=\"/\">neenerweener</a><a href=\"/timeline\">timeline</a></footer></main>"
+   "markup": "<main><h1 class=\"muted\">project not found</h1><a href=\"/\">neenerweener</a><footer><a href=\"/\">neenerweener</a><a href=\"/timeline\">timeline</a></footer></main>"
   },
   {
    "path": "/code/demo/nope.py",
@@ -212,7 +212,7 @@
    "h1": [
     "file not found"
    ],
-   "markup": "<main><h1 class=\"muted\">file not found</h1><a href=\"/\" tabindex=\"-1\" aria-hidden=\"true\">neenerweener</a><footer><a href=\"/\">neenerweener</a><a href=\"/timeline\">timeline</a></footer></main>"
+   "markup": "<main><h1 class=\"muted\">file not found</h1><a href=\"/\">neenerweener</a><footer><a href=\"/\">neenerweener</a><a href=\"/timeline\">timeline</a></footer></main>"
   },
   {
    "path": "/admin/settings",
@@ -227,7 +227,7 @@
    "h1": [
     "not found"
    ],
-   "markup": "<main><h1 class=\"muted\">not found</h1><a href=\"/\" tabindex=\"-1\" aria-hidden=\"true\">neenerweener</a><footer><a href=\"/\">neenerweener</a><a href=\"/timeline\">timeline</a></footer></main>"
+   "markup": "<main><h1 class=\"muted\">not found</h1><a href=\"/\">neenerweener</a><footer><a href=\"/\">neenerweener</a><a href=\"/timeline\">timeline</a></footer></main>"
   },
   {
    "path": "/admin/x/y",
@@ -242,7 +242,7 @@
    "h1": [
     "not found"
    ],
-   "markup": "<main><h1 class=\"muted\">not found</h1><a href=\"/\" tabindex=\"-1\" aria-hidden=\"true\">neenerweener</a><footer><a href=\"/\">neenerweener</a><a href=\"/timeline\">timeline</a></footer></main>"
+   "markup": "<main><h1 class=\"muted\">not found</h1><a href=\"/\">neenerweener</a><footer><a href=\"/\">neenerweener</a><a href=\"/timeline\">timeline</a></footer></main>"
   },
   {
    "path": "/admin//",
@@ -290,6 +290,17 @@
    "path": "/code/demo/",
    "status": 301,
    "location": "/code/demo",
+   "noindex": false
+  },
+  {
+   "path": "/favicon.svg",
+   "status": 200,
+   "noindex": false
+  },
+  {
+   "path": "/favicon.svg/",
+   "status": 301,
+   "location": "/favicon.svg",
    "noindex": false
   },
   {

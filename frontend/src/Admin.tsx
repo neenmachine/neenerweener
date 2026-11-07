@@ -280,6 +280,7 @@ function Manager({ send, expire }: { send: Send; expire: () => void }) {
               setStatus("saved");
             }}
             onGone={remove}
+            expire={expire}
           />
         ))}
       </div>

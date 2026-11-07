@@ -149,7 +149,7 @@ test("create is guarded and edit saves the full replacement", async () => {
   submit(edit.form!);
   await flush();
   const patch = fetch.mock.calls.find(([url, init]) => url === "/api/admin/timeline/2" && init?.method === "PATCH");
-  expect(patch?.[1]?.body).toBe('{"body_markdown":"replacement"}');
+  expect(patch?.[1]?.body).toBe('{"body_markdown":"replacement","attachments":[]}');
 });
 
 test("delete cancel preserves the entry, delete removes it and restores focus", async () => {
@@ -538,4 +538,88 @@ test("picking 3 files with 2 rows refuses the whole pick and keeps the message u
   await flush();
   expect(error()).toBe("");
   expect(rows()).toHaveLength(2);
+});
+
+// Editing an entry's images: one PATCH with the full ordered list.
+const media = (id: string, alt = "") => ({ id, width: 4, height: 3, alt });
+function editFetch(start: Media[], upload: () => Promise<unknown> = () => Promise.resolve(ok({ id: "new-0", width: 4, height: 3 }))) {
+  return vi.fn(async (url: string, init?: RequestInit) => {
+    if (url === "/api/admin/session") return ok(session);
+    if (url === "/api/timeline") return ok({ entries: [entry(42, "entry 42", start)], next_cursor: null });
+    if (url === "/api/admin/media") return upload();
+    if (url === "/api/admin/timeline/42" && init?.method === "GET") return ok({ ...json(42), media: start });
+    if (url === "/api/admin/timeline/42" && init?.method === "PATCH") {
+      const sent = JSON.parse(init.body as string);
+      return ok({ ...json(42), media: sent.attachments.map((a: { id: string; alt: string }) => media(a.id, a.alt)) });
+    }
+    return ok({});
+  });
+}
+const pickInto = (selector: string, files: File[]) =>
+  act(() => {
+    const field = document.querySelector<HTMLInputElement>(selector)!;
+    Object.defineProperty(field, "files", { value: files, configurable: true });
+    field.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+const editRows = () => [...document.querySelectorAll("#entry-42 .attachment")];
+const patches = (fetch: ReturnType<typeof vi.fn>) => fetch.mock.calls.filter(([, init]) => init?.method === "PATCH");
+
+test("edit starts from the entry's images, keeps, removes and adds them in one PATCH, and revokes only blob previews", async () => {
+  const revoked = previews();
+  const fetch = editFetch([media("m1", "one"), media("m2", "two")]);
+  await render(fetch);
+  act(() => named("edit entry 42")!.click());
+  await flush();
+  expect(editRows().map((r) => r.querySelector("img")!.getAttribute("src"))).toEqual(["/media/m1/sm.webp", "/media/m2/sm.webp"]);
+  expect(editRows().map((r) => r.querySelector("input")!.value)).toEqual(["one", "two"]);
+  act(() => document.querySelector<HTMLButtonElement>('#entry-42 [aria-label="remove image 1"]')!.click());
+  input("#entry-42 .attachment input", "two, described");
+  pickInto("#edit-42-files", [png("new.png")]);
+  await flush();
+  expect(editRows().map((r) => r.querySelector("img")!.getAttribute("src"))).toEqual(["/media/m2/sm.webp", "blob:preview-0"]);
+  submit(named("edit entry 42")!.closest("form")!);
+  await flush();
+  expect(patches(fetch).map(([url, init]) => [url, init?.body, (init?.headers as Record<string, string>)["X-CSRF-Token"]])).toEqual([
+    ["/api/admin/timeline/42", '{"body_markdown":"markdown","attachments":[{"id":"m2","alt":"two, described"},{"id":"new-0","alt":""}]}', "csrf"],
+  ]);
+  expect([...document.querySelectorAll("#entry-42 .media img")].map((img) => img.getAttribute("alt"))).toEqual(["two, described", ""]);
+  expect(document.activeElement).toBe(named("edit entry 42"));
+  expect(revoked).toEqual(["blob:preview-0"]);
+});
+
+test("while an image uploads, Escape and save do nothing; cancel then discards every image change", async () => {
+  const revoked = previews();
+  let finish!: () => void;
+  const fetch = editFetch([media("m1", "one")], () => new Promise((resolve) => (finish = () => resolve(ok({ id: "new-0", width: 4, height: 3 })))));
+  await render(fetch);
+  act(() => named("edit entry 42")!.click());
+  await flush();
+  act(() => document.querySelector<HTMLButtonElement>('#entry-42 [aria-label="remove image 1"]')!.click());
+  pickInto("#edit-42-files", [png("slow.png")]);
+  const box = named("edit entry 42")!;
+  key(box, "Escape");
+  expect(named("save entry 42")?.getAttribute("aria-disabled")).toBe("true");
+  submit(box.closest("form")!);
+  await flush();
+  expect(named("edit entry 42")?.tagName).toBe("TEXTAREA");
+  expect(document.querySelector("#edit-42-files-status")?.textContent).toBe("uploading");
+  await act(async () => finish());
+  await flush();
+  key(named("edit entry 42")!, "Escape");
+  expect(named("edit entry 42")?.tagName).toBe("BUTTON");
+  expect(patches(fetch)).toEqual([]);
+  expect([...document.querySelectorAll("#entry-42 .media img")]).toHaveLength(1);
+  expect(revoked).toEqual(["blob:preview-0"]);
+});
+
+test("an entry with 4 images refuses a fifth in the editor", async () => {
+  previews();
+  const fetch = editFetch(["a", "b", "c", "d"].map((id) => media(id)));
+  await render(fetch);
+  act(() => named("edit entry 42")!.click());
+  await flush();
+  pickInto("#edit-42-files", [png("five.png")]);
+  expect(document.querySelector("#edit-42-files-error")?.textContent).toBe("up to 4 images");
+  expect(fetch.mock.calls.filter(([url]) => url === "/api/admin/media")).toEqual([]);
+  expect(editRows()).toHaveLength(4);
 });

@@ -214,10 +214,10 @@ test("a failed delete stays armed and shows the server detail", async () => {
     return ok({});
   });
   await render(fetch);
-  act(() => named("delete entry 42")!.click());
-  act(() => named("confirm delete entry 42")!.click());
+  click("delete");
+  act(() => document.querySelector<HTMLButtonElement>("#entry-42 .button.danger")!.click());
   await flush();
-  expect(named("confirm delete entry 42")?.getAttribute("aria-busy")).toBe("false");
+  expect(document.querySelector("#entry-42 .button.danger")?.getAttribute("aria-busy")).toBe("false");
   expect(document.querySelector("#entry-42 [role=alert]")?.textContent).toBe("invalid timeline id");
 });
 
@@ -231,10 +231,10 @@ test("edit opens the private body with id names; Escape cancels to edit; a faile
     return ok({});
   });
   await render(fetch);
-  act(() => named("edit entry 42")!.click());
+  click("edit");
   await flush();
-  const box = named("edit entry 42") as HTMLTextAreaElement;
-  expect(box.tagName).toBe("TEXTAREA");
+  const box = document.querySelector<HTMLTextAreaElement>("#entry-42 textarea")!;
+  expect(box.getAttribute("aria-label")).toBe("edit entry 42");
   expect(box.value).toBe("private *markdown*");
   expect(document.activeElement).toBe(box);
   expect(named("save entry 42")?.textContent).toBe("savesaving");

@@ -38,19 +38,15 @@ building a judge pipeline shouldnt require a separate process constantly monitor
 
 i feel like the initial first step of this is centralizing all services into one shared runtime. this essentially requires a great deslopification, which i am working on right now (11-07-2026).
 
-something that becomes easy as a byproduct of a shared surface is shared memory/knowledge: shared information across coding agents, messaging agents, etc.
+something that becomes easy as a byproduct of a shared surface is shared memory/knowledge: shared information across coding agents, messaging agents, etc. think about every single product that you use extensively on a day to day basis that incorporates an agent harness of sorts. now, imagine the same product, with all of your product context, knowledge on your past work, your current tasks, etc.
 
-think about every single product that you use extensively on a day to day basis that incorporates an agent harness of sorts. now, imagine the same product, with all of your product context, knowledge on your past work, your current tasks, etc.
-
-imagine this: an alert posts to the `#alerts` channel in slack. its 8pm on a friday, youre on your way to dinner, still a little on edge from the absurd amounts of stimulants you took 6 horus ago.
-
-but its your project, and the issue seems urgent. you rush home, its too late, your lead already saw the alert, and hes pinging you.
+imagine this: an alert posts to the `#alerts` channel in slack. its 8pm on a friday, youre on your way to dinner, still a little on edge from the absurd amounts of stimulants you took 6 hours ago. but its your project, and the issue seems urgent. you rush home, its too late, your lead already saw the alert, and hes pinging you.
 
 now imagine this: it doesnt matter anymore. you have an agent constantly monitoring the alerts channel. it knows what issues youre responsible for, it determines whether a slow query was shipped by your hotfix or someone elses PR.
 
-an alert comes in, its your issue. two messages go out: one to your coding orchestrator, one to your messaging agent.
+an alert comes in, its your issue. two messages go out: one to your coding orchestrator, one to your messaging agent. you get a message: 
 
-you get a message: "Customer X is facing issue Y in prod. Issue Y was introduced when feature Z was introduced."
+> "Customer X is facing issue Y in prod. Issue Y was introduced when feature Z was introduced."
 
 there are so many sources of data that are high signal produced from different sources every single day, and they become so much more valuable when connected.
 

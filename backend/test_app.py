@@ -557,7 +557,7 @@ def test_server_rendered_pages(tmp_path, monkeypatch):
     class Store:
         def list(self, before, limit):
             from datetime import datetime, timezone
-            return [{"id": 2, "body_markdown": "first & <safe>", "created_at": datetime(2026, 1, 2, tzinfo=timezone.utc), "edited_at": datetime(2026, 1, 3, tzinfo=timezone.utc)}]
+            return [{"id": 2, "body_markdown": "first & <safe>", "created_at": datetime(2026, 1, 2, tzinfo=timezone.utc), "edited_at": datetime(2026, 1, 3, tzinfo=timezone.utc), "media": []}]
 
     monkeypatch.setattr(app, "timeline_store", Store())
     c = TestClient(app.app)
@@ -623,7 +623,7 @@ def test_timeline_ssr_and_preload_share_one_initial_page(tmp_path, monkeypatch, 
             from datetime import datetime, timezone
             row_id = before or 1
             count = 21 if next_cursor is not None else 1
-            rows = [{"id": row_id, "body_markdown": f"entry {row_id}", "created_at": datetime(2026, 1, 1, tzinfo=timezone.utc), "edited_at": None} for _ in range(count)]
+            rows = [{"id": row_id, "body_markdown": f"entry {row_id}", "created_at": datetime(2026, 1, 1, tzinfo=timezone.utc), "edited_at": None, "media": []} for _ in range(count)]
             if next_cursor is not None:
                 rows[19]["id"] = next_cursor
             return rows

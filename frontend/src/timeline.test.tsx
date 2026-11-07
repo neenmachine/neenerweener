@@ -136,7 +136,7 @@ type Call = [string, RequestInit | undefined];
 const reply = (status: number, body: unknown) => ({ ok: status < 300, status, headers: new Headers(), json: () => Promise.resolve(body) });
 const created = { id: 10, html: "<p>new</p>", created_at: "2026-01-03T00:00:00+00:00", edited_at: null, body_markdown: "new" };
 
-async function openAdmin(hint: boolean, handle: (url: string, init?: RequestInit) => unknown) {
+async function openAdmin(hint: boolean, handle: (url: string, init?: RequestInit) => unknown, first = page([4], null)) {
   const calls: Call[] = [];
   vi.stubGlobal(
     "fetch",
@@ -147,7 +147,7 @@ async function openAdmin(hint: boolean, handle: (url: string, init?: RequestInit
   );
   if (hint) document.cookie = "admin_hint=1; Path=/";
   history.replaceState(null, "", "/timeline");
-  document.body.innerHTML = `<script id="preload" type="application/json">${JSON.stringify({ page: { kind: "timeline" }, "/api/timeline": page([4], null) })}</script><div id="root"></div>`;
+  document.body.innerHTML = `<script id="preload" type="application/json">${JSON.stringify({ page: { kind: "timeline" }, "/api/timeline": first })}</script><div id="root"></div>`;
   const { default: App } = await import("./App");
   await act(async () => {
     root = createRoot(document.getElementById("root")!);
@@ -281,4 +281,25 @@ test("a 401 on tweet removes the composer and the hint", { timeout: 5000 }, asyn
   await settle();
   expect(textarea()).toBeNull();
   expect(document.cookie).not.toContain("admin_hint");
+});
+
+test("load more after a tweet uses the preload cursor, appends the older page and shows each entry once", { timeout: 5000 }, async () => {
+  // The older page repeats a preload entry (8) and the new entry (10).
+  const calls = await openAdmin(
+    true,
+    (url) => (url === "/api/timeline?before=8" ? reply(200, page([8, 10, 7], null)) : signedIn(url)),
+    page([9, 8], 8),
+  );
+  await showsComposer();
+  type("new");
+  submit();
+  await settle();
+  expect(ids()).toEqual(["entry-10", "entry-9", "entry-8"]);
+  expect(button()?.getAttribute("href")).toBe("/timeline?before=8");
+  click();
+  await settle();
+  expect(calls.map(([url]) => url)).toEqual(["/api/admin/session", "/api/admin/timeline", "/api/timeline?before=8"]);
+  expect(ids()).toEqual(["entry-10", "entry-9", "entry-8", "entry-7"]);
+  // The composer has its own status region ("posted"); the page's comes last.
+  expect([...document.querySelectorAll('[role="status"]')].at(-1)?.textContent).toBe("1 more loaded, end of timeline");
 });

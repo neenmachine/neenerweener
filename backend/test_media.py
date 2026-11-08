@@ -13,8 +13,8 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from fastapi.testclient import TestClient
 from PIL import ExifTags, Image, ImageCms, ImageFile
-from sqlalchemy import delete, insert, select, update
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import delete, event, insert, select, text, update
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 import app
 from auth import hash_password
@@ -747,52 +747,80 @@ def test_profile_replacement_detaches_old_avatar_and_attaches_new_one(media_db):
     assert states[new] is None
 
 
-def test_timeline_and_profile_race_has_one_owner_and_one_invalid_attachment(media_db):
-    _machine, store = media_db
-    timeline: TimelineStore = app.timeline_store
-    for round_number in range(5):
-        asset = attachable(store)
-        results = concurrent_store_calls(
-            lambda: timeline.create(f"timeline owner {round_number}", [(asset, "")]),
-            lambda: timeline.update_profile("profile owner", None, asset),
-        )
-        assert sum(isinstance(result, InvalidAttachment) for result in results) == 1, results
-        assert sum(isinstance(result, dict) for result in results) == 1, results
-        with timeline.engine.connect() as connection:
-            timeline_owner = connection.execute(
-                select(timeline_entry_media.c.entry_id).where(timeline_entry_media.c.asset_id == asset)
-            ).scalar_one_or_none()
-            profile_owner = connection.execute(
-                select(site_profile.c.id).where(site_profile.c.avatar_asset_id == asset)
-            ).scalar_one_or_none()
-        assert (timeline_owner is not None) + (profile_owner is not None) == 1
-        if profile_owner is not None:
-            timeline.update_profile("profile owner", None, None)
+def run_with_profile_row_locked(timeline, asset_id, call):
+    """Run a store mutation while another transaction owns the profile row lock."""
+    checked_out, backend_pid = threading.Event(), []
+
+    def capture_backend(dbapi_connection, _record, _proxy):
+        with dbapi_connection.cursor() as cursor:
+            cursor.execute("SELECT pg_backend_pid()")
+            backend_pid.append(cursor.fetchone()[0])
+        checked_out.set()
+
+    with timeline.engine.connect() as holder:
+        transaction = holder.begin()
+        holder.execute(select(site_profile.c.id).where(site_profile.c.id == 1).with_for_update()).one()
+        event.listen(timeline.engine, "checkout", capture_backend)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(call)
+            try:
+                assert checked_out.wait(timeout=2), "store mutation did not check out a database connection"
+                event.remove(timeline.engine, "checkout", capture_backend)
+                deadline = time.monotonic() + 1
+                while holder.execute(
+                    text("SELECT wait_event_type = 'Lock' FROM pg_stat_activity WHERE pid = :pid"),
+                    {"pid": backend_pid[0]},
+                ).scalar_one() is not True:
+                    assert time.monotonic() < deadline, "store mutation did not wait for the profile row lock"
+                    time.sleep(0.01)
+                try:
+                    with holder.begin_nested():
+                        holder.execute(
+                            select(media_assets.c.id)
+                            .where(media_assets.c.id == asset_id)
+                            .with_for_update(nowait=True)
+                        ).one()
+                    asset_locked_early = False
+                except OperationalError:
+                    asset_locked_early = True
+            finally:
+                if event.contains(timeline.engine, "checkout", capture_backend):
+                    event.remove(timeline.engine, "checkout", capture_backend)
+                transaction.rollback()
+            result = future.result(timeout=5)
+    assert not asset_locked_early, "store mutation locked the asset before the profile"
+    return result
 
 
-def test_concurrent_profile_replacements_serialize_and_detach_the_loser(media_db):
+def test_timeline_create_locks_profile_before_asset(media_db):
     _machine, store = media_db
     timeline: TimelineStore = app.timeline_store
-    old, first, second = (attachable(store) for _ in range(3))
-    timeline.update_profile("configured", None, old)
-    results = concurrent_store_calls(
-        lambda: timeline.update_profile("first", None, first),
-        lambda: timeline.update_profile("second", None, second),
+    asset = attachable(store)
+
+    result = run_with_profile_row_locked(
+        timeline, asset, lambda: timeline.create("timeline owner", [(asset, "")])
     )
-    assert all(isinstance(result, dict) for result in results), results
 
-    profile = timeline.get_profile()
-    winner = profile["avatar_asset_id"]
-    loser = second if winner == first else first
+    assert result["body_markdown"] == "timeline owner"
+    assert result["media"][0]["id"] == str(asset)
+
+
+def test_profile_replacement_locks_profile_before_assets_and_detaches_old_avatar(media_db):
+    _machine, store = media_db
+    timeline: TimelineStore = app.timeline_store
+    old, new = attachable(store), attachable(store)
+    timeline.update_profile("configured", None, old)
+
+    result = run_with_profile_row_locked(
+        timeline, new, lambda: timeline.update_profile("replacement", None, new)
+    )
+
     with timeline.engine.connect() as connection:
-        states = dict(
-            connection.execute(
-                select(media_assets.c.id, media_assets.c.detached_at).where(media_assets.c.id.in_([old, first, second]))
-            ).all()
-        )
-    assert winner in {first, second}
-    assert states[winner] is None
-    assert states[old] is not None and states[loser] is not None
+        old_detached_at = connection.execute(
+            select(media_assets.c.detached_at).where(media_assets.c.id == old)
+        ).scalar_one()
+    assert result["avatar_asset_id"] == new
+    assert old_detached_at is not None
 
 
 @pytest.mark.parametrize(

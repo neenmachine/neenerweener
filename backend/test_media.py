@@ -872,10 +872,12 @@ def test_edit_locks_the_entry_then_assets_in_id_order(author):
         assert client.delete(f"/api/admin/timeline/{entry_id}").status_code == 204
     finally:
         event.remove(app.timeline_store.engine, "before_cursor_execute", record)
-    assert len(locks) == 4, locks
-    for entry_lock, asset_lock in (locks[:2], locks[2:]):
-        assert entry_lock.startswith("SELECT timeline_entries.id")
-        assert asset_lock.startswith("SELECT media_assets.id") and "ORDER BY media_assets.id FOR UPDATE" in asset_lock
+    assert len(locks) == 5, locks
+    assert locks[0].startswith("SELECT site_profile.id")
+    assert locks[1].startswith("SELECT timeline_entries.id")
+    assert locks[2].startswith("SELECT media_assets.id") and "ORDER BY media_assets.id FOR UPDATE" in locks[2]
+    assert locks[3].startswith("SELECT timeline_entries.id")
+    assert locks[4].startswith("SELECT media_assets.id") and "ORDER BY media_assets.id FOR UPDATE" in locks[4]
 
 
 def race(*requests):

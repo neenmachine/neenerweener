@@ -362,8 +362,17 @@ class TimelineStore:
             if new != old:
                 _lock_assets(connection, {new, old} - {None})
                 if new is not None:
-                    asset = connection.execute(select(media_assets).where(media_assets.c.id == new)).mappings().one_or_none()
-                    if asset is None or asset["detached_at"] is not None or asset["created_at"] <= datetime.now(timezone.utc) - ATTACH_WINDOW or connection.execute(select(exists().where(timeline_entry_media.c.asset_id == new))).scalar_one():
+                    eligible = connection.execute(
+                        select(
+                            exists().where(
+                                media_assets.c.id == new,
+                                media_assets.c.detached_at.is_(None),
+                                media_assets.c.created_at > func.now() - ATTACH_WINDOW,
+                                _unused,
+                            )
+                        )
+                    ).scalar_one()
+                    if not eligible:
                         raise InvalidAttachment
                     connection.execute(update(media_assets).where(media_assets.c.id == new).values(detached_at=None))
                 if old is not None:

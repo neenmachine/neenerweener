@@ -794,7 +794,7 @@ main.admin-shell {
 .admin textarea {
   display: block;
   width: 100%;
-  min-height: 7.5rem;
+  min-height: 112px;
   resize: vertical;
   line-height: 1.55;
 }

@@ -58,7 +58,6 @@ export default function TimelineComposer({
           ref={textarea}
           aria-label="new timeline entry"
           value={text}
-          rows={5}
           // Keeps the text while the request runs, so a failure never loses it.
           readOnly={busy}
           aria-invalid={n > LIMIT || !!error || undefined}

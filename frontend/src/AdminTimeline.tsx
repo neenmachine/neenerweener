@@ -38,10 +38,15 @@ export default function AdminTimeline({ send, expire, profile, loadProfile }: Ad
   const first = async () => {
     setList("loading");
     const [r, p] = await Promise.all([page(null), loadProfile()]);
-    const failed = !r.ok ? r : !p.ok ? p : null;
-    setListError(failed ? failed.message : "");
-    setList(failed ? "failed" : "ok");
     if (r.ok) setNow(r.data.now);
+    const failed = [r, p].find((x) => !x.ok);
+    if (failed && !failed.ok) {
+      setListError(failed.message);
+      setList("failed");
+      return;
+    }
+    setListError("");
+    setList("ok");
   };
 
   useEffect(() => {

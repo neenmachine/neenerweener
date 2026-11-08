@@ -84,20 +84,31 @@ function ProfileForm({ initial, send, setProfile }: { initial: Profile; send: Se
     setInvalid(null);
   };
 
-  const upload = async (e: ChangeEvent<HTMLInputElement>) => {
+  // The active upload, settling to the staged picture or false on failure, so a save submitted meanwhile waits for it.
+  const pending = useRef<Promise<Staged | false> | null>(null);
+  const upload = (e: ChangeEvent<HTMLInputElement>) => {
     const picked = e.target.files?.[0];
     e.target.value = ""; // so picking the same file again fires change
     if (!picked) return;
+    const job = (pending.current = uploadFile(picked));
+    job.then(() => pending.current === job && (pending.current = null));
+  };
+  const uploadFile = async (picked: File): Promise<Staged | false> => {
     setUploading(true);
     setError("");
     setStatus("");
     const r = await send<{ id: string }>("POST", "/api/admin/profile/avatar", picked);
-    if (!mounted.current) return;
+    if (!mounted.current) return false;
     setUploading(false);
-    if (r.ok) return stage({ id: r.data.id, url: URL.createObjectURL(picked) });
-    if (r.status === 401) return; // the shell asks to log in again; the form stays as it is
+    if (r.ok) {
+      const next = { id: r.data.id, url: URL.createObjectURL(picked) };
+      stage(next);
+      return next;
+    }
+    if (r.status === 401) return false; // the shell asks to log in again; the form stays as it is
     setError(r.message);
     pick.current?.focus();
+    return false;
   };
 
   const remove = () => {
@@ -107,19 +118,26 @@ function ProfileForm({ initial, send, setProfile }: { initial: Profile; send: Se
   };
 
   // Enter in a field submits the form without the save button, so one save at a time is kept here, synchronously.
+  // A save submitted during an upload waits for it, then saves with the new picture, or not at all if it failed.
   const inFlight = useRef(false);
   const submit = async (e: FormEvent) => {
     e.preventDefault();
-    if (inFlight.current || uploading) return;
+    if (inFlight.current) return;
     inFlight.current = true;
     setSaving(true);
-    setError("");
     setStatus("");
     setInvalid(null);
+    const avatar = pending.current ? await pending.current : staged;
+    if (avatar === false) {
+      inFlight.current = false;
+      setSaving(false);
+      return;
+    }
+    setError("");
     const r = await send<Profile>("PATCH", "/api/admin/profile", {
       display_name: name,
       handle: handle || null,
-      ...(staged !== undefined && { avatar_id: staged && staged.id }),
+      ...(avatar !== undefined && { avatar_id: avatar && avatar.id }),
     });
     inFlight.current = false;
     setSaving(false);
@@ -198,7 +216,7 @@ function ProfileForm({ initial, send, setProfile }: { initial: Profile; send: Se
         </div>
         <div className="save-row">
           <div className="admin-row">
-            <Button type="submit" busy={saving} off={uploading} label="save profile" busyLabel="saving" />
+            <Button type="submit" busy={saving} label="save profile" busyLabel="saving" />
             <p className="muted" role="status">
               {status}
             </p>

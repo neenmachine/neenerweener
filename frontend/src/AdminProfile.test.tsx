@@ -304,18 +304,57 @@ test("enter in a field while a save is pending starts no second save", async () 
   expect(statusText()).toBe("profile saved");
 });
 
-test("enter in a field while a picture uploads does not save without it", async () => {
+// A save submitted while a picture uploads waits for the upload. The held upload skips the stub's call log,
+// so these count from the mock itself.
+async function heldUpload() {
   let answer: (r: Reply) => void = () => {};
   const s = await render();
   s.fetch.mockImplementationOnce(() => new Promise<Reply>((resolve) => (answer = resolve)));
+  await type(field("display-name"), "draft name");
   await pickFile("choose picture");
+  const methods = () => s.fetch.mock.calls.filter(([url]) => url.startsWith("/api/admin/profile")).map(([, init]) => init?.method);
+  const saveLabel = () => button("save profile").querySelector("span:not([hidden])")!.textContent;
+  return { s, answer: (r: Reply) => act(async () => answer(r)), methods, saveLabel };
+}
+
+test("a save submitted while a picture uploads waits, then saves once with the new picture", async () => {
+  const { s, answer, methods, saveLabel } = await heldUpload();
   await enter(field("handle"));
-  // the held upload skips the stub's call log, so count from the mock itself
-  expect(s.fetch.mock.calls.filter(([url]) => url.startsWith("/api/admin/profile")).map(([, init]) => init?.method)).toEqual(["POST"]);
-  await act(async () => answer(ok({ id: "staged-late" })));
+  expect(saveLabel()).toBe("saving");
+  expect(methods()).toEqual(["POST"]);
+  await answer(ok({ id: "staged-late" }));
   for (let i = 0; i < 3; i++) await flush();
+  expect(methods()).toEqual(["POST", "PATCH"]);
+  expect(s.mutations().at(-1)!.body).toEqual({ display_name: "draft name", handle: "fixture_handle", avatar_id: "staged-late" });
+  expect(statusText()).toBe("profile saved");
+  expect(saveLabel()).toBe("save profile");
+});
+
+test("a save submitted while a picture uploads sends nothing if the upload fails", async () => {
+  const { answer, methods, saveLabel } = await heldUpload();
   await enter(field("handle"));
-  expect((s.mutations().at(-1)!.body as { avatar_id: string }).avatar_id).toBe("staged-late");
+  expect(saveLabel()).toBe("saving");
+  await answer(bad(422, "unsupported image"));
+  for (let i = 0; i < 3; i++) await flush();
+  expect(methods()).toEqual(["POST"]);
+  expect(alertText()).toBe("unsupported image");
+  expect(document.activeElement).toBe(button("choose picture"));
+  expect(field("display-name").value).toBe("draft name");
+  expect(field("handle").value).toBe("fixture_handle");
+  expect(statusText()).toBe("");
+  expect(saveLabel()).toBe("save profile");
+});
+
+test("a second submit while a save waits for the upload is ignored and keeps saving", async () => {
+  const { answer, methods, saveLabel } = await heldUpload();
+  await enter(field("handle"));
+  await enter(field("display-name"));
+  await save();
+  expect(saveLabel()).toBe("saving");
+  expect(methods()).toEqual(["POST"]);
+  await answer(ok({ id: "staged-late" }));
+  for (let i = 0; i < 3; i++) await flush();
+  expect(methods()).toEqual(["POST", "PATCH"]);
 });
 
 test("the file input offers only the formats the server takes", async () => {

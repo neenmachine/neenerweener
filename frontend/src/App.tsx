@@ -131,7 +131,7 @@ function Footer() {
       <a href="/timeline" aria-current={current === "timeline" ? "page" : undefined}>
         timeline
       </a>
-      <a href="/feed.xml">feed</a>
+      <a href="/feed.xml">rss</a>
     </footer>
   );
 }

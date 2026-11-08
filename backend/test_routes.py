@@ -212,13 +212,23 @@ def test_server_admin_pages_equal_the_shared_admin_page_rows():
 
 
 @pytest.mark.parametrize("row", ADMIN_PAGES, ids=[row["path"] for row in ADMIN_PAGES])
-def test_admin_page_title_is_its_label_then_admin(site, row):
-    response = site.get(row["path"])
-    assert response.status_code == 200
-    assert response.headers["X-Robots-Tag"] == "noindex"
-    assert response.headers["cache-control"] == "no-store"
-    assert re.search(r"<title>(.*?)</title>", response.text)[1] == f"{row['label']} · admin"
-    assert '<meta name="robots" content="noindex">' in response.text
+def test_admin_page_title_is_sign_in_without_the_hint_and_its_label_with_it(site, row):
+    # The hint only picks the title (the sign-in form is the signed-out page); the shell is the same either way.
+    titles, shells = [], []
+    for hint in (None, "1"):
+        site.cookies.clear()
+        if hint:
+            site.cookies.set("admin_hint", hint)
+        response = site.get(row["path"])
+        assert response.status_code == 200
+        assert response.headers["X-Robots-Tag"] == "noindex"
+        assert response.headers["cache-control"] == "no-store"
+        assert '<meta name="robots" content="noindex">' in response.text
+        titles.append(re.search(r"<title>(.*?)</title>", response.text)[1])
+        shells.append(response.text.replace(titles[-1], "TITLE"))
+    site.cookies.clear()
+    assert titles == ["sign in · admin", f"{row['label']} · admin"]
+    assert shells[0] == shells[1]
 
 
 def test_every_page_kind_has_a_renderer():

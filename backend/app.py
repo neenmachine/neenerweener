@@ -339,7 +339,7 @@ def _clear_session_cookie(response: Response, config: AdminConfig) -> None:
     )
 
 
-# A non-secret hint that tells /timeline whether to check the session; never used for authorization.
+# A non-secret hint that tells /timeline whether to check the session and picks the /admin title; never used for authorization.
 ADMIN_HINT_COOKIE = "admin_hint"
 
 
@@ -1201,7 +1201,9 @@ def timeline_before(request: Request) -> int | None:
 
 
 def admin_page(request: Request, section: str = "") -> tuple[dict, dict, str, int]:
-    return {}, {"title": f"{routes.ADMIN_PAGES[section]} · admin", "robots": "noindex"}, ADMIN_SHELL, 200
+    # Signed out, the sign-in form is the page; /admin is no-store, so a per-visitor title is safe here.
+    label = routes.ADMIN_PAGES[section] if request.cookies.get(ADMIN_HINT_COOKIE) else "sign in"
+    return {}, {"title": f"{label} · admin", "robots": "noindex"}, ADMIN_SHELL, 200
 
 
 # Mirrors the admin Suspense fallback in App.tsx, so the first paint is already the shell React renders.

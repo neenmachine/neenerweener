@@ -261,43 +261,12 @@ class TimelineStore:
                 if current is None:
                     return None
                 media = media_for(connection, [entry_id]).get(entry_id, [])
-                kept = {uuid.UUID(m["id"]) for m in media}
                 same_media = attachments is None or [(uuid.UUID(m["id"]), m["alt"]) for m in media] == list(attachments)
                 if current["body_markdown"] == body_markdown and same_media:
                     return {**current, "media": media}
                 if attachments is not None:
-                    _lock_assets(connection, kept | set(ids))
-                    new = set(ids) - kept
-                    if new:
-                        attachable = connection.execute(
-                            select(func.count())
-                            .select_from(media_assets)
-                            .where(
-                                media_assets.c.id.in_(new),
-                                media_assets.c.detached_at.is_(None),
-                                media_assets.c.created_at > func.now() - ATTACH_WINDOW,
-                                _unused,
-                            )
-                        ).scalar_one()
-                        if attachable != len(new):
-                            raise InvalidAttachment
-                    removed = kept - set(ids)
-                    if removed:
-                        connection.execute(
-                            update(media_assets).where(media_assets.c.id.in_(removed)).values(detached_at=func.now())
-                        )
-                    connection.execute(delete(timeline_entry_media).where(timeline_entry_media.c.entry_id == entry_id))
-                    for position, (asset_id, alt) in enumerate(attachments):
-                        connection.execute(update(media_assets).where(media_assets.c.id == asset_id).values(alt_text=alt))
-                        connection.execute(
-                            insert(timeline_entry_media).values(entry_id=entry_id, asset_id=asset_id, position=position)
-                        )
-                row = connection.execute(
-                    update(timeline_entries)
-                    .where(timeline_entries.c.id == entry_id)
-                    .values(body_markdown=body_markdown, edited_at=func.now())
-                    .returning(timeline_entries)
-                ).mappings().one()
+                    _replace_entry_media(connection, entry_id, attachments, media, ids)
+                row = _update_entry_row(connection, entry_id, body_markdown)
                 return _with_media(connection, row)
         except IntegrityError as exc:
             _raise_attachment_conflict(exc)
@@ -398,6 +367,41 @@ class TimelineStore:
 
     def close(self) -> None:
         self.engine.dispose()
+
+
+def _replace_entry_media(connection: Connection, entry_id: int, attachments, media, ids) -> None:
+    kept = {uuid.UUID(item["id"]) for item in media}
+    _lock_assets(connection, kept | set(ids))
+    new = set(ids) - kept
+    if new:
+        attachable = connection.execute(
+            select(func.count())
+            .select_from(media_assets)
+            .where(
+                media_assets.c.id.in_(new),
+                media_assets.c.detached_at.is_(None),
+                media_assets.c.created_at > func.now() - ATTACH_WINDOW,
+                _unused,
+            )
+        ).scalar_one()
+        if attachable != len(new):
+            raise InvalidAttachment
+    removed = kept - set(ids)
+    if removed:
+        connection.execute(update(media_assets).where(media_assets.c.id.in_(removed)).values(detached_at=func.now()))
+    connection.execute(delete(timeline_entry_media).where(timeline_entry_media.c.entry_id == entry_id))
+    for position, (asset_id, alt) in enumerate(attachments):
+        connection.execute(update(media_assets).where(media_assets.c.id == asset_id).values(alt_text=alt))
+        connection.execute(insert(timeline_entry_media).values(entry_id=entry_id, asset_id=asset_id, position=position))
+
+
+def _update_entry_row(connection: Connection, entry_id: int, body_markdown: str):
+    return connection.execute(
+        update(timeline_entries)
+        .where(timeline_entries.c.id == entry_id)
+        .values(body_markdown=body_markdown, edited_at=func.now())
+        .returning(timeline_entries)
+    ).mappings().one()
 
 
 def _lock_entry(connection: Connection, entry_id: int):

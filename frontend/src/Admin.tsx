@@ -118,7 +118,7 @@ export default function Admin() {
   };
 
   const signedIn = auth === "in";
-  // The server titles an admin page by its path (it cannot know the session); signed out, the sign-in form is the page.
+  // The server titles by the admin_hint cookie (sign in, or the path); the session check corrects a stale hint.
   useEffect(() => {
     if (auth === "out") document.title = "sign in · admin";
     if (signedIn && current) document.title = `${current.label} · admin`;

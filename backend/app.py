@@ -991,6 +991,11 @@ def old_now():
     return RedirectResponse("/timeline", status_code=301)
 
 
+@app.api_route("/favicon.ico", methods=["GET", "HEAD"])
+def old_favicon():
+    return RedirectResponse("/favicon.svg", status_code=301)
+
+
 # check_dir=False: the app still starts when POSTS_DIR has no images folder.
 app.mount("/images", StaticFiles(directory=POSTS_DIR / "images", check_dir=False), name="images")
 

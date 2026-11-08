@@ -3,6 +3,7 @@ import { Avatar } from "./App";
 import { createTimeline, hasText, LIMIT, length } from "./adminApi";
 import { Attachments, useAttachments } from "./attachments";
 import type { Entry, Profile } from "./timelineTypes";
+import { useRequest } from "./useRequest";
 
 // The admin's compose box at the top of /timeline. A lazy chunk: only loaded after the session check says signed in.
 // The "admin" class reuses the /admin form styles; the poster's avatar sits left, as on the entries below.
@@ -16,11 +17,9 @@ export default function TimelineComposer({
   onExpired: () => void;
 }) {
   const [text, setText] = useState("");
-  const [busy, setBusy] = useState(false);
+  const { run, busy } = useRequest("submit");
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
-  // A ref, not state: two submits in the same task both see busy=false.
-  const inFlight = useRef(false);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const images = useAttachments(onExpired);
   // An entry needs text; images go only once uploaded.
@@ -28,14 +27,12 @@ export default function TimelineComposer({
   const n = length(text);
 
   const post = async () => {
-    if (inFlight.current || !valid) return;
-    inFlight.current = true;
-    setBusy(true);
-    setError("");
-    setStatus("");
-    const r = await createTimeline(text, images.payload());
-    inFlight.current = false;
-    setBusy(false);
+    if (!valid) return;
+    const r = await run((signal) => {
+      setError("");
+      setStatus("");
+      return createTimeline(text, images.payload(), signal);
+    });
     if (!r.ok) return r.status === 401 ? onExpired() : setError(r.message);
     onCreated(r.data);
     setText("");

@@ -680,6 +680,19 @@ main.admin-shell {
   line-height: 18px;
 }
 
+/* Narrow: the handle goes under the name, so a long name wraps across the row instead of beside an unbreakable handle. */
+@media (max-width: 760px) {
+  .admin-links .identity {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 0 8px;
+  }
+
+  .admin-links .identity .avatar {
+    grid-row: span 2;
+  }
+}
+
 /* Under 760px the rail is a top bar (avatar, admin, log out) over a row of tabs, across the whole width. */
 @media (max-width: 760px) {
   main.admin-shell {

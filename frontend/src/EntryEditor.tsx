@@ -2,18 +2,19 @@ import { type ReactNode, type Ref, type RefObject, useEffect, useRef, useState }
 import { TimelineEntry } from "./App";
 import { type AdminEntry, type Result, hasText, LIMIT, length, request } from "./adminApi";
 import { Attachments, useAttachments } from "./attachments";
+import { useRequest } from "./useRequest";
 import type { Entry, Profile } from "./timelineTypes";
 
 // The admin-only entry controls shared by /admin and /timeline: edit in place and inline delete confirm.
 // Lazy loaded with the admin code, so public pages never download it.
 
-export type Send = <T = undefined>(method: string, url: string, body?: object) => Promise<Result<T>>;
+export type Send = <T = undefined>(method: string, url: string, body?: object, signal?: AbortSignal) => Promise<Result<T>>;
 
 // An authenticated request; a 401 (the session ended) also calls expire.
 export const sendOrExpire =
   (expire: () => void): Send =>
-  async <T,>(method: string, url: string, body?: object) => {
-    const r = await request<T>(method, url, body);
+  async <T,>(method: string, url: string, body?: object, signal?: AbortSignal) => {
+    const r = await request<T>(method, url, body, signal);
     if (!r.ok && r.status === 401) expire();
     return r;
   };
@@ -162,9 +163,9 @@ export function EntryRow({
   const [mode, setMode] = useState<"view" | "opening" | "edit" | "confirm" | "deleting">("view");
   // The private entry from GET, the start of the edit form.
   const [opened, setOpened] = useState<AdminEntry | null>(null);
-  const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const inFlight = useRef(false);
+  // open, save and delete: one request at a time for this entry. While editing, busy is the save.
+  const { run, busy } = useRequest("submit");
   const editButton = useRef<HTMLButtonElement>(null);
   const deleteButton = useRef<HTMLButtonElement>(null);
   const cancelDelete = useRef<HTMLButtonElement>(null);
@@ -176,41 +177,46 @@ export function EntryRow({
     refocus.current = null;
   }, [mode]);
 
-  // Runs one request at a time for this entry; a 404 means another tab or device removed it.
-  const run = async <T,>(request: () => Promise<Result<T>>, done: (data: T) => void) => {
-    if (inFlight.current) return;
-    inFlight.current = true;
-    setError("");
-    const r = await request();
-    inFlight.current = false;
+  // start is the mode while the request runs, failed the one after an error; a 404 means another tab or device removed it.
+  const call = async <T,>(
+    start: typeof mode,
+    request: (signal: AbortSignal) => Promise<Result<T>>,
+    done: (data: T) => void,
+    failed: typeof mode,
+  ) => {
+    const r = await run((signal) => {
+      setError("");
+      setMode(start);
+      return request(signal);
+    });
     if (r.ok) return done(r.data);
     if (r.status === 404) return onGone(entry.id, "entry not found");
     setError(r.message);
-    return false;
+    setMode(failed);
   };
 
-  const open = () => {
-    setMode("opening");
-    run(
-      () => send<AdminEntry>("GET", `/api/admin/timeline/${entry.id}`),
+  const open = () =>
+    call(
+      "opening",
+      (signal) => send<AdminEntry>("GET", `/api/admin/timeline/${entry.id}`, undefined, signal),
       (data) => {
         setOpened(data);
         setMode("edit");
       },
-    ).then((r) => r === false && setMode("view"));
-  };
+      "view",
+    );
 
-  const save = (edit: object) => {
-    setSaving(true);
-    run(
-      () => send<AdminEntry>("PATCH", `/api/admin/timeline/${entry.id}`, edit),
+  const save = (edit: object) =>
+    call(
+      "edit",
+      (signal) => send<AdminEntry>("PATCH", `/api/admin/timeline/${entry.id}`, edit, signal),
       (data) => {
         onSaved(data, "saved");
         refocus.current = editButton;
         setMode("view");
       },
-    ).finally(() => setSaving(false));
-  };
+      "edit",
+    );
 
   const cancel = (button: RefObject<HTMLButtonElement | null>) => () => {
     setError("");
@@ -218,13 +224,8 @@ export function EntryRow({
     setMode("view");
   };
 
-  const remove = () => {
-    setMode("deleting");
-    run(
-      () => send("DELETE", `/api/admin/timeline/${entry.id}`),
-      () => onGone(entry.id, "deleted"),
-    ).then((r) => r === false && setMode("confirm"));
-  };
+  const remove = () =>
+    call("deleting", (signal) => send("DELETE", `/api/admin/timeline/${entry.id}`, undefined, signal), () => onGone(entry.id, "deleted"), "confirm");
 
   return (
     <TimelineEntry
@@ -238,7 +239,7 @@ export function EntryRow({
           <EditForm
             entry={opened}
             expire={expire}
-            saving={saving}
+            saving={busy}
             error={error}
             onSave={save}
             onCancel={cancel(editButton)}

@@ -1,6 +1,7 @@
 import { type ComponentType, type MouseEvent, type ReactNode, lazy, Suspense, useEffect, useRef, useState } from "react";
 // Types only: the admin code itself stays out of the public chunk.
 import type { EntryRow, Send } from "./EntryEditor";
+import { fetchWithSignal } from "./request";
 import type { Entry, Media, Profile, Timeline, Zone } from "./timelineTypes";
 
 type Summary = { slug: string; title: string; excerpt: string | null; tags: string[]; draft: boolean };
@@ -156,6 +157,12 @@ function TimelinePage() {
   const [hash, setHash] = useState(location.hash);
   // A ref, not state: two activations in the same task both see busy=false.
   const inFlight = useRef(false);
+  // Load more's fetch ends with the page; made in the effect, not in useRef: strict mode replays it.
+  const life = useRef<AbortController>(null!);
+  useEffect(() => {
+    const c = (life.current = new AbortController());
+    return () => c.abort();
+  }, []);
   const button = useRef<HTMLAnchorElement>(null);
   const list = useRef<HTMLDivElement>(null);
   const empty = useRef<HTMLParagraphElement>(null);
@@ -209,7 +216,7 @@ function TimelinePage() {
     setBusy(true);
     setFailed(false);
     setStatus("loading");
-    fetch(`/api/timeline?before=${cursor}`)
+    fetchWithSignal(`/api/timeline?before=${cursor}`, life.current.signal)
       .then((r) => (r.ok ? r.json() : Promise.reject()))
       .then(
         (page: Timeline) => {
@@ -447,15 +454,14 @@ function useAdmin(): [AdminKit | null, () => void] {
   const expire = () => setKit(null);
   useEffect(() => {
     if (!/(^|;\s*)admin_hint=1(;|$)/.test(document.cookie)) return;
-    let live = true;
+    // Aborted on unmount and on the strict mode replay: an old check never writes the shared csrf token or hint.
+    const c = new AbortController();
     import("./adminApi")
-      .then((api) => api.checkSession())
+      .then((api) => api.checkSession(c.signal))
       .then((r) => (r.ok && r.data.authenticated ? Promise.all([import("./TimelineComposer"), import("./EntryEditor")]) : undefined))
-      .then((m) => live && m && setKit({ Composer: m[0].default, EntryRow: m[1].EntryRow, send: m[1].sendOrExpire(expire) }))
+      .then((m) => !c.signal.aborted && m && setKit({ Composer: m[0].default, EntryRow: m[1].EntryRow, send: m[1].sendOrExpire(expire) }))
       .catch(() => {});
-    return () => {
-      live = false;
-    };
+    return () => c.abort();
   }, []);
   return [kit, expire];
 }
@@ -504,9 +510,14 @@ function useApi<T>(url: string) {
   const [error, setError] = useState(() => known && preloaded[url] === null);
   useEffect(() => {
     if (known) return;
-    fetch(url)
+    const c = new AbortController();
+    fetchWithSignal(url, c.signal)
       .then((r) => (r.ok ? r.json() : Promise.reject()))
-      .then(setData, () => setError(true));
+      .then(
+        (d) => !c.signal.aborted && setData(d),
+        () => !c.signal.aborted && setError(true),
+      );
+    return () => c.abort();
   }, [url]);
   return { data, error };
 }

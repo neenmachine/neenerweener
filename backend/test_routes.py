@@ -15,6 +15,7 @@ def client(tmp_path, monkeypatch):
     dist = tmp_path / "dist"
     dist.mkdir()
     (dist / "index.html").write_text('<html><head><title>neenerweener</title></head><body><div id="root"></div></body></html>')
+    (dist / "favicon.svg").write_text("<svg />")
     monkeypatch.setattr(app, "FRONTEND_DIST", dist)
     code = tmp_path / "code" / "demo"
     (code / "src").mkdir(parents=True)
@@ -69,22 +70,20 @@ def test_favicon_ico_redirects_to_svg_and_is_cacheable(client):
     assert head.content == b""
 
 
-FRONTEND = Path(__file__).parent.parent / "frontend"
-
-
-def test_favicons_need_no_inline_styles_and_dark_icon_is_linked():
-    # The site CSP has no style-src, so a <style> or style="" inside a favicon is a CSP violation.
-    icons = {p.name: p.read_text() for p in (FRONTEND / "public").glob("favicon*.svg")}
-    for name, svg in icons.items():
-        assert "<style" not in svg and "style=" not in svg, name
-    assert set(icons) == {"favicon.svg", "favicon-dark.svg"}
-    # Browsers that ignore media on icon links take the last one, so light must come last.
-    head = (FRONTEND / "index.html").read_text()
-    icon_links = re.findall(r'<link rel="icon"[^>]*>', head)
-    assert icon_links == [
-        '<link rel="icon" href="/favicon-dark.svg" type="image/svg+xml" media="(prefers-color-scheme: dark)" />',
-        '<link rel="icon" href="/favicon.svg" type="image/svg+xml" media="(prefers-color-scheme: light)" />',
-    ]
+def test_favicon_has_only_the_inline_style_policy(client):
+    favicon_policy = "default-src 'none'; style-src 'unsafe-inline'"
+    site_policy = (
+        "default-src 'self'; script-src 'self'; img-src 'self' blob:; connect-src 'self'; object-src 'none'; "
+        "base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+    )
+    for method in ("get", "head"):
+        response = getattr(client, method)("/favicon.svg")
+        assert response.headers["Content-Security-Policy-Report-Only"] == favicon_policy
+        assert "Content-Security-Policy" not in response.headers
+    for path in ("/", "/timeline", "/admin", "/api/posts", "/favicon.ico"):
+        response = client.get(path, follow_redirects=False)
+        assert response.headers["Content-Security-Policy-Report-Only"] == site_policy, path
+        assert "Content-Security-Policy" not in response.headers
 
 
 def test_api_404_stays_json(client):

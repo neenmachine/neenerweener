@@ -32,6 +32,8 @@ from operations import check_readiness, configure_logging, load_schema_heads
 from page_markup import home_markup, site_footer
 import routes
 
+FAVICON_CSP_REPORT_ONLY = "default-src 'none'; style-src 'unsafe-inline'"
+
 POSTS_DIR = Path(os.environ.get("POSTS_DIR", Path(__file__).parent.parent / "posts"))
 DRAFTS_DIR = Path(os.environ.get("DRAFTS_DIR", Path(__file__).parent.parent / "drafts"))
 CODE_DIR = Path(os.environ.get("CODE_DIR", Path(__file__).parent.parent / "code"))
@@ -204,9 +206,13 @@ async def security_middleware(request: Request, call_next):
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     response.headers["Content-Security-Policy-Report-Only"] = (
-        # blob: for the local previews of images being attached in the admin compose form
-        "default-src 'self'; script-src 'self'; img-src 'self' blob:; connect-src 'self'; object-src 'none'; "
-        "base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+        FAVICON_CSP_REPORT_ONLY
+        if request.url.path == "/favicon.svg"
+        else (
+            # blob: for the local previews of images being attached in the admin compose form
+            "default-src 'self'; script-src 'self'; img-src 'self' blob:; connect-src 'self'; object-src 'none'; "
+            "base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+        )
     )
     return response
 

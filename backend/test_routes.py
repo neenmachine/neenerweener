@@ -69,6 +69,20 @@ def test_favicon_ico_redirects_to_svg_and_is_cacheable(client):
     assert head.content == b""
 
 
+FRONTEND = Path(__file__).parent.parent / "frontend"
+
+
+def test_favicons_need_no_inline_styles_and_dark_icon_is_linked():
+    # The site CSP has no style-src, so a <style> or style="" inside a favicon is a CSP violation.
+    icons = {p.name: p.read_text() for p in (FRONTEND / "public").glob("favicon*.svg")}
+    for name, svg in icons.items():
+        assert "<style" not in svg and "style=" not in svg, name
+    assert set(icons) == {"favicon.svg", "favicon-dark.svg"}
+    head = (FRONTEND / "index.html").read_text()
+    assert '<link rel="icon" href="/favicon.svg" type="image/svg+xml" />' in head
+    assert '<link rel="icon" href="/favicon-dark.svg" type="image/svg+xml" media="(prefers-color-scheme: dark)" />' in head
+
+
 def test_api_404_stays_json(client):
     response = client.get("/api/no-such-route")
     assert response.status_code == 404

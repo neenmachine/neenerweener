@@ -23,6 +23,7 @@ from test_auth import admin_password, authenticated_client, configured_app, make
         ("readiness", "/readyz", 503, {"content-type": "application/json"}, "no-store"),
         ("images", "/images/example.webp", 200, {"content-type": "image/webp"}, "public, max-age=3600"),
         ("favicon", "/favicon.svg", 200, {"content-type": "image/svg+xml"}, "public, max-age=3600"),
+        ("dark favicon", "/favicon-dark.svg", 200, {"content-type": "image/svg+xml"}, "public, max-age=3600"),
         ("favicon redirect", "/favicon.ico", 301, {"location": "/favicon.svg"}, "public, max-age=3600"),
         ("code raw", "/code-raw/demo/file.py", 200, {"content-type": "text/plain"}, "public, max-age=3600"),
         ("discovery regression", "/feed.xml", 200, {"cache-control": "public, max-age=300"}, "public, max-age=300"),
@@ -39,6 +40,7 @@ def test_cache_headers_through_testclient(tmp_path, monkeypatch):
     (tmp_path / "assets").mkdir()
     (tmp_path / "assets" / "app-abc.js").write_text("console.log(1)")
     (tmp_path / "favicon.svg").write_text("<svg />")
+    (tmp_path / "favicon-dark.svg").write_text("<svg />")
     (tmp_path / "index.html").write_text("<html><body>app</body></html>")
     monkeypatch.setattr(app, "FRONTEND_DIST", tmp_path)
     with TestClient(app.app) as client:
@@ -62,6 +64,7 @@ def test_cache_headers_through_testclient(tmp_path, monkeypatch):
             ("GET", "/healthz", 200, "no-store"),
             ("HEAD", "/readyz", 503, "no-store"),
             ("GET", "/favicon.svg", 200, "public, max-age=3600"),
+            ("GET", "/favicon-dark.svg", 200, "public, max-age=3600"),
             ("GET", "/favicon.ico", 301, "public, max-age=3600"),
             ("HEAD", "/favicon.ico", 301, "public, max-age=3600"),
             ("GET", "/feed.xml", 200, "public, max-age=300"),  # regression guard

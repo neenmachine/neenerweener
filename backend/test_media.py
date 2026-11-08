@@ -1,4 +1,5 @@
 import asyncio
+import concurrent.futures
 import io
 import logging
 import re
@@ -13,13 +14,14 @@ import pytest
 from fastapi.testclient import TestClient
 from PIL import ExifTags, Image, ImageCms, ImageFile
 from sqlalchemy import delete, insert, select, update
+from sqlalchemy.exc import IntegrityError
 
 import app
 from auth import hash_password
 from machine_auth import Principal, machine_auth_tokens
 from media import MAX_UPLOAD_BYTES, MediaConfig, MemoryMediaStore, S3MediaStore, process_avatar
 from test_machine_auth import challenge_and_token, key_pair, machine_app  # noqa: F401 -- shared fixtures
-from timeline import TimelineStore, media_assets, timeline_entries, timeline_entry_media
+from timeline import InvalidAttachment, TimelineStore, media_assets, site_profile, timeline_entries, timeline_entry_media
 
 MEDIA_ENV = {
     "MEDIA_BUCKET": "fake-bucket",
@@ -78,6 +80,15 @@ def two_tone(size=(40, 20), mode="RGB"):
     return image
 
 
+def oriented_three_tone_jpeg():
+    image = Image.new("RGB", (240, 120), "blue")
+    image.paste("red", (0, 0, 80, 120))
+    image.paste("green", (80, 0, 160, 120))
+    exif = Image.Exif()
+    exif[ExifTags.Base.Orientation] = 6
+    return encode(image, "JPEG", quality=95, subsampling=0, exif=exif.tobytes())
+
+
 def gps_jpeg(description="fixture"):
     exif = Image.Exif()
     exif[ExifTags.Base.Orientation] = 6
@@ -121,15 +132,20 @@ def stored(store, response):
     return {variant: store.get(f"media/{asset_id}/{variant}.webp") for variant in ("lg", "sm")}
 
 
-def test_avatar_is_center_cropped_to_fixed_square_variants_and_stripped():
-    image = process_avatar(gps_jpeg())
+def test_avatar_is_oriented_center_cropped_to_fixed_square_variants_and_stripped():
+    image = process_avatar(oriented_three_tone_jpeg())
     assert (image.width, image.height) == (192, 192)
-    for data, size in ((image.lg, (192, 192)), (image.sm, (96, 96))):
+    for data, size in ((image.lg, 192), (image.sm, 96)):
         assert not {b"EXIF", b"XMP ", b"ICCP"} & set(riff_chunks(data))
         with Image.open(io.BytesIO(data)) as decoded:
             assert decoded.format == "WEBP"
-            assert decoded.size == size
+            assert decoded.size == (size, size)
             assert not decoded.getexif()
+            pixels = decoded.convert("RGB")
+            samples = [pixels.getpixel((size // 2, round(size * fraction))) for fraction in (.05, .25, .5, .75, .95)]
+            assert samples[0][0] > 180 and samples[0][1] < 80 and samples[0][2] < 80
+            assert all(color[1] > color[0] * 1.5 and color[1] > color[2] * 1.5 for color in samples[1:4])
+            assert samples[4][2] > 180 and samples[4][0] < 80 and samples[4][1] < 80
 
 
 def test_jpeg_is_stripped_rotated_and_stored_under_server_keys(uploads):
@@ -460,10 +476,16 @@ def media_db(machine_app, monkeypatch):  # noqa: F811
     monkeypatch.setattr(app, "media_store", store, raising=False)
     with app.timeline_store.engine.begin() as connection:
         connection.execute(delete(timeline_entry_media))
+        connection.execute(update(site_profile).where(site_profile.c.id == 1).values(
+            display_name="neenerweener", handle=None, avatar_asset_id=None
+        ))
         connection.execute(delete(media_assets))
     yield machine_app, store
     with app.timeline_store.engine.begin() as connection:
         connection.execute(delete(timeline_entry_media))
+        connection.execute(update(site_profile).where(site_profile.c.id == 1).values(
+            display_name="neenerweener", handle=None, avatar_asset_id=None
+        ))
         connection.execute(delete(media_assets))
 
 
@@ -487,14 +509,58 @@ def test_bearer_upload_stores_a_row_and_needs_timeline_create(media_db):
     assert (denied.status_code, denied.json()) == (403, {"detail": "insufficient scope"})
 
 
-def test_profile_patch_needs_browser_csrf_and_rejects_bearer(media_db, monkeypatch):
-    _machine, _store = media_db
+def test_profile_mutations_need_browser_csrf_reject_bearer_and_are_no_store(media_db, monkeypatch):
+    (private, _public, _machine_store, _secret), _store = media_db
+    bearer_client = TestClient(app.app, base_url="http://127.0.0.1")
+    _challenge, token = challenge_and_token(bearer_client, private)
+    bearer = {"Authorization": f"Bearer {token.json()['access_token']}"}
+    denied_avatar = bearer_client.post(
+        "/api/admin/profile/avatar", content=encode(two_tone(), "PNG"), headers=bearer
+    )
+    denied_patch = bearer_client.patch(
+        "/api/admin/profile", headers=bearer, json={"display_name": "configured", "handle": "valid_handle"}
+    )
+    assert [(response.status_code, response.json()) for response in (denied_avatar, denied_patch)] == [
+        (401, {"detail": "authentication required"}),
+        (401, {"detail": "authentication required"}),
+    ]
+
     monkeypatch.setenv("ADMIN_PASSWORD_HASH", hash_password("fixture-password"))
     client = TestClient(app.app, base_url="http://127.0.0.1")
-    login = client.post("/api/admin/login", headers={"Origin": "http://127.0.0.1"}, json={"password": "fixture-password"})
+    login = client.post(
+        "/api/admin/login", headers={"Origin": "http://127.0.0.1"}, json={"password": "fixture-password"}
+    )
     assert login.status_code == 204
-    missing = client.patch("/api/admin/profile", headers={"Origin": "http://127.0.0.1"}, json={"display_name": "neenerweener", "handle": None})
-    assert (missing.status_code, missing.json()) == (403, {"detail": "csrf validation failed"})
+    origin = {"Origin": "http://127.0.0.1"}
+    no_csrf_avatar = client.post(
+        "/api/admin/profile/avatar", content=encode(two_tone(), "PNG"), headers=origin
+    )
+    no_csrf_patch = client.patch(
+        "/api/admin/profile", headers=origin, json={"display_name": "configured", "handle": "valid_handle"}
+    )
+    assert [(response.status_code, response.json()) for response in (no_csrf_avatar, no_csrf_patch)] == [
+        (403, {"detail": "csrf validation failed"}),
+        (403, {"detail": "csrf validation failed"}),
+    ]
+
+    csrf = client.get("/api/admin/session").json()["csrf_token"]
+    mutation_headers = {**origin, "X-CSRF-Token": csrf}
+    avatar = client.post(
+        "/api/admin/profile/avatar", content=encode(two_tone(), "PNG"), headers=mutation_headers
+    )
+    patched = client.patch(
+        "/api/admin/profile",
+        headers=mutation_headers,
+        json={"display_name": "configured", "handle": "valid_handle", "avatar_id": avatar.json()["id"]},
+    )
+    assert (avatar.status_code, patched.status_code) == (201, 200)
+    assert patched.json() == {
+        "display_name": "configured",
+        "handle": "valid_handle",
+        "avatar_id": avatar.json()["id"],
+        "avatar_initial": "C",
+    }
+    assert avatar.headers["cache-control"] == patched.headers["cache-control"] == "no-store"
 
 
 def test_browser_upload_needs_origin_and_csrf(media_db, monkeypatch):
@@ -530,6 +596,26 @@ def test_machine_uploads_are_limited_to_40_per_hour(media_db):
     assert limited.headers["Retry-After"].isdigit()
     timeline = client.post("/api/admin/timeline", headers=headers, json={"body_markdown": "fixture"})
     assert timeline.status_code == 201, "uploads use their own limit, not the timeline create limit"
+
+
+def test_profile_avatar_upload_sweeps_an_expired_staged_asset(media_db, monkeypatch):
+    _machine, store = media_db
+    expired = attachable(store, created_at=datetime.now(UTC) - timedelta(hours=25))
+    monkeypatch.setattr(app, "_media_sweep_due", 0.0)
+    app.app.dependency_overrides[app.require_browser_mutation] = lambda: app.Access(Principal("browser-admin", None))
+    try:
+        response = TestClient(app.app).post(
+            "/api/admin/profile/avatar", content=encode(two_tone(), "PNG")
+        )
+    finally:
+        app.app.dependency_overrides.clear()
+
+    assert response.status_code == 201
+    with app.timeline_store.engine.connect() as connection:
+        assert connection.execute(
+            select(media_assets.c.id).where(media_assets.c.id == expired)
+        ).scalar_one_or_none() is None
+    assert all(str(expired) not in key for key in store.objects)
 
 
 def test_sweep_removes_expired_unattached_assets_objects_then_row(media_db, monkeypatch):
@@ -597,6 +683,129 @@ def attachable(store, created_at=None, detached_at=None, data=b"webp-bytes"):
     for variant in ("lg", "sm"):
         store.put(f"media/{asset_id}/{variant}.webp", data + variant.encode(), "image/webp")
     return asset_id
+
+
+def concurrent_store_calls(*calls):
+    barrier = threading.Barrier(len(calls))
+
+    def invoke(call):
+        barrier.wait(timeout=10)
+        try:
+            return call()
+        except Exception as exc:
+            return exc
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(calls)) as executor:
+        return [future.result(timeout=30) for future in [executor.submit(invoke, call) for call in calls]]
+
+
+def test_live_profile_avatar_is_not_swept_serves_both_variants_and_observes_detached_grace(media_db):
+    _machine, store = media_db
+    timeline: TimelineStore = app.timeline_store
+    avatar = attachable(store, data=b"avatar-")
+    timeline.update_profile("configured", "valid_handle", avatar)
+    with timeline.engine.begin() as connection:
+        connection.execute(
+            update(media_assets).where(media_assets.c.id == avatar).values(created_at=datetime.now(UTC) - timedelta(days=30))
+        )
+
+    assert avatar not in timeline.expired_media_assets(20)
+    public = TestClient(app.app)
+    for variant in ("lg", "sm"):
+        response = public.get(f"/media/{avatar}/{variant}.webp")
+        assert (response.status_code, response.content) == (200, store.get(f"media/{avatar}/{variant}.webp"))
+
+    timeline.update_profile("configured", "valid_handle", None)
+    with timeline.engine.connect() as connection:
+        detached_at = connection.execute(
+            select(media_assets.c.detached_at).where(media_assets.c.id == avatar)
+        ).scalar_one()
+    assert detached_at is not None
+    assert avatar not in timeline.expired_media_assets(20)
+    with timeline.engine.begin() as connection:
+        connection.execute(
+            update(media_assets).where(media_assets.c.id == avatar).values(detached_at=datetime.now(UTC) - timedelta(days=8))
+        )
+    assert avatar in timeline.expired_media_assets(20)
+
+
+def test_profile_replacement_detaches_old_avatar_and_attaches_new_one(media_db):
+    _machine, store = media_db
+    timeline: TimelineStore = app.timeline_store
+    old, new = attachable(store), attachable(store)
+    timeline.update_profile("configured", None, old)
+    profile = timeline.update_profile("configured", None, new)
+
+    with timeline.engine.connect() as connection:
+        states = dict(
+            connection.execute(
+                select(media_assets.c.id, media_assets.c.detached_at).where(media_assets.c.id.in_([old, new]))
+            ).all()
+        )
+    assert profile["avatar_asset_id"] == new
+    assert states[old] is not None
+    assert states[new] is None
+
+
+def test_timeline_and_profile_race_has_one_owner_and_one_invalid_attachment(media_db):
+    _machine, store = media_db
+    timeline: TimelineStore = app.timeline_store
+    for round_number in range(5):
+        asset = attachable(store)
+        results = concurrent_store_calls(
+            lambda: timeline.create(f"timeline owner {round_number}", [(asset, "")]),
+            lambda: timeline.update_profile("profile owner", None, asset),
+        )
+        assert sum(isinstance(result, InvalidAttachment) for result in results) == 1, results
+        assert sum(isinstance(result, dict) for result in results) == 1, results
+        with timeline.engine.connect() as connection:
+            timeline_owner = connection.execute(
+                select(timeline_entry_media.c.entry_id).where(timeline_entry_media.c.asset_id == asset)
+            ).scalar_one_or_none()
+            profile_owner = connection.execute(
+                select(site_profile.c.id).where(site_profile.c.avatar_asset_id == asset)
+            ).scalar_one_or_none()
+        assert (timeline_owner is not None) + (profile_owner is not None) == 1
+        if profile_owner is not None:
+            timeline.update_profile("profile owner", None, None)
+
+
+def test_concurrent_profile_replacements_serialize_and_detach_the_loser(media_db):
+    _machine, store = media_db
+    timeline: TimelineStore = app.timeline_store
+    old, first, second = (attachable(store) for _ in range(3))
+    timeline.update_profile("configured", None, old)
+    results = concurrent_store_calls(
+        lambda: timeline.update_profile("first", None, first),
+        lambda: timeline.update_profile("second", None, second),
+    )
+    assert all(isinstance(result, dict) for result in results), results
+
+    profile = timeline.get_profile()
+    winner = profile["avatar_asset_id"]
+    loser = second if winner == first else first
+    with timeline.engine.connect() as connection:
+        states = dict(
+            connection.execute(
+                select(media_assets.c.id, media_assets.c.detached_at).where(media_assets.c.id.in_([old, first, second]))
+            ).all()
+        )
+    assert winner in {first, second}
+    assert states[winner] is None
+    assert states[old] is not None and states[loser] is not None
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        pytest.param({"display_name": "   "}, id="blank-name"),
+        pytest.param({"handle": "bad-handle"}, id="bad-handle"),
+    ],
+)
+def test_database_rejects_invalid_profile_name_and_handle(media_db, values):
+    with pytest.raises(IntegrityError):
+        with app.timeline_store.engine.begin() as connection:
+            connection.execute(update(site_profile).where(site_profile.c.id == 1).values(**values))
 
 
 @pytest.fixture

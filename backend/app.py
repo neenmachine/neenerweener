@@ -693,11 +693,15 @@ async def upload_media(
     except Exception as exc:
         logger.warning("media.store.unavailable: %s", type(exc).__name__)
         raise HTTPException(503, "media unavailable") from exc
+    _schedule_media_sweep(background, assets, store)
+    return {"id": str(asset_id), "width": image.width, "height": image.height}
+
+
+def _schedule_media_sweep(background: BackgroundTasks, assets, store) -> None:
     global _media_sweep_due
     if time.monotonic() >= _media_sweep_due:
         _media_sweep_due = time.monotonic() + MEDIA_SWEEP_INTERVAL_SECONDS
         background.add_task(_sweep_media, assets, store)  # after the response, so a slow bucket cannot hold it
-    return {"id": str(asset_id), "width": image.width, "height": image.height}
 
 
 async def _sweep_media(assets, store) -> None:
@@ -727,6 +731,7 @@ async def upload_profile_avatar(
     except Exception as exc:
         logger.warning("media.store.unavailable: %s", type(exc).__name__)
         raise HTTPException(503, "media unavailable") from exc
+    _schedule_media_sweep(background, assets, store)
     return {"id": str(asset_id)}
 
 

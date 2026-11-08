@@ -271,9 +271,9 @@ function Manager({ send, expire }: { send: Send; expire: () => void }) {
             key={e.id}
             entry={e}
             send={send}
-            onSaved={(saved) => {
+            onSaved={(saved, message) => {
               setEntries((prev) => prev.map((p) => (p.id === saved.id ? saved : p)));
-              setStatus("saved");
+              setStatus(message);
             }}
             onGone={remove}
             expire={expire}

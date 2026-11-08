@@ -247,9 +247,9 @@ function TimelinePage() {
               className={className}
               href={`#entry-${e.id}`}
               send={admin.send}
-              onSaved={(saved) => {
+              onSaved={(saved, message) => {
                 setUpdated((prev) => ({ ...prev, [saved.id]: saved }));
-                setStatus("saved");
+                setStatus(message);
               }}
               onGone={(id, message) => {
                 if (list.current?.contains(document.activeElement)) editAt.current = entries.findIndex((x) => x.id === id);

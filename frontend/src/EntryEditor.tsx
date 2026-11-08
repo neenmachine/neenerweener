@@ -152,7 +152,7 @@ export function EntryRow({
   className?: string;
   href?: string;
   send: Send;
-  onSaved: (entry: Entry) => void;
+  onSaved: (entry: Entry, message: string) => void;
   onGone: (id: number, message: string) => void;
   expire: () => void;
 }) {
@@ -202,7 +202,7 @@ export function EntryRow({
     run(
       () => send<AdminEntry>("PATCH", `/api/admin/timeline/${entry.id}`, edit),
       (data) => {
-        onSaved(data);
+        onSaved(data, "saved");
         refocus.current = editButton;
         setMode("view");
       },

@@ -898,8 +898,12 @@ main.admin-shell {
   color: var(--fg);
 }
 
+/* The save button and its status, then the error under them; the empty error takes no space. */
 .save-row {
   padding-top: 4px;
+}
+
+.save-row .admin-row {
   gap: 0.5rem 14px;
 }
 
@@ -908,9 +912,14 @@ main.admin-shell {
   font-size: 0.9rem;
 }
 
+.save-row .error:not(:empty) {
+  margin-top: 0.5rem;
+}
+
 @media (max-width: 760px) {
   .profile {
     flex-direction: column;
+    align-items: stretch;
   }
 
   .profile .picture {

@@ -182,15 +182,17 @@ function ProfileForm({ initial, send, setProfile }: { initial: Profile; send: Se
             />
           </div>
         </div>
-        <div className="admin-row save-row">
-          <Button type="submit" busy={saving} off={uploading} label="save profile" busyLabel="saving" />
-          <p className="muted" role="status">
-            {status}
+        <div className="save-row">
+          <div className="admin-row">
+            <Button type="submit" busy={saving} off={uploading} label="save profile" busyLabel="saving" />
+            <p className="muted" role="status">
+              {status}
+            </p>
+          </div>
+          <p id="profile-error" className="error" role="alert">
+            {error}
           </p>
         </div>
-        <p id="profile-error" className="error" role="alert">
-          {error}
-        </p>
       </div>
     </form>
   );

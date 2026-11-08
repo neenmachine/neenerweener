@@ -374,3 +374,94 @@ test("an upload that answers after log out makes no preview URL", async () => {
   for (let i = 0; i < 3; i++) await flush();
   expect(created).not.toHaveBeenCalled();
 });
+
+// Another tab of the same browser: its profile page posts the saved profile on the "profile" channel.
+const newer: Profile = { display_name: "newer name", handle: "newer_handle", avatar_id: configured.avatar_id, avatar_initial: "N" };
+async function otherTabSaves(p: Profile) {
+  const tab = new BroadcastChannel("profile");
+  tab.postMessage(p);
+  tab.close();
+  for (let i = 0; i < 3; i++) await flush();
+}
+const identity = () => document.querySelector(".admin-session .identity")?.textContent;
+
+test("a profile saved in another tab shows in the shell, the untouched form and the overview without a fetch", async () => {
+  const s = await render();
+  await otherTabSaves(newer);
+  expect(identity()).toBe("newer name");
+  expect(field("display-name").value).toBe("newer name");
+  expect(field("handle").value).toBe("newer_handle");
+  expect(preview().getAttribute("src")).toBe(`/media/${configured.avatar_id}/sm.webp`);
+  expect(buttons()).toEqual(["replace picture", "remove picture", "save profile"]);
+  await click([...document.querySelectorAll<HTMLAnchorElement>("nav.admin-nav a")].find((a) => a.textContent === "overview")!);
+  expect([...page().querySelectorAll(".admin-links a")][1].textContent).toBe("profilenewer name@newer_handle");
+  expect(s.calls.filter((c) => c.url === "/api/profile")).toHaveLength(1);
+});
+
+test("another tab's save keeps typed text and a staged picture; untouched fields follow it", async () => {
+  const s = await render();
+  await type(field("display-name"), "typed name");
+  await pickFile("choose picture");
+  await otherTabSaves(newer);
+  expect(field("display-name").value).toBe("typed name");
+  expect(field("handle").value).toBe("newer_handle");
+  expect(preview().getAttribute("src")).toBe("blob:fixture-1");
+  expect(identity()).toBe("newer name");
+  await save();
+  expect(s.mutations().at(-1)!.body).toEqual({ display_name: "typed name", handle: "newer_handle", avatar_id: "staged-3" });
+});
+
+test("a save posts the saved profile to the other tabs", async () => {
+  const tab = new BroadcastChannel("profile");
+  try {
+    const got: Profile[] = [];
+    tab.onmessage = (e: MessageEvent<Profile>) => got.push(e.data);
+    await render();
+    await type(field("display-name"), "saved name");
+    await save();
+    for (let i = 0; i < 3; i++) await flush();
+    expect(got).toEqual([{ display_name: "saved name", handle: "fixture_handle", avatar_id: null, avatar_initial: "S" }]);
+  } finally {
+    tab.close();
+  }
+});
+
+test("a profile load still running when another tab's save arrives cannot overwrite it", async () => {
+  const s = server();
+  const answer = s.fetch.getMockImplementation()!;
+  let release: () => void = () => {};
+  s.fetch.mockImplementation((url: string, init?: RequestInit) =>
+    url === "/api/profile" ? new Promise((resolve) => (release = () => resolve(answer(url, init)))) : answer(url, init),
+  );
+  await render(s);
+  await otherTabSaves(newer);
+  expect(identity()).toBe("newer name");
+  await act(async () => release()); // the older load answers with the fixture profile
+  for (let i = 0; i < 3; i++) await flush();
+  expect(identity()).toBe("newer name");
+  expect(field("display-name").value).toBe("newer name");
+});
+
+test("unmount closes the shell's channel", async () => {
+  const open = new Set<BroadcastChannel>();
+  vi.stubGlobal(
+    "BroadcastChannel",
+    class extends BroadcastChannel {
+      constructor(name: string) {
+        super(name);
+        open.add(this);
+      }
+      close() {
+        open.delete(this);
+        super.close();
+      }
+    },
+  );
+  await render();
+  await otherTabSaves(newer);
+  expect(identity()).toBe("newer name");
+  expect(open.size).toBeGreaterThan(0);
+  act(() => root!.unmount());
+  root = undefined;
+  expect(open.size).toBe(0);
+});

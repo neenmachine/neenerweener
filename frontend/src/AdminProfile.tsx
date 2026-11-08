@@ -34,7 +34,7 @@ export default function AdminProfile({ send, profile, loadProfile, setProfile }:
           <Button onClick={load} label="retry" />
         </div>
       )}
-      {state === "ok" && profile && <ProfileForm initial={profile} send={send} setProfile={setProfile} />}
+      {state === "ok" && profile && <ProfileForm profile={profile} send={send} setProfile={setProfile} />}
     </>
   );
 }
@@ -48,11 +48,19 @@ const firstInvalid = (name: string, handle: string) =>
 // only on save profile. undefined: keep the saved picture; null: remove it; otherwise the staged upload.
 type Staged = undefined | null | { id: string; url: string };
 
-function ProfileForm({ initial, send, setProfile }: { initial: Profile; send: Send; setProfile: (p: Profile) => void }) {
-  const [saved, setSaved] = useState(initial);
-  const [name, setName] = useState(initial.display_name);
-  const [handle, setHandle] = useState(initial.handle ?? "");
+function ProfileForm({ profile, send, setProfile }: { profile: Profile; send: Send; setProfile: (p: Profile) => void }) {
+  const [saved, setSaved] = useState(profile);
+  const [name, setName] = useState(profile.display_name);
+  const [handle, setHandle] = useState(profile.handle ?? "");
   const [staged, setStaged] = useState<Staged>(undefined);
+  // A profile saved in another tab: a field still showing the old saved value takes the new one; typed text stays,
+  // and so does a staged picture.
+  useEffect(() => {
+    if (profile === saved) return;
+    setName((n) => (n === saved.display_name ? profile.display_name : n));
+    setHandle((h) => (h === (saved.handle ?? "") ? (profile.handle ?? "") : h));
+    setSaved(profile);
+  }, [profile]);
   // A new pick supersedes an upload still running; one save at a time (Enter in a field submits without the button).
   const { run: uploadRun, busy: uploading } = useRequest("load");
   const { run: saveRun, busy: saving } = useRequest("submit");

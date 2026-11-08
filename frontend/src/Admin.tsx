@@ -1,6 +1,6 @@
 import { type MouseEvent, Suspense, useEffect, useRef, useState } from "react";
 import { AdminHead, Avatar, Footer } from "./App";
-import { checkSession, login, logout as signOut, type Result } from "./adminApi";
+import { checkSession, login, profileChannel, logout as signOut, type Result } from "./adminApi";
 import { adminPages } from "./adminPages";
 import { Button, sendOrExpire } from "./EntryEditor";
 import type { Profile } from "./timelineTypes";
@@ -69,12 +69,30 @@ export default function Admin() {
   // The public profile, for the nav and the pages; fetched once, again only after a failure.
   const [profile, setProfile] = useState<Profile | null>(null);
   const profileFlight = useRef<Promise<Result<Profile>> | null>(null);
-  const loadProfile = () =>
-    (profileFlight.current ??= send<Profile>("GET", "/api/profile", undefined, life.current.signal).then((r) => {
+  const loadProfile = () => {
+    if (profileFlight.current) return profileFlight.current;
+    const flight: Promise<Result<Profile>> = (profileFlight.current = send<Profile>("GET", "/api/profile", undefined, life.current.signal).then((r) => {
+      if (profileFlight.current !== flight) return r; // a newer saved profile came in meanwhile
       if (r.ok) setProfile(r.data);
       else profileFlight.current = null;
       return r;
     }));
+    return flight;
+  };
+  // A saved profile, from this tab's profile page or another tab's; it supersedes a load still running.
+  const applyProfile = (p: Profile) => {
+    profileFlight.current = Promise.resolve({ ok: true, data: p });
+    setProfile(p);
+  };
+  const channel = useRef<BroadcastChannel>(null);
+  useEffect(() => {
+    const c = (channel.current = profileChannel(applyProfile));
+    return () => c.close();
+  }, []);
+  const saveProfile = (p: Profile) => {
+    applyProfile(p);
+    channel.current?.postMessage(p);
+  };
 
   const send = sendOrExpire(() => expire());
 
@@ -185,7 +203,7 @@ export default function Admin() {
             .map(({ path: at, Page }) => (
               <div key={at} className="admin-page" hidden={at !== path}>
                 <Suspense>
-                  <Page send={send} expire={expire} profile={profile} loadProfile={loadProfile} setProfile={setProfile} active={signedIn && at === path} />
+                  <Page send={send} expire={expire} profile={profile} loadProfile={loadProfile} setProfile={saveProfile} active={signedIn && at === path} />
                   <Loaded onLoad={focusHeading} />
                 </Suspense>
               </div>

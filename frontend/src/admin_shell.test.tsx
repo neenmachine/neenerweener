@@ -174,7 +174,7 @@ test("a failed overview count shows the error and retry loads it again", async (
   expect(visible(".admin-links")).toHaveLength(0);
   fail = false;
   await click([...document.querySelectorAll("button")].find((b) => b.textContent?.startsWith("retry"))!);
-  expect(visible(".admin-links a")[0].textContent).toBe("timeline2 entries");
+  expect(visible(".admin-links a").map((a) => a.textContent)[0]).toBe("timeline2 entries");
 });
 
 test("an empty timeline says nothing here yet under entries", async () => {

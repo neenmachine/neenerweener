@@ -24,6 +24,14 @@ Everything else: the site, backend, frontend, styling, deployment, demos, toolin
 - Server-rendered pages: for `/`, `/timeline` and `/posts/<slug>`, the backend fills `index.html` with the page title, description and link-preview tags, the API data the page needs (`<script id="preload">`, read by `useApi`), and the first timeline or post markup.
 - `frontend/` - React + Vite (`pnpm`). The backend serves the built `frontend/dist` on port 8000, in dev as in production.
 
+## Adding an admin page
+
+1. Add one row `{ path, label, Page }` to `frontend/src/adminPages.tsx` (the nav link and the document title `<label> · admin` come from it).
+2. Add the page file `frontend/src/Admin<Name>.tsx`: a default export taking `AdminPageProps`, starting with `<h1 tabIndex={-1}>{label}</h1>`. Load data with the `send` prop (a 401 ends the session).
+3. Add the section and label to `ADMIN_PAGES` in `backend/routes.py` and one `admin_pages` row to `frontend/src/route_cases.json`; tests fail until all three agree.
+4. Optional: an authenticated interface under `/api/admin/` using `require_browser_read` or `require_browser_mutation`.
+5. Add the page's distinctive labels to the `chunk-guard` pattern and its module to the lazy-chunk check in `Makefile`.
+
 ## Commands
 
 - Dev: `make dev`, then open http://localhost:8000 (backend with drafts plus `vite build --watch`; reload after a frontend save; Ctrl-C stops both)

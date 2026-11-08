@@ -93,6 +93,7 @@ test("signed out, a deep link shows sign in without nav, then the requested page
   expect(h1s()).toEqual(["admin"]);
   expect(visible("h2").map((h) => h.textContent)).toEqual(["sign in"]);
   expect(document.querySelector("nav")).toBeNull();
+  expect(document.title).toBe("sign in · admin");
   const password = document.querySelector<HTMLInputElement>("#password")!;
   password.value = "fixture";
   await act(async () => password.form!.dispatchEvent(new SubmitEvent("submit", { bubbles: true, cancelable: true })));
@@ -100,6 +101,7 @@ test("signed out, a deep link shows sign in without nav, then the requested page
   expect(location.pathname).toBe("/admin/profile");
   expect(h1s()).toEqual(["profile"]);
   expect(current()).toEqual(["profile"]);
+  expect(document.title).toBe("profile · admin");
 });
 
 test("a nav click swaps the page in place: url, title, current link and focused h1", async () => {
@@ -175,6 +177,98 @@ test("a failed overview count shows the error and retry loads it again", async (
   fail = false;
   await click([...document.querySelectorAll("button")].find((b) => b.textContent?.startsWith("retry"))!);
   expect(visible(".admin-links a").map((a) => a.textContent)[0]).toBe("timeline2 entries");
+});
+
+test("the overview count is current after a post and a delete on the timeline page", async () => {
+  let n = 1;
+  let gate: Promise<void> | undefined;
+  const base = server({ count: async () => (await gate, ok({ entry_count: n })) });
+  const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+    if (init?.method === "POST" && url === "/api/admin/timeline") return n++, ok({ ...entry, id: 2, html: "<p>second</p>" });
+    if (init?.method === "DELETE" && url === "/api/admin/timeline/2") return n--, { ok: true, status: 204, headers: new Headers(), json: () => Promise.reject() };
+    return base(url);
+  });
+  await render("/admin", fetch);
+  const count = () => visible(".admin-links a")[0]?.textContent;
+  const button = (name: string) => visible("button").find((b) => b.textContent?.startsWith(name) || b.getAttribute("aria-label") === name)!;
+  expect(count()).toBe("timeline1 entry");
+
+  await click(navLink("timeline"));
+  const draft = visible('[aria-label="new entry"]')[0] as HTMLTextAreaElement;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(draft, "fixture second");
+    draft.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await click(button("post"));
+  await click(navLink("overview"));
+  expect(count()).toBe("timeline2 entries");
+
+  await click(navLink("timeline"));
+  await click(button("delete entry 2"));
+  await click(button("confirm delete entry 2"));
+  let open = () => {};
+  gate = new Promise((resolve) => (open = resolve));
+  await click(navLink("overview"));
+  // While the refresh runs, the old count stays (no loading flash).
+  expect(count()).toBe("timeline2 entries");
+  await act(async () => open());
+  await flush();
+  expect(count()).toBe("timeline1 entry");
+});
+
+// Each overview request waits until the test answers it with a count.
+function heldCounts() {
+  const pending: ((n: number) => void)[] = [];
+  const fetch = server({ count: () => new Promise((resolve) => pending.push((n) => resolve(ok({ entry_count: n })))) });
+  const answer = async (i: number, n: number) => {
+    await act(async () => pending[i](n));
+    for (let j = 0; j < 3; j++) await flush();
+  };
+  return { fetch, pending, answer };
+}
+
+test("an older overview refresh that answers last does not replace the newer count", async () => {
+  const { fetch, pending, answer } = heldCounts();
+  await render("/admin", fetch);
+  await answer(0, 1);
+  const count = () => visible(".admin-links a")[0]?.textContent;
+  expect(count()).toBe("timeline1 entry");
+  await click(navLink("timeline"));
+  await click(navLink("overview"));
+  await click(navLink("timeline"));
+  await click(navLink("overview"));
+  expect(pending).toHaveLength(3);
+  await answer(2, 2);
+  expect(count()).toBe("timeline2 entries");
+  await answer(1, 1);
+  expect(count()).toBe("timeline2 entries");
+});
+
+test("a refresh that answers after logout writes nothing and logs no error", async () => {
+  const error = vi.spyOn(console, "error");
+  try {
+    const { fetch, pending, answer } = heldCounts();
+    await render("/admin", fetch);
+    await answer(0, 1);
+    await click(navLink("timeline"));
+    await click(navLink("overview"));
+    expect(pending).toHaveLength(2);
+    await click(visible("button").find((b) => b.textContent?.startsWith("log out"))!);
+    expect(visible("h2").map((h) => h.textContent)).toEqual(["sign in"]);
+    await answer(1, 5);
+    expect(document.querySelector(".admin-links")).toBeNull();
+    expect(document.body.textContent).not.toContain("entries");
+    expect(error).not.toHaveBeenCalled();
+  } finally {
+    error.mockRestore();
+  }
+});
+
+test("attach images is the label right after its file input, which the focus ring rule needs", async () => {
+  await render("/admin/timeline");
+  const inputs = visible('.attachments input[type="file"]');
+  expect(inputs).toHaveLength(1);
+  for (const input of inputs) expect(input.matches(`.attachments input:has(+ label.button[for="${input.id}"])`)).toBe(true);
 });
 
 test("an empty timeline says nothing here yet under entries", async () => {

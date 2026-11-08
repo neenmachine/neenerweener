@@ -50,10 +50,7 @@ export default function Admin() {
     addEventListener("popstate", back);
     return () => removeEventListener("popstate", back);
   }, []);
-  useEffect(() => {
-    if (current) document.title = `${current.label} · admin`;
-    focusHeading();
-  }, [path]);
+  useEffect(focusHeading, [path]);
   // Plain links everywhere; a click on one to an admin page swaps the page in place instead of loading the document.
   const navigate = (e: MouseEvent) => {
     const a = (e.target as Element).closest("a");
@@ -120,6 +117,12 @@ export default function Admin() {
   };
 
   const signedIn = auth === "in";
+  // The server titles an admin page by its path (it cannot know the session); signed out, the sign-in form is the page.
+  useEffect(() => {
+    if (auth === "out") document.title = "sign in · admin";
+    if (signedIn && current) document.title = `${current.label} · admin`;
+  }, [path, auth]);
+
   return (
     <main className={signedIn ? "admin admin-shell" : undefined} onClick={navigate}>
       {!signedIn && (
@@ -181,7 +184,7 @@ export default function Admin() {
             .map(({ path: at, Page }) => (
               <div key={at} className="admin-page" hidden={at !== path}>
                 <Suspense>
-                  <Page send={send} expire={expire} profile={profile} loadProfile={loadProfile} setProfile={setProfile} />
+                  <Page send={send} expire={expire} profile={profile} loadProfile={loadProfile} setProfile={setProfile} active={signedIn && at === path} />
                   <Loaded onLoad={focusHeading} />
                 </Suspense>
               </div>

@@ -106,7 +106,6 @@ export function Editor({
         ref={textarea}
         aria-label={name}
         value={text}
-        rows={5}
         // Keeps the text while a request runs, so a failure never loses it.
         readOnly={busy}
         // The compose box after login, the edit box when it opens.

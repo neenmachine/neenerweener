@@ -117,6 +117,33 @@ def test_public_profile_returns_defaults_and_no_cache(monkeypatch):
     assert response.headers["cache-control"] == "no-cache"
 
 
+def test_public_profile_returns_configured_values_and_storage_failure_is_503(monkeypatch):
+    avatar_id = "7b150c14-6f3d-4d73-a642-621acb840cea"
+
+    class ConfiguredStore:
+        def get_profile(self):
+            return {"display_name": " configured ", "handle": "valid_handle", "avatar_asset_id": avatar_id}
+
+    monkeypatch.setattr(app, "timeline_store", ConfiguredStore())
+    configured = TestClient(app.app).get("/api/profile")
+    assert configured.status_code == 200
+    assert configured.json() == {
+        "display_name": " configured ",
+        "handle": "valid_handle",
+        "avatar_id": avatar_id,
+        "avatar_initial": "C",
+    }
+    assert configured.headers["cache-control"] == "no-cache"
+
+    class FailingStore:
+        def get_profile(self):
+            raise RuntimeError("storage unavailable")
+
+    monkeypatch.setattr(app, "timeline_store", FailingStore())
+    unavailable = TestClient(app.app).get("/api/profile")
+    assert (unavailable.status_code, unavailable.json()) == (503, {"detail": "profile unavailable"})
+
+
 def test_list_timeline_is_newest_first_and_paginated(monkeypatch):
     rows = [
         {"id": 8, "body_markdown": "new", "created_at": datetime(2026, 1, 2, tzinfo=timezone.utc), "edited_at": None, "media": []},

@@ -674,3 +674,11 @@ test("a late upload response cannot restore a removed row or enter the payload",
   const post = fetch.mock.calls.find(([url]) => url === "/api/admin/timeline");
   expect(JSON.parse(post?.[1]?.body as string)).toEqual({ body_markdown: "after remove" });
 });
+
+test("a failed entries list shows the server detail and retry instead of an empty list", async () => {
+  await render(async (url: string) => (url === "/api/admin/session" ? ok(session) : url === "/api/timeline" ? bad(503, "unavailable") : ok({})));
+  await flush();
+  expect(document.querySelector(".entries [role='alert']")?.textContent).toBe("unavailable, try again");
+  expect([...document.querySelectorAll("button")].some((b) => b.textContent?.startsWith("retry"))).toBe(true);
+  expect(document.body.textContent).not.toContain("nothing here yet");
+});

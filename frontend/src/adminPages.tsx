@@ -7,7 +7,8 @@ import type { Profile } from "./timelineTypes";
 // page for the current path. A new page is one row here, one page file, the same path in ADMIN_PAGES in
 // backend/routes.py and one admin_pages row in route_cases.json (tests hold all three equal).
 
-// What the shell gives every page. profile is null until the first loadProfile() answers.
+// What the shell gives every page. profile is null until the first loadProfile() answers; active is whether the page
+// is the one shown (pages stay mounted, hidden, once shown).
 export type AdminPageProps = {
   send: Send;
   expire: () => void;
@@ -15,6 +16,7 @@ export type AdminPageProps = {
   loadProfile: () => Promise<Result<Profile>>;
   // A saved profile, so the nav and the other pages show it without a reload.
   setProfile: (profile: Profile) => void;
+  active: boolean;
 };
 
 export type AdminPage = { path: string; label: string; Page: ComponentType<AdminPageProps> };

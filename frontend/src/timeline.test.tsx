@@ -229,10 +229,21 @@ test("hint and a signed-in session show the composer, with the CSRF token kept o
 });
 
 test("the composer shows the poster's avatar beside the box, only after the session check", { timeout: 5000 }, async () => {
-  await openAdmin(true, signedIn);
-  expect(document.querySelectorAll("main .avatar")).toHaveLength(1); // the entry's, before the session answers
+  // The session answers only on release(), so the pending state is real even when the admin chunks are already loaded.
+  let release!: () => void;
+  const answered = new Promise<void>((r) => (release = r));
+  await openAdmin(true, (url) => (url === "/api/admin/session" ? answered.then(() => signedIn(url)) : signedIn(url)), page([4, 3], null));
+  await settle();
+  // While the session is pending: one avatar per entry, inside its entry, and no composer at all.
+  expect(document.querySelectorAll(".timeline-entry .avatar")).toHaveLength(2);
+  expect(document.querySelector("form.composer")).toBeNull();
+  await act(async () => release());
   await showsComposer();
   const form = textarea()!.form!;
+  expect(form.matches("form.composer")).toBe(true); // the selector the pending check uses
+  // After it answers: the composer has its own avatar, and the entries still have exactly one each.
+  expect(form.querySelectorAll(".avatar")).toHaveLength(1);
+  expect(document.querySelectorAll(".timeline-entry .avatar")).toHaveLength(2);
   expect(form.firstElementChild?.outerHTML).toBe('<div class="avatar" aria-hidden="true">F</div>');
   expect(form.children[1].contains(textarea())).toBe(true);
 });

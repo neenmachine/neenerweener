@@ -36,7 +36,7 @@ def site_footer(current: str | None) -> str:
     mark = ' aria-current="page"'
     return (
         f'<footer><a href="/"{mark if current == "home" else ""}>neenerweener</a>'
-        f'<a href="/timeline"{mark if current == "timeline" else ""}>timeline</a><a href="/feed.xml">feed</a></footer>'
+        f'<a href="/timeline"{mark if current == "timeline" else ""}>timeline</a><a href="/feed.xml">rss</a></footer>'
     )
 
 

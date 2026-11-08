@@ -99,7 +99,7 @@ def test_not_found_pages_have_one_labeled_heading_and_main(client):
         assert "back" not in response.text.split("<h1", 1)[1].split("</h1>", 1)[0]
         preload = re.search(r'<script id="preload" type="application/json">(.*?)</script>', response.text)[1]
         assert json.loads(preload)["page"]["label"] == label
-        assert '<footer><a href="/">neenerweener</a><a href="/timeline">timeline</a><a href="/feed.xml">feed</a></footer></main>' in response.text
+        assert '<footer><a href="/">neenerweener</a><a href="/timeline">timeline</a><a href="/feed.xml">rss</a></footer></main>' in response.text
         assert response.text.count('href="/"') == 2  # the back arrow on posts, or the link under the heading, plus the footer
 
 
@@ -195,7 +195,7 @@ def test_redirect_location_cannot_leave_the_site(site):
     assert site.get("/%5Cevil.com/", follow_redirects=False).headers["location"] == "/%5Cevil.com"
 
 
-FEED_LINK = '<a href="/feed.xml">feed</a>'
+FEED_LINK = '<a href="/feed.xml">rss</a>'
 
 
 @pytest.mark.parametrize("case", [c for c in CASES if "page" in c], ids=[c["path"] for c in CASES if "page" in c])

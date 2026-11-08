@@ -6,6 +6,10 @@
   /* The one accent: a darker grey, used bold for "you are here". */
   --accent: #4a4a48;
   --bg: #fdfdfc;
+  /* A primary (submit) button's border, one step stronger than other buttons at rest. */
+  --line-strong: color-mix(in srgb, var(--fg) 20%, transparent);
+  /* Timeline entry text: name, handle, time and body. */
+  --entry-font-size: 1rem;
   font: 15px/1.6 -apple-system, BlinkMacSystemFont, sans-serif;
   color: var(--fg);
   background: var(--bg);
@@ -19,6 +23,7 @@
     --faint: #82827e;
     --accent: #c4c4c0;
     --bg: #161616;
+    --line-strong: color-mix(in srgb, var(--fg) 20%, transparent);
   }
 }
 
@@ -223,18 +228,17 @@ a {
 
 .timeline-entry {
   padding: 1.1rem 0;
+  font-size: var(--entry-font-size);
   scroll-margin-top: 1.5rem;
+}
+
+.composer {
+  margin-top: 1.3333rem;
 }
 
 .timeline-entry + .timeline-entry,
 .composer ~ .timeline > .timeline-entry:first-child {
   border-top: 1px solid color-mix(in srgb, var(--fg) 8%, transparent);
-}
-
-@media (max-width: 760px) {
-  .timeline-entry {
-    padding: 1rem 0;
-  }
 }
 
 .avatar {
@@ -252,7 +256,9 @@ div.avatar {
   place-items: center;
   background: color-mix(in srgb, var(--fg) 6%, transparent);
   color: var(--muted);
+  font-size: 1.1333rem;
   font-weight: 600;
+  line-height: 1;
   user-select: none;
 }
 
@@ -261,7 +267,7 @@ div.avatar {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  column-gap: 0.3rem;
+  column-gap: 0.33rem;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
@@ -278,7 +284,7 @@ div.avatar {
 
 .timeline-entry .when {
   display: flex;
-  gap: 0.3rem;
+  gap: 0.33rem;
   white-space: nowrap;
 }
 
@@ -314,7 +320,8 @@ div.avatar {
   display: flex;
   margin-top: 0.4rem;
   color: var(--muted);
-  font-size: 0.85em;
+  font-size: 0.85rem;
+  line-height: 16px;
 }
 
 /* Images under an entry, like a tweet's. One image keeps its shape: the server sets width and height to its
@@ -450,6 +457,11 @@ div.avatar {
   :is(.load-more a, .button):active {
     scale: none;
   }
+}
+
+.button[type="submit"] {
+  border-color: var(--line-strong);
+  color: var(--fg);
 }
 
 /* Buttons that cannot act right now (empty or too long text, a wait after too many logins). */
@@ -636,18 +648,30 @@ div.avatar {
   align-items: center;
 }
 
-/* Entry controls sit at the end of the time line, as plain text until hovered. */
+/* Entry controls sit in their own row under the body, at its right edge, as plain text until hovered. */
 .admin .timeline-entry footer {
   align-items: baseline;
 }
 
 .timeline-entry footer .admin-actions {
+  gap: 4px;
   margin-left: auto;
+}
+
+/* The edit form's buttons stay at the page size, whatever the entry text size. */
+.timeline-entry .editor .button {
+  font-size: 1rem;
 }
 
 .timeline-entry footer .button {
   padding: 0 0.4rem;
   border-color: transparent;
+}
+
+@media (max-width: 760px), (pointer: coarse) {
+  .timeline-entry footer .button {
+    padding-inline: 10px;
+  }
 }
 
 .timeline-entry footer .button:hover {

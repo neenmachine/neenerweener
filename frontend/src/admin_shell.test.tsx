@@ -216,6 +216,54 @@ test("the overview count is current after a post and a delete on the timeline pa
   expect(count()).toBe("timeline1 entry");
 });
 
+// Each overview request waits until the test answers it with a count.
+function heldCounts() {
+  const pending: ((n: number) => void)[] = [];
+  const fetch = server({ count: () => new Promise((resolve) => pending.push((n) => resolve(ok({ entry_count: n })))) });
+  const answer = async (i: number, n: number) => {
+    await act(async () => pending[i](n));
+    for (let j = 0; j < 3; j++) await flush();
+  };
+  return { fetch, pending, answer };
+}
+
+test("an older overview refresh that answers last does not replace the newer count", async () => {
+  const { fetch, pending, answer } = heldCounts();
+  await render("/admin", fetch);
+  await answer(0, 1);
+  const count = () => visible(".admin-links a")[0]?.textContent;
+  expect(count()).toBe("timeline1 entry");
+  await click(navLink("timeline"));
+  await click(navLink("overview"));
+  await click(navLink("timeline"));
+  await click(navLink("overview"));
+  expect(pending).toHaveLength(3);
+  await answer(2, 2);
+  expect(count()).toBe("timeline2 entries");
+  await answer(1, 1);
+  expect(count()).toBe("timeline2 entries");
+});
+
+test("a refresh that answers after logout writes nothing and logs no error", async () => {
+  const error = vi.spyOn(console, "error");
+  try {
+    const { fetch, pending, answer } = heldCounts();
+    await render("/admin", fetch);
+    await answer(0, 1);
+    await click(navLink("timeline"));
+    await click(navLink("overview"));
+    expect(pending).toHaveLength(2);
+    await click(visible("button").find((b) => b.textContent?.startsWith("log out"))!);
+    expect(visible("h2").map((h) => h.textContent)).toEqual(["sign in"]);
+    await answer(1, 5);
+    expect(document.querySelector(".admin-links")).toBeNull();
+    expect(document.body.textContent).not.toContain("entries");
+    expect(error).not.toHaveBeenCalled();
+  } finally {
+    error.mockRestore();
+  }
+});
+
 test("attach images is the label right after its file input, which the focus ring rule needs", async () => {
   await render("/admin/timeline");
   const inputs = visible('.attachments input[type="file"]');

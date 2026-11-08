@@ -1,5 +1,6 @@
 import { type ComponentType, type MouseEvent, type ReactNode, lazy, Suspense, useEffect, useRef, useState } from "react";
-// Type only: the adminApi code itself stays out of the public chunk.
+// Types only: the admin code itself stays out of the public chunk.
+import type { EntryRow, Send } from "./EntryEditor";
 import type { Entry, Media } from "./timelineTypes";
 
 type Summary = { slug: string; title: string; excerpt: string | null; tags: string[]; draft: boolean };
@@ -141,6 +142,10 @@ function TimelinePage() {
   const [older, setOlder] = useState<Timeline[]>([]);
   // Entries the admin posted from this page; the preload and the cursor stay as the server sent them.
   const [created, setCreated] = useState<Entry[]>([]);
+  // The admin's edits and deletes, applied over every source, so load more never brings back an old version.
+  const [updated, setUpdated] = useState<Record<number, Entry>>({});
+  const [deleted, setDeleted] = useState<Set<number>>(new Set());
+  const [admin, expire] = useAdmin();
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
   // What the always-mounted status region says, so screen readers hear loading, failure and progress.
@@ -154,6 +159,8 @@ function TimelinePage() {
   const empty = useRef<HTMLParagraphElement>(null);
   // Index of the entry to focus after the last page removes the focused button.
   const focusAt = useRef<number | null>(null);
+  // Index of the entry whose edit button gets focus after a delete removes the focused one.
+  const editAt = useRef<number | null>(null);
   useEffect(() => {
     const onHash = () => setHash(location.hash);
     addEventListener("hashchange", onHash);
@@ -170,6 +177,12 @@ function TimelinePage() {
     (link ?? empty.current)?.focus();
     focusAt.current = null;
   }, [older]);
+  useEffect(() => {
+    if (editAt.current === null) return;
+    const buttons = list.current?.querySelectorAll<HTMLElement>("[data-action=edit]");
+    (buttons?.[Math.min(editAt.current, buttons.length - 1)] ?? document.querySelector<HTMLElement>("form.admin textarea"))?.focus();
+    editAt.current = null;
+  }, [deleted]);
   const heading = <h1>timeline</h1>;
   if (error)
     return (
@@ -182,7 +195,9 @@ function TimelinePage() {
   const pages = [data, ...older];
   const cursor = pages[pages.length - 1].next_cursor;
   const seen = new Set<number>();
-  const entries = [...created, ...pages.flatMap((p) => p.entries)].filter((e) => !seen.has(e.id) && !!seen.add(e.id));
+  const entries = [...created, ...pages.flatMap((p) => p.entries)]
+    .filter((e) => !seen.has(e.id) && !!seen.add(e.id) && !deleted.has(e.id))
+    .map((e) => updated[e.id] ?? e);
   const loadMore = (event: MouseEvent<HTMLAnchorElement>) => {
     event.preventDefault();
     if (inFlight.current || cursor === null) return;
@@ -213,7 +228,7 @@ function TimelinePage() {
   return (
     <article>
       {heading}
-      <Compose onCreated={(e) => setCreated((prev) => [e, ...prev])} />
+      {admin && <admin.Composer onCreated={(e) => setCreated((prev) => [e, ...prev])} onExpired={expire} />}
       {/* A page can be empty and still have older entries (the server skips bad rows); only the end is empty. */}
       {!entries.length && cursor === null && (
         <p className="muted" tabIndex={-1} ref={empty}>
@@ -221,30 +236,32 @@ function TimelinePage() {
         </p>
       )}
       {/* Mirrors timeline_markup in backend/app.py, so the swap from the server markup is not visible. */}
-      <div className="timeline" ref={list}>
-        {entries.map((e) => (
-          <article
-            key={e.id}
-            className={hash === `#entry-${e.id}` ? "timeline-entry target" : "timeline-entry"}
-            id={`entry-${e.id}`}
-          >
-            {/* Rendered server side from Henry's entry, with raw HTML disabled. */}
-            <div dangerouslySetInnerHTML={{ __html: e.html }} />
-            <EntryMedia media={e.media} />
-            <footer>
-              <a href={`#entry-${e.id}`} aria-label={full(e.created_at)}>
-                <time dateTime={new Date(e.created_at).toISOString()} title={full(e.created_at)}>
-                  {compact(e.created_at)}
-                </time>
-              </a>
-              {e.edited_at && (
-                <span className="edited" title={full(e.edited_at)}>
-                  edited<span className="sr-only"> {full(e.edited_at)}</span>
-                </span>
-              )}
-            </footer>
-          </article>
-        ))}
+      {/* "admin" gives the edit forms and controls the /admin form styles. */}
+      <div className={admin ? "timeline admin" : "timeline"} ref={list}>
+        {entries.map((e) => {
+          const className = hash === `#entry-${e.id}` ? "timeline-entry target" : "timeline-entry";
+          return admin ? (
+            <admin.EntryRow
+              key={e.id}
+              entry={e}
+              className={className}
+              href={`#entry-${e.id}`}
+              send={admin.send}
+              onSaved={(saved) => {
+                setUpdated((prev) => ({ ...prev, [saved.id]: saved }));
+                setStatus("saved");
+              }}
+              onGone={(id, message) => {
+                if (list.current?.contains(document.activeElement)) editAt.current = entries.findIndex((x) => x.id === id);
+                setDeleted((prev) => new Set(prev).add(id));
+                setStatus(message);
+              }}
+              expire={expire}
+            />
+          ) : (
+            <TimelineEntry key={e.id} entry={e} className={className} />
+          );
+        })}
       </div>
       {cursor !== null && (
         <div className="load-more">
@@ -287,6 +304,50 @@ const smWidth = (width: number, height: number) => {
 };
 
 // An entry's images like a tweet's: one keeps its shape, 2 to 4 fill a fixed grid, so nothing shifts on load.
+// One entry as timeline_markup in backend/app.py renders it. The admin editor (lazy) passes body to swap in its
+// edit form, actions for its footer buttons, and children after the footer.
+export function TimelineEntry({
+  entry,
+  className = "timeline-entry",
+  href = `#entry-${entry.id}`,
+  body,
+  actions,
+  children,
+}: {
+  entry: Entry;
+  className?: string;
+  href?: string;
+  body?: ReactNode;
+  actions?: ReactNode;
+  children?: ReactNode;
+}) {
+  return (
+    <article className={className} id={`entry-${entry.id}`}>
+      {body ?? (
+        <>
+          {/* Rendered server side from Henry's entry, with raw HTML disabled. */}
+          <div dangerouslySetInnerHTML={{ __html: entry.html }} />
+          <EntryMedia media={entry.media} />
+        </>
+      )}
+      <footer>
+        <a href={href} aria-label={full(entry.created_at)}>
+          <time dateTime={new Date(entry.created_at).toISOString()} title={full(entry.created_at)}>
+            {compact(entry.created_at)}
+          </time>
+        </a>
+        {entry.edited_at && (
+          <span className="edited" title={full(entry.edited_at)}>
+            edited<span className="sr-only"> {full(entry.edited_at)}</span>
+          </span>
+        )}
+        {actions}
+      </footer>
+      {children}
+    </article>
+  );
+}
+
 export function EntryMedia({ media }: { media: Media[] }) {
   if (!media.length) return null;
   return (
@@ -324,25 +385,29 @@ export function EntryMedia({ media }: { media: Media[] }) {
 }
 
 type ComposerProps = { onCreated: (entry: Entry) => void; onExpired: () => void };
+// The admin parts of /timeline, all from lazy chunks: the composer, the per-entry controls, and their request.
+type AdminKit = { Composer: ComponentType<ComposerProps>; EntryRow: typeof EntryRow; send: Send };
 
-// The admin's compose box, or nothing. The server sends the same page to everyone; a non-secret hint cookie
-// (set at login) says whether to check the session, so visitors pay no request. Only a signed-in session
-// loads the composer chunk; the real auth is the session cookie and CSRF token on the create request.
-function Compose({ onCreated }: { onCreated: (entry: Entry) => void }) {
-  const [Composer, setComposer] = useState<ComponentType<ComposerProps> | null>(null);
+// The admin's composer and entry controls, or null. The server sends the same page to everyone; a non-secret
+// hint cookie (set at login) says whether to check the session, so visitors pay no request. Only a signed-in
+// session loads the admin chunks; the real auth is the session cookie and CSRF token on each request.
+// expire (any 401) drops them all; adminApi has cleared the hint by then.
+function useAdmin(): [AdminKit | null, () => void] {
+  const [kit, setKit] = useState<AdminKit | null>(null);
+  const expire = () => setKit(null);
   useEffect(() => {
     if (!/(^|;\s*)admin_hint=1(;|$)/.test(document.cookie)) return;
     let live = true;
     import("./adminApi")
       .then((api) => api.checkSession())
-      .then((r) => (r.ok && r.data.authenticated ? import("./TimelineComposer") : undefined))
-      .then((m) => live && m && setComposer(() => m.default))
+      .then((r) => (r.ok && r.data.authenticated ? Promise.all([import("./TimelineComposer"), import("./EntryEditor")]) : undefined))
+      .then((m) => live && m && setKit({ Composer: m[0].default, EntryRow: m[1].EntryRow, send: m[1].sendOrExpire(expire) }))
       .catch(() => {});
     return () => {
       live = false;
     };
   }, []);
-  return Composer && <Composer onCreated={onCreated} onExpired={() => setComposer(null)} />;
+  return [kit, expire];
 }
 
 // "nov 7" this year, "nov 7, 2025" before; the full date and time are in the tooltip.

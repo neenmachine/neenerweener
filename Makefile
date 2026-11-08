@@ -14,12 +14,12 @@ test:
 	cd frontend && pnpm test && pnpm build
 	$(MAKE) chunk-guard
 
-# The public entry script (from dist/index.html) must not carry or statically import the admin composer or CSRF code;
+# The public entry script (from dist/index.html) must not carry or statically import the admin composer, entry editor or CSRF code;
 # those are lazy chunks for signed-in admins.
 chunk-guard:
 	@entry=$$(sed -nE 's|.*<script type="module"[^>]* src="/?([^"]+)".*|\1|p' frontend/dist/index.html); \
 	test -n "$$entry" || { echo "no module script in frontend/dist/index.html"; exit 1; }; \
-	if grep -oE 'tweet|new timeline entry|attach images|up to 4 images|X-CSRF-Token|csrf_token|from"\./(TimelineComposer|adminApi)-' "frontend/dist/$$entry"; then \
+	if grep -oE 'tweet|new timeline entry|attach images|up to 4 images|edit entry|delete entry|confirm delete|X-CSRF-Token|csrf_token|from"\./(TimelineComposer|adminApi|EntryEditor)-' "frontend/dist/$$entry"; then \
 	  echo "frontend/dist/$$entry carries admin code"; exit 1; fi; \
 	echo "chunk-guard: frontend/dist/$$entry is clean"
 

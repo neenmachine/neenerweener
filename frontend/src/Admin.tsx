@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { AdminHead } from "./App";
-import { checkSession, createTimeline, hasText, login, logout as signOut, request } from "./adminApi";
+import { checkSession, createTimeline, hasText, login, logout as signOut } from "./adminApi";
 import { Attachments, useAttachments } from "./attachments";
-import { Button, Editor, EntryRow, type Send } from "./EntryEditor";
+import { Button, Editor, EntryRow, type Send, sendOrExpire } from "./EntryEditor";
 import type { Entry } from "./timelineTypes";
 
 // The private /admin page: a password form, then compose, edit and delete for timeline entries.
@@ -28,11 +28,7 @@ export default function Admin() {
     };
   }, [auth]);
 
-  const send: Send = async <T,>(method: string, url: string, body?: object) => {
-    const r = await request<T>(method, url, body);
-    if (!r.ok && r.status === 401) expire();
-    return r;
-  };
+  const send = sendOrExpire(() => expire());
 
   const expire = () => {
     setNotice("session expired, log in again");

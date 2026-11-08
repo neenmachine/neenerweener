@@ -535,15 +535,22 @@ test("edit loads the private Markdown, saves with the CSRF token and the image l
 test("cancel and Escape close the edit box without a request", { timeout: 5000 }, async () => {
   const calls = await openAdmin(true, admin());
   await showsControls();
-  press("edit entry 4");
-  await settle();
+  // As a keyboard user: focus on the button, activate, the edit box takes focus, then close it.
+  const openEdit = async () => {
+    act(() => control("edit entry 4")!.focus());
+    press("edit entry 4");
+    await settle();
+    expect(document.activeElement).toBe(editBox(4));
+  };
+  await openEdit();
   escape();
   expect(editBox(4)).toBeNull();
   expect(document.activeElement).toBe(control("edit entry 4"));
-  press("edit entry 4");
-  await settle();
+  await openEdit();
+  act(() => control("cancel edit entry 4")!.focus());
   press("cancel edit entry 4");
   expect(editBox(4)).toBeNull();
+  expect(document.activeElement).toBe(control("edit entry 4"));
   expect(calls.filter(([, init]) => init?.method === "PATCH")).toHaveLength(0);
 });
 

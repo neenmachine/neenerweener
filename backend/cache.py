@@ -8,6 +8,8 @@ def cache_control(path: str, status: int, response_headers: Mapping[str, str]) -
     """Return the route policy, preserving response-specific directives where allowed."""
     if path.startswith(NO_STORE_PREFIXES) or path == "/readyz" or path == "/healthz" or path == "/admin" or path.startswith("/admin/"):
         return "no-store"
+    if path == "/favicon.ico" and status in (301, 308):
+        return "public, max-age=3600"
     if not (200 <= status < 300 or status == 304):
         return "no-cache"
     existing = response_headers.get("cache-control")

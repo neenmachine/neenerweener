@@ -28,7 +28,10 @@ afterEach(() => {
 
 async function render(fetch: (url: string, init?: RequestInit) => Promise<unknown>, entries: Entry[] = [entry(1)]) {
   vi.stubGlobal("fetch", withProfile(fetch));
+  // These tests are about the timeline page.
+  history.replaceState(null, "", "/admin/timeline");
   document.body.innerHTML = '<div id="root"></div>';
+  await import("./AdminTimeline"); // the lazy page chunk, loaded up front so the page renders within the wait
   const { default: Admin } = await import("./Admin");
   await act(async () => {
     root = createRoot(document.getElementById("root")!);
@@ -279,7 +282,10 @@ test("429 uses Retry-After and the editor counts 10,000 Unicode code points", as
 async function renderPending(fetch: (url: string) => Promise<unknown>) {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   vi.stubGlobal("fetch", withProfile(fetch));
+  // These tests are about the timeline page.
+  history.replaceState(null, "", "/admin/timeline");
   document.body.innerHTML = '<div id="root"></div>';
+  await import("./AdminTimeline"); // the lazy page chunk, loaded up front so the page renders within the wait
   const { default: Admin } = await import("./Admin");
   await act(async () => {
     root = createRoot(document.getElementById("root")!);

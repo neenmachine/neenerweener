@@ -1,16 +1,16 @@
-import { useEffect, useRef, useState } from "react";
-import { AdminHead } from "./App";
-import { checkSession, createTimeline, hasText, login, logout as signOut } from "./adminApi";
-import { Attachments, useAttachments } from "./attachments";
-import { Button, Editor, EntryRow, type Send, sendOrExpire } from "./EntryEditor";
-import type { Entry, Profile, Timeline } from "./timelineTypes";
+import { type MouseEvent, Suspense, useEffect, useRef, useState } from "react";
+import { AdminHead, Avatar, Footer } from "./App";
+import { checkSession, login, logout as signOut, type Result } from "./adminApi";
+import { adminPages } from "./adminPages";
+import { Button, sendOrExpire } from "./EntryEditor";
+import type { Profile } from "./timelineTypes";
 
-// The private /admin page: a password form, then compose, edit and delete for timeline entries.
-// It is lazy loaded, so public pages never download it, and nothing on the site links here.
+// The private admin area: a password form, then the shell (nav, the current page, the footer) around the pages in
+// adminPages.tsx. It is lazy loaded, so public pages never download it, and nothing on the site links here.
 
 export default function Admin() {
   const [auth, setAuth] = useState<"loading" | "unavailable" | "out" | "in">("loading");
-  // The page is kept (hidden) while the session is out after a 401, so unsaved text survives logging in again.
+  // The pages are kept (hidden) while the session is out after a 401, so unsaved text survives logging in again.
   const [mounted, setMounted] = useState(false);
   const [notice, setNotice] = useState("");
   const [loggingOut, setLoggingOut] = useState(false);
@@ -25,6 +25,56 @@ export default function Admin() {
       setSlow(false);
     };
   }, [auth]);
+
+  // The URL picks the page; a signed-out visit keeps it, so logging in shows the page asked for.
+  const [path, setPath] = useState(location.pathname);
+  // Pages stay mounted once shown, so switching pages keeps their unsaved text.
+  const [visited, setVisited] = useState([location.pathname]);
+  const current = adminPages.find((p) => p.path === path);
+  const content = useRef<HTMLDivElement>(null);
+  // Set by a nav click or back/forward: the shown page's h1 takes focus once it has loaded.
+  const focusPending = useRef(false);
+  const focusHeading = () => {
+    const h1 = content.current?.querySelector<HTMLElement>(".admin-page:not([hidden]) h1");
+    if (!focusPending.current || !h1) return;
+    focusPending.current = false;
+    h1.focus();
+  };
+  const show = (to: string) => {
+    focusPending.current = true;
+    setPath(to);
+    setVisited((v) => (v.includes(to) ? v : [...v, to]));
+  };
+  useEffect(() => {
+    const back = () => show(location.pathname);
+    addEventListener("popstate", back);
+    return () => removeEventListener("popstate", back);
+  }, []);
+  useEffect(() => {
+    if (current) document.title = `${current.label} · admin`;
+    focusHeading();
+  }, [path]);
+  // Plain links everywhere; a click on one to an admin page swaps the page in place instead of loading the document.
+  const navigate = (e: MouseEvent) => {
+    const a = (e.target as Element).closest("a");
+    const to = a?.getAttribute("href");
+    if (!to || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    if (!adminPages.some((p) => p.path === to)) return;
+    e.preventDefault();
+    if (to === path) return;
+    history.pushState(null, "", to);
+    show(to);
+  };
+
+  // The public profile, for the nav and the pages; fetched once, again only after a failure.
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const profileFlight = useRef<Promise<Result<Profile>> | null>(null);
+  const loadProfile = () =>
+    (profileFlight.current ??= send<Profile>("GET", "/api/profile").then((r) => {
+      if (r.ok) setProfile(r.data);
+      else profileFlight.current = null;
+      return r;
+    }));
 
   const send = sendOrExpire(() => expire());
 
@@ -45,6 +95,7 @@ export default function Admin() {
     if (r.data.authenticated) {
       setNotice("");
       setMounted(true);
+      loadProfile();
     }
     return r.data.authenticated;
   };
@@ -61,43 +112,92 @@ export default function Admin() {
     outFlight.current = false;
     setLoggingOut(false);
     if (!r.ok && r.status !== 401) return setNotice(r.message);
-    // A deliberate logout drops unsaved text with the page.
+    // A deliberate logout drops unsaved text with the pages; the URL stays.
     setMounted(false);
+    setVisited([path]);
     setNotice("");
     setAuth("out");
   };
 
+  const signedIn = auth === "in";
   return (
-    <article className="admin">
-      <AdminHead>
-        {auth === "in" && <Button onClick={logout} busy={loggingOut} label="log out" busyLabel="logging out" />}
-      </AdminHead>
-      {auth === "loading" && slow && (
-        <p className="muted" role="status">
-          loading
-        </p>
-      )}
-      {auth === "unavailable" && (
-        <div className="admin-row">
-          <p className="error" role="alert">
-            {notice}
-          </p>
-          <Button onClick={() => (setAuth("loading"), session())} label="retry" />
-        </div>
-      )}
-      {auth === "out" && <Login session={session} notice={notice} />}
-      {auth === "in" && (
-        <p className="error" role="alert">
-          {notice}
-        </p>
+    <main className={signedIn ? "admin admin-shell" : undefined} onClick={navigate}>
+      {!signedIn && (
+        <article className="admin">
+          <AdminHead />
+          {auth === "loading" && slow && (
+            <p className="admin-section muted" role="status">
+              loading
+            </p>
+          )}
+          {auth === "unavailable" && (
+            <div className="admin-section admin-row">
+              <p className="error" role="alert">
+                {notice}
+              </p>
+              <Button onClick={() => (setAuth("loading"), session())} label="retry" />
+            </div>
+          )}
+          {auth === "out" && (
+            <section className="admin-section sign-in">
+              <h2>sign in</h2>
+              <Login session={session} notice={notice} />
+            </section>
+          )}
+        </article>
       )}
       {mounted && (
-        <div hidden={auth !== "in"}>
-          <Manager send={send} expire={expire} />
+        <nav className="admin-nav" aria-label="admin" hidden={!signedIn}>
+          <a className="admin-title" href="/admin">
+            admin
+          </a>
+          <ul>
+            {adminPages.map((p) => (
+              <li key={p.path}>
+                <a href={p.path} aria-current={p.path === path ? "page" : undefined}>
+                  {p.label}
+                </a>
+              </li>
+            ))}
+          </ul>
+          <div className="admin-session">
+            {profile && (
+              <span className="identity">
+                <Avatar profile={profile} size={24} />
+                <span className="name">{profile.display_name}</span>
+              </span>
+            )}
+            <Button onClick={logout} busy={loggingOut} label="log out" busyLabel="logging out" />
+          </div>
+        </nav>
+      )}
+      {mounted && (
+        <div className="admin-content" ref={content} hidden={!signedIn}>
+          <p className="error" role="alert">
+            {signedIn && notice}
+          </p>
+          {adminPages
+            .filter((p) => visited.includes(p.path))
+            .map(({ path: at, Page }) => (
+              <div key={at} className="admin-page" hidden={at !== path}>
+                <Suspense>
+                  <Page send={send} expire={expire} profile={profile} loadProfile={loadProfile} />
+                  <Loaded onLoad={focusHeading} />
+                </Suspense>
+              </div>
+            ))}
+          <Footer />
         </div>
       )}
-    </article>
+      {!signedIn && <Footer />}
+    </main>
   );
+}
+
+// Mounts with the lazy page beside it in one Suspense, so its effect runs once that page is on screen.
+function Loaded({ onLoad }: { onLoad: () => void }) {
+  useEffect(onLoad, []);
+  return null;
 }
 
 function Login({ session, notice }: { session: () => Promise<boolean>; notice: string }) {
@@ -157,147 +257,5 @@ function Login({ session, notice }: { session: () => Promise<boolean>; notice: s
         {error}
       </p>
     </form>
-  );
-}
-
-function Manager({ send, expire }: { send: Send; expire: () => void }) {
-  const [entries, setEntries] = useState<Entry[]>([]);
-  const [cursor, setCursor] = useState<number | null>(null);
-  const [list, setList] = useState<"loading" | "ok" | "failed">("loading");
-  const [more, setMore] = useState(false);
-  const [listError, setListError] = useState("");
-  // The poster and the first page's clock, which every entry here is shown with.
-  const [shown, setShown] = useState<{ profile: Profile; now: string } | null>(null);
-  const [draft, setDraft] = useState("");
-  const [posting, setPosting] = useState(false);
-  const [postError, setPostError] = useState("");
-  const [status, setStatus] = useState("");
-  const images = useAttachments(expire);
-  const inFlight = useRef(false);
-  const moreFlight = useRef(false);
-  const listRef = useRef<HTMLDivElement>(null);
-  const compose = useRef<HTMLTextAreaElement>(null);
-  // Index of the entry whose edit button gets focus after a delete removes the focused one.
-  const focusAt = useRef<number | null>(null);
-
-  const page = async (before: number | null) => {
-    const r = await send<Timeline>("GET", before ? `/api/timeline?before=${before}` : "/api/timeline");
-    if (!r.ok) return r;
-    setEntries((prev) => [...prev, ...r.data.entries.filter((e) => !prev.some((p) => p.id === e.id))]);
-    setCursor(r.data.next_cursor);
-    return r;
-  };
-
-  const first = async () => {
-    setList("loading");
-    const [r, p] = await Promise.all([page(null), send<Profile>("GET", "/api/profile")]);
-    const failed = !r.ok ? r : !p.ok ? p : null;
-    setListError(failed ? failed.message : "");
-    setList(failed ? "failed" : "ok");
-    if (r.ok && p.ok) setShown({ profile: p.data, now: r.data.now });
-  };
-
-  useEffect(() => {
-    first();
-  }, []);
-
-  useEffect(() => {
-    if (focusAt.current === null) return;
-    const buttons = listRef.current?.querySelectorAll<HTMLElement>("[data-action=edit]");
-    (buttons?.[Math.min(focusAt.current, buttons.length - 1)] ?? compose.current)?.focus();
-    focusAt.current = null;
-  }, [entries]);
-
-  const loadMore = async () => {
-    if (moreFlight.current || cursor === null) return;
-    moreFlight.current = true;
-    setMore(true);
-    setStatus("loading");
-    const r = await page(cursor);
-    moreFlight.current = false;
-    setMore(false);
-    setListError(r.ok ? "" : r.message);
-    setStatus(r.ok ? `${r.data.entries.length} more loaded` : r.message);
-  };
-
-  const post = async () => {
-    if (inFlight.current || images.uploading) return;
-    inFlight.current = true;
-    setPosting(true);
-    setPostError("");
-    const r = await createTimeline(draft, images.payload());
-    inFlight.current = false;
-    setPosting(false);
-    if (!r.ok) return r.status === 401 ? expire() : setPostError(r.message);
-    setEntries((prev) => [r.data, ...prev]);
-    setDraft("");
-    images.clear();
-    setStatus("posted");
-    compose.current?.focus();
-  };
-
-  const remove = (id: number, message: string) => {
-    const index = entries.findIndex((e) => e.id === id);
-    if (listRef.current?.contains(document.activeElement)) focusAt.current = index;
-    setEntries((prev) => prev.filter((e) => e.id !== id));
-    setStatus(message);
-  };
-
-  return (
-    <>
-      <Editor
-        id="compose"
-        name="new entry"
-        text={draft}
-        setText={setDraft}
-        textarea={compose}
-        busy={posting}
-        error={postError}
-        onSubmit={post}
-        attachments={<Attachments state={images} busy={posting} id="compose" />}
-      >
-        <Button type="submit" busy={posting} off={!hasText(draft) || images.uploading} label="post" busyLabel="posting" />
-      </Editor>
-      {list === "loading" && <p className="muted">loading</p>}
-      {list === "failed" && (
-        <div className="admin-row">
-          <p className="error" role="alert">
-            {listError}
-          </p>
-          <Button onClick={first} label="retry" />
-        </div>
-      )}
-      <div className="timeline" ref={listRef}>
-        {shown &&
-          entries.map((e) => (
-            <EntryRow
-              key={e.id}
-              entry={e}
-              profile={shown.profile}
-              now={shown.now}
-              send={send}
-              onSaved={(saved, message) => {
-                setEntries((prev) => prev.map((p) => (p.id === saved.id ? saved : p)));
-                setStatus(message);
-              }}
-              onGone={remove}
-              expire={expire}
-            />
-          ))}
-      </div>
-      {list === "ok" && cursor !== null && (
-        <div className="admin-row load-more">
-          <Button onClick={loadMore} busy={more} label="load more" busyLabel="loading" />
-          {listError && (
-            <span className="error" aria-hidden="true">
-              {listError}
-            </span>
-          )}
-        </div>
-      )}
-      <p className="sr-only" role="status">
-        {status}
-      </p>
-    </>
   );
 }

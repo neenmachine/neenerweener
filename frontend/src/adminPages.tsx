@@ -13,6 +13,8 @@ export type AdminPageProps = {
   expire: () => void;
   profile: Profile | null;
   loadProfile: () => Promise<Result<Profile>>;
+  // A saved profile, so the nav and the other pages show it without a reload.
+  setProfile: (profile: Profile) => void;
 };
 
 export type AdminPage = { path: string; label: string; Page: ComponentType<AdminPageProps> };

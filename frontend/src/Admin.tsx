@@ -75,6 +75,10 @@ export default function Admin() {
       else profileFlight.current = null;
       return r;
     }));
+  const saveProfile = (p: Profile) => {
+    profileFlight.current = Promise.resolve({ ok: true, data: p });
+    setProfile(p);
+  };
 
   const send = sendOrExpire(() => expire());
 
@@ -181,7 +185,7 @@ export default function Admin() {
             .map(({ path: at, Page }) => (
               <div key={at} className="admin-page" hidden={at !== path}>
                 <Suspense>
-                  <Page send={send} expire={expire} profile={profile} loadProfile={loadProfile} />
+                  <Page send={send} expire={expire} profile={profile} loadProfile={loadProfile} setProfile={saveProfile} />
                   <Loaded onLoad={focusHeading} />
                 </Suspense>
               </div>

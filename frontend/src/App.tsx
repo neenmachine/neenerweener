@@ -374,9 +374,9 @@ export function TimelineEntry({
 
 // The poster's picture, or a neutral circle with the server's initial. Hidden from screen readers: the name beside
 // it says who posted. avatar_markup in backend/app.py renders the same markup.
-// The admin shell shows a 24px one beside the name.
-export function Avatar({ profile, size = 44 }: { profile: Profile; size?: 24 | 44 }) {
-  const className = size === 44 ? "avatar" : "avatar small";
+// The admin shell shows a 24px one beside the name; the profile page an 88px preview (72px on phones, in CSS).
+export function Avatar({ profile, size = 44 }: { profile: Profile; size?: 24 | 44 | 88 }) {
+  const className = { 24: "avatar small", 44: "avatar", 88: "avatar preview" }[size];
   if (!profile.avatar_id)
     return (
       <div className={className} aria-hidden="true">

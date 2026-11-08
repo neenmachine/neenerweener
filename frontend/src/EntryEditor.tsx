@@ -1,6 +1,6 @@
 import { type ReactNode, type Ref, type RefObject, useEffect, useRef, useState } from "react";
-import { compact, EntryMedia, full } from "./App";
-import { type AdminEntry, type Result, hasText, LIMIT, length } from "./adminApi";
+import { TimelineEntry } from "./App";
+import { type AdminEntry, type Result, hasText, LIMIT, length, request } from "./adminApi";
 import { Attachments, useAttachments } from "./attachments";
 import type { Entry } from "./timelineTypes";
 
@@ -8,6 +8,15 @@ import type { Entry } from "./timelineTypes";
 // Lazy loaded with the admin code, so public pages never download it.
 
 export type Send = <T = undefined>(method: string, url: string, body?: object) => Promise<Result<T>>;
+
+// An authenticated request; a 401 (the session ended) also calls expire.
+export const sendOrExpire =
+  (expire: () => void): Send =>
+  async <T,>(method: string, url: string, body?: object) => {
+    const r = await request<T>(method, url, body);
+    if (!r.ok && r.status === 401) expire();
+    return r;
+  };
 
 // A small outlined button; while busy it keeps focus and width and says busyLabel. name, if set, is the
 // accessible name and starts with the visible label.
@@ -129,16 +138,21 @@ export function Editor({
   );
 }
 
+// className and href are the entry's, as the page renders it (/timeline adds "target" and links in page).
 export function EntryRow({
   entry,
+  className,
+  href = `/timeline#entry-${entry.id}`,
   send,
   onSaved,
   onGone,
   expire,
 }: {
   entry: Entry;
+  className?: string;
+  href?: string;
   send: Send;
-  onSaved: (entry: Entry) => void;
+  onSaved: (entry: Entry, message: string) => void;
   onGone: (id: number, message: string) => void;
   expire: () => void;
 }) {
@@ -188,7 +202,7 @@ export function EntryRow({
     run(
       () => send<AdminEntry>("PATCH", `/api/admin/timeline/${entry.id}`, edit),
       (data) => {
-        onSaved(data);
+        onSaved(data, "saved");
         refocus.current = editButton;
         setMode("view");
       },
@@ -210,83 +224,75 @@ export function EntryRow({
   };
 
   return (
-    <article className="timeline-entry" id={`entry-${entry.id}`}>
-      {mode === "edit" && opened ? (
-        <EditForm
-          entry={opened}
-          expire={expire}
-          saving={saving}
-          error={error}
-          onSave={save}
-          onCancel={cancel(editButton)}
-        />
-      ) : (
-        // Rendered server side from Henry's entry, with raw HTML disabled.
+    <TimelineEntry
+      entry={entry}
+      className={className}
+      href={href}
+      body={
+        mode === "edit" && opened ? (
+          <EditForm
+            entry={opened}
+            expire={expire}
+            saving={saving}
+            error={error}
+            onSave={save}
+            onCancel={cancel(editButton)}
+          />
+        ) : undefined
+      }
+      actions={
         <>
-          <div dangerouslySetInnerHTML={{ __html: entry.html }} />
-          <EntryMedia media={entry.media} />
+          {(mode === "view" || mode === "opening") && (
+            <span className="admin-actions">
+              <Button
+                ref={editButton}
+                onClick={open}
+                busy={mode === "opening"}
+                label="edit"
+                busyLabel="loading"
+                data="edit"
+                name={`edit entry ${entry.id}`}
+              />
+              <Button
+                ref={deleteButton}
+                onClick={() => setMode("confirm")}
+                off={mode === "opening"}
+                label="delete"
+                name={`delete entry ${entry.id}`}
+              />
+            </span>
+          )}
+          {(mode === "confirm" || mode === "deleting") && (
+            <span
+              className="admin-actions"
+              role="group"
+              aria-label={`delete entry ${entry.id}?`}
+              onKeyDown={(e) => e.key === "Escape" && mode === "confirm" && cancel(deleteButton)()}
+            >
+              <Button
+                onClick={remove}
+                busy={mode === "deleting"}
+                label="confirm delete"
+                busyLabel="deleting"
+                danger
+                name={`confirm delete entry ${entry.id}`}
+              />
+              <Button
+                ref={cancelDelete}
+                onClick={cancel(deleteButton)}
+                off={mode === "deleting"}
+                label="cancel"
+                name={`cancel delete entry ${entry.id}`}
+              />
+            </span>
+          )}
         </>
-      )}
-      <footer>
-        <a href={`/timeline#entry-${entry.id}`} aria-label={full(entry.created_at)}>
-          <time dateTime={new Date(entry.created_at).toISOString()} title={full(entry.created_at)}>
-            {compact(entry.created_at)}
-          </time>
-        </a>
-        {entry.edited_at && (
-          <span className="edited" title={full(entry.edited_at)}>
-            edited<span className="sr-only"> {full(entry.edited_at)}</span>
-          </span>
-        )}
-        {(mode === "view" || mode === "opening") && (
-          <span className="admin-actions">
-            <Button
-              ref={editButton}
-              onClick={open}
-              busy={mode === "opening"}
-              label="edit"
-              busyLabel="loading"
-              data="edit"
-              name={`edit entry ${entry.id}`}
-            />
-            <Button
-              ref={deleteButton}
-              onClick={() => setMode("confirm")}
-              off={mode === "opening"}
-              label="delete"
-              name={`delete entry ${entry.id}`}
-            />
-          </span>
-        )}
-        {(mode === "confirm" || mode === "deleting") && (
-          <span
-            className="admin-actions"
-            role="group"
-            aria-label={`delete entry ${entry.id}?`}
-            onKeyDown={(e) => e.key === "Escape" && mode === "confirm" && cancel(deleteButton)()}
-          >
-            <Button
-              onClick={remove}
-              busy={mode === "deleting"}
-              label="confirm delete"
-              busyLabel="deleting"
-              danger
-              name={`confirm delete entry ${entry.id}`}
-            />
-            <Button
-              ref={cancelDelete}
-              onClick={cancel(deleteButton)}
-              off={mode === "deleting"}
-              label="cancel"
-              name={`cancel delete entry ${entry.id}`}
-            />
-          </span>
-        )}
-      </footer>
+      }
+    >
       <p className="error" role="alert">
         {mode !== "edit" && error}
       </p>
-    </article>
+    </TimelineEntry>
   );
 }
 

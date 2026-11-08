@@ -8,10 +8,16 @@ import type { Entry } from "./timelineTypes";
 // Counts loads of the composer chunk; the real module still renders. doMock per test, after resetModules,
 // so each test loads it afresh (a hoisted vi.mock factory runs once per file).
 let composerLoads = 0;
+let editorLoads = 0;
 beforeEach(() => {
   composerLoads = 0;
+  editorLoads = 0;
   vi.doMock("./TimelineComposer", async (importOriginal) => {
     composerLoads++;
+    return importOriginal();
+  });
+  vi.doMock("./EntryEditor", async (importOriginal) => {
+    editorLoads++;
     return importOriginal();
   });
 });
@@ -190,7 +196,9 @@ test("without the hint there is no session request and no composer chunk", { tim
   await settle();
   expect(calls).toEqual([]);
   expect(composerLoads).toBe(0);
+  expect(editorLoads).toBe(0);
   expect(textarea()).toBeNull();
+  expect(document.querySelector("#entry-4 button")).toBeNull();
 });
 
 test("hint and a signed-in session show the composer, with the CSRF token kept out of the page", { timeout: 5000 }, async () => {
@@ -437,4 +445,207 @@ test("an upload failure shows the server's detail; a 401 on upload removes the c
   await settle();
   expect(textarea()).toBeNull();
   expect(document.cookie).not.toContain("admin_hint");
+});
+
+// Edit and delete on each entry: the shared admin entry editor, after the same hint and session gate.
+const control = (name: string) => document.querySelector<HTMLButtonElement>(`button[aria-label="${name}"]`);
+// The visible label; the busy one is a hidden span beside it.
+const shown = (name: string) => control(name)?.querySelector("span:not([hidden])")?.textContent;
+const press = (name: string) => {
+  expect(control(name), name).not.toBeNull();
+  act(() => control(name)!.click());
+};
+const fill = (el: HTMLTextAreaElement, value: string) =>
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(el, value);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+const editBox = (id: number) => document.querySelector<HTMLTextAreaElement>(`textarea[aria-label="edit entry ${id}"]`);
+const escape = () => act(() => document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+const entry = (id: number, html: string, extra: object = {}) => ({
+  id,
+  html,
+  created_at: "2026-01-02T03:04:05+00:00",
+  edited_at: null,
+  media: [],
+  ...extra,
+});
+// The private GET has the Markdown; the PATCH answer is the saved entry; anything else is the session or a page.
+const admin =
+  (more: (url: string, init?: RequestInit) => unknown = () => undefined) =>
+  (url: string, init?: RequestInit) =>
+    more(url, init) ??
+    (url === "/api/admin/timeline/4" && init?.method === "GET"
+      ? reply(200, entry(4, "<p>entry 4</p>", { body_markdown: "entry 4 *md*", media: [photo(1, "kept")] }))
+      : url === "/api/admin/timeline/4" && init?.method === "PATCH"
+        ? reply(200, entry(4, "<p>changed</p>", { edited_at: "2026-01-03T00:00:00+00:00", body_markdown: "changed" }))
+        : url === "/api/admin/timeline/4" && init?.method === "DELETE"
+          ? reply(204, undefined)
+          : signedIn(url));
+const showsControls = () => until(() => !!control("edit entry 4"), "edit entry 4");
+
+test("a signed-in admin gets edit and delete on preloaded, new and older entries", { timeout: 5000 }, async () => {
+  await openAdmin(
+    true,
+    admin((url) => (url === "/api/timeline?before=8" ? reply(200, page([7], null)) : undefined)),
+    page([9, 8, 4], 8),
+  );
+  await until(() => !!control("edit entry 9"), "edit entry 9");
+  expect(editorLoads).toBe(1);
+  for (const id of [9, 8, 4]) expect(shown(`delete entry ${id}`)).toBe("delete");
+  expect(shown("edit entry 9")).toBe("edit");
+  // The entry markup is the public one, with the controls added in its footer.
+  expect(document.querySelector("#entry-9 > footer > a")?.getAttribute("href")).toBe("#entry-9");
+  type("new");
+  submit();
+  await settle();
+  expect(control("edit entry 10")).not.toBeNull();
+  click();
+  await settle();
+  expect(ids()).toEqual(["entry-10", "entry-9", "entry-8", "entry-4", "entry-7"]);
+  expect(control("delete entry 7")).not.toBeNull();
+});
+
+test("edit loads the private Markdown, saves with the CSRF token and the image list, and updates in place", { timeout: 5000 }, async () => {
+  const calls = await openAdmin(true, admin(), page([4, 3], 3));
+  await showsControls();
+  press("edit entry 4");
+  await settle();
+  const get = calls.find(([url]) => url === "/api/admin/timeline/4");
+  expect(get?.[1]?.method).toBe("GET");
+  expect(editBox(4)?.value).toBe("entry 4 *md*");
+  expect(document.activeElement).toBe(editBox(4));
+  // The private Markdown is only in the edit box, never in the public entry markup.
+  expect(document.querySelector("#entry-4 > div")).toBeNull();
+  fill(editBox(4)!, "changed");
+  press("save entry 4");
+  await settle();
+  const patch = calls.find(([url, init]) => url === "/api/admin/timeline/4" && init?.method === "PATCH");
+  expect(patch?.[1]?.headers).toMatchObject({ "X-CSRF-Token": "csrf-secret", "Content-Type": "application/json" });
+  expect(JSON.parse(patch?.[1]?.body as string)).toEqual({ body_markdown: "changed", attachments: [{ id: photo(1, "").id, alt: "kept" }] });
+  expect(editBox(4)).toBeNull();
+  expect(document.querySelector("#entry-4 > div")?.innerHTML).toBe("<p>changed</p>");
+  expect(document.querySelector("#entry-4 .edited")).not.toBeNull();
+  expect(ids()).toEqual(["entry-4", "entry-3"]);
+  expect(document.activeElement).toBe(control("edit entry 4"));
+  expect([...document.querySelectorAll('[role="status"]')].at(-1)?.textContent).toBe("saved");
+  expect(button()?.getAttribute("href")).toBe("/timeline?before=3");
+});
+
+test("cancel and Escape close the edit box without a request", { timeout: 5000 }, async () => {
+  const calls = await openAdmin(true, admin());
+  await showsControls();
+  // As a keyboard user: focus on the button, activate, the edit box takes focus, then close it.
+  const openEdit = async () => {
+    act(() => control("edit entry 4")!.focus());
+    press("edit entry 4");
+    await settle();
+    expect(document.activeElement).toBe(editBox(4));
+  };
+  await openEdit();
+  escape();
+  expect(editBox(4)).toBeNull();
+  expect(document.activeElement).toBe(control("edit entry 4"));
+  await openEdit();
+  act(() => control("cancel edit entry 4")!.focus());
+  press("cancel edit entry 4");
+  expect(editBox(4)).toBeNull();
+  expect(document.activeElement).toBe(control("edit entry 4"));
+  expect(calls.filter(([, init]) => init?.method === "PATCH")).toHaveLength(0);
+});
+
+test("a save failure keeps the draft and shows the server's detail", { timeout: 5000 }, async () => {
+  await openAdmin(
+    true,
+    admin((url, init) => (init?.method === "PATCH" ? reply(422, { detail: "text must not contain NUL" }) : undefined)),
+  );
+  await showsControls();
+  press("edit entry 4");
+  await settle();
+  fill(editBox(4)!, "a\0b");
+  press("save entry 4");
+  await settle();
+  expect(editBox(4)?.value).toBe("a\0b");
+  expect(document.querySelector("#edit-4-error")?.textContent).toBe("text must not contain NUL");
+});
+
+test("delete arms inline, cancel and Escape disarm, confirm deletes with the CSRF token and removes in place", { timeout: 5000 }, async () => {
+  const calls = await openAdmin(true, admin(), page([4, 3], 3));
+  await showsControls();
+  press("delete entry 4");
+  expect(document.activeElement).toBe(control("cancel delete entry 4"));
+  expect(document.querySelector('[role="group"]')?.getAttribute("aria-label")).toBe("delete entry 4?");
+  escape();
+  expect(control("confirm delete entry 4")).toBeNull();
+  expect(document.activeElement).toBe(control("delete entry 4"));
+  press("delete entry 4");
+  press("cancel delete entry 4");
+  expect(document.activeElement).toBe(control("delete entry 4"));
+  press("delete entry 4");
+  expect(shown("confirm delete entry 4")).toBe("confirm delete");
+  press("confirm delete entry 4");
+  await settle();
+  const del = calls.filter(([, init]) => init?.method === "DELETE");
+  expect(del.map(([url]) => url)).toEqual(["/api/admin/timeline/4"]);
+  expect(del[0][1]?.headers).toMatchObject({ "X-CSRF-Token": "csrf-secret" });
+  expect(ids()).toEqual(["entry-3"]);
+  expect(document.activeElement).toBe(control("edit entry 3"));
+  expect([...document.querySelectorAll('[role="status"]')].at(-1)?.textContent).toBe("deleted");
+  expect(button()?.getAttribute("href")).toBe("/timeline?before=3");
+});
+
+test("a delete failure stays armed and shows the server's detail", { timeout: 5000 }, async () => {
+  await openAdmin(true, admin((url, init) => (init?.method === "DELETE" ? reply(503, { detail: "x" }) : undefined)));
+  await showsControls();
+  press("delete entry 4");
+  press("confirm delete entry 4");
+  await settle();
+  expect(ids()).toEqual(["entry-4"]);
+  expect(control("confirm delete entry 4")).not.toBeNull();
+  expect(document.querySelector("#entry-4 > p.error")?.textContent).toBe("unavailable, try again");
+});
+
+test("a 401 from an entry action removes every control, the composer and the hint", { timeout: 5000 }, async () => {
+  await openAdmin(
+    true,
+    admin((url) => (url === "/api/admin/timeline/4" ? reply(401, { detail: "authentication required" }) : undefined)),
+    page([4, 3], null),
+  );
+  await showsControls();
+  await showsComposer();
+  press("edit entry 4");
+  await settle();
+  expect(document.querySelector("main button")).toBeNull();
+  expect(textarea()).toBeNull();
+  expect(document.cookie).not.toContain("admin_hint");
+  expect(ids()).toEqual(["entry-4", "entry-3"]);
+});
+
+test("load more after a delete and an edit shows no deleted entry, no duplicate and no old version", { timeout: 5000 }, async () => {
+  // The older page repeats the deleted entry 9 and the old version of the edited entry 4.
+  const calls = await openAdmin(
+    true,
+    admin((url, init) =>
+      url === "/api/timeline?before=4"
+        ? reply(200, page([9, 4, 2], null))
+        : url === "/api/admin/timeline/9" && init?.method === "DELETE"
+          ? reply(204, undefined)
+          : undefined,
+    ),
+    page([9, 4], 4),
+  );
+  await showsControls();
+  press("delete entry 9");
+  press("confirm delete entry 9");
+  await settle();
+  press("edit entry 4");
+  await settle();
+  fill(editBox(4)!, "changed");
+  press("save entry 4");
+  await settle();
+  click();
+  await settle();
+  expect(calls.filter(([url]) => url.startsWith("/api/timeline")).map(([url]) => url)).toEqual(["/api/timeline?before=4"]);
+  expect(ids()).toEqual(["entry-4", "entry-2"]);
+  expect(document.querySelector("#entry-4 > div")?.innerHTML).toBe("<p>changed</p>");
 });

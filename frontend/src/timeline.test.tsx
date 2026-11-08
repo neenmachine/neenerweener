@@ -107,7 +107,7 @@ test("an empty page with a cursor keeps load more and shows the older entries", 
   click();
   expect(status()).toBe("loading");
   await release();
-  expect(fetch).toHaveBeenCalledWith("/api/timeline?before=11");
+  expect(fetch).toHaveBeenCalledWith("/api/timeline?before=11", { signal: expect.any(AbortSignal) });
   expect(ids()).toEqual(["entry-5"]);
   expect(status()).toBe("1 more loaded, end of timeline");
 });

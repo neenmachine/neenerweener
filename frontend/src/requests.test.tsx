@@ -226,6 +226,17 @@ const unmountRows = [
     },
     answer: reply(200, { id: "staged" }),
   },
+  {
+    name: "timeline image upload",
+    path: "/timeline",
+    signedIn: true,
+    start: async () => {
+      const input = document.querySelector<HTMLInputElement>('input[type="file"]')!;
+      Object.defineProperty(input, "files", { configurable: true, value: [new File(["x"], "fixture.png", { type: "image/png" })] });
+      await act(async () => input.dispatchEvent(new Event("change", { bubbles: true })));
+    },
+    answer: reply(401, null),
+  },
 ];
 
 test.each(unmountRows)("unmount while $name is pending: fetch aborted, no continuation after unmount", { timeout: 5000 }, async ({ name, path, signedIn, start, answer }) => {
@@ -291,4 +302,20 @@ test("strict mode replay: the aborted first session check never applies over the
   await held[0].answer(reply(200, { authenticated: true, csrf_token: "csrf" }));
   expect(button("log out")).toBeDefined();
   expect(button("retry")).toBeUndefined();
+});
+
+// The same replay on /timeline: the hint check is shared module state (the csrf token, the hint cookie), so the first
+// check's late signed-out reply must be aborted before it reaches checkSession, not only ignored by the component.
+test("strict mode replay on /timeline: the aborted first hint check never overwrites the csrf token or the hint", { timeout: 5000 }, async () => {
+  const { fetch, held } = await render("/timeline", { strict: true, hold: (url, method) => url === "/api/admin/session" || method !== "GET" });
+  expect(held.map((h) => h.url)).toEqual(["/api/admin/session", "/api/admin/session"]);
+  await held[1].answer(reply(200, { authenticated: true, csrf_token: "newer" }));
+  await held[0].answer(reply(200, { authenticated: false }));
+  expect(document.cookie).toContain("admin_hint=1");
+  await type(textarea("new timeline entry"), "hello");
+  await act(() => button("tweet").click());
+  await settle();
+  const post = fetch.mock.calls.find(([url, init]) => url === "/api/admin/timeline" && init?.method === "POST")!;
+  expect((post[1]!.headers as Record<string, string>)["X-CSRF-Token"]).toBe("newer");
+  expect(held.slice(0, 2).map((h) => h.signal?.aborted)).toEqual([true, false]);
 });

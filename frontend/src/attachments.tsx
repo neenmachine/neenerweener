@@ -23,8 +23,12 @@ export function useAttachments(onExpired: () => void, initial: Media[] = []) {
       urls.current.delete(key);
     }
   };
-  // On unmount (sign-out). A full page load frees the document's blob URLs itself.
-  useEffect(() => () => revoke(urls.current.keys()), []);
+  // On unmount (sign-out): uploads abort and previews go. A full page load frees the document's blob URLs itself.
+  const life = useRef<AbortController>(null!);
+  useEffect(() => {
+    const c = (life.current = new AbortController()); // made here, not in useRef: strict mode replays this effect
+    return () => (c.abort(), revoke(urls.current.keys()));
+  }, []);
 
   const drop = (key: number) => {
     if (urls.current.has(key)) revoke([key]);
@@ -32,7 +36,9 @@ export function useAttachments(onExpired: () => void, initial: Media[] = []) {
   };
 
   const upload = async (key: number, file: File) => {
-    const r = await uploadMedia(file);
+    const { signal } = life.current;
+    const r = await uploadMedia(file, signal);
+    if (signal.aborted) return;
     if (!r.ok) {
       drop(key);
       return r.status === 401 ? onExpired() : setError(r.message);

@@ -81,7 +81,8 @@ export const login = (password: string, signal: AbortSignal) => send("POST", "/a
 
 export async function checkSession(signal?: AbortSignal): Promise<Result<Session>> {
   const r = await send<Session>("GET", "/api/admin/session", undefined, signal);
-  if (!r.ok) return r; // a 503 is not proof of sign-out: keep the hint
+  // An aborted check (send gives !ok then) never writes: a newer check owns the token and hint. A 503 is not proof of sign-out: keep the hint.
+  if (!r.ok) return r;
   csrf = r.data.authenticated ? r.data.csrf_token : null;
   if (!r.data.authenticated) clearHint();
   return r;
@@ -95,7 +96,7 @@ export async function logout(signal: AbortSignal) {
 
 export type Uploaded = { id: string; width: number; height: number };
 export type Attachment = { id: string; alt: string };
-export const uploadMedia = (file: File) => request<Uploaded>("POST", "/api/admin/media", file);
+export const uploadMedia = (file: File, signal: AbortSignal) => request<Uploaded>("POST", "/api/admin/media", file, signal);
 export const createTimeline = (body_markdown: string, attachments: Attachment[], signal: AbortSignal) =>
   request<AdminEntry>(
     "POST",

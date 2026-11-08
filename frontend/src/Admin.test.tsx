@@ -614,6 +614,22 @@ test("while an image uploads, Escape and save do nothing; cancel then discards e
   expect(revoked).toEqual(["blob:preview-0"]);
 });
 
+test("a refused upload in the editor shows the server detail and keeps the text and the existing images", async () => {
+  const revoked = previews();
+  const fetch = editFetch([media("m1", "one")], () => Promise.resolve(bad(422, "unsupported image")));
+  await render(fetch);
+  click("edit");
+  await flush();
+  input('[aria-label="edit entry 42"]', "draft text");
+  pickInto("#edit-42-files", [new File(["not image"], "bad.txt", { type: "text/plain" })]);
+  await flush();
+  expect(document.querySelector("#entry-42 form")?.textContent).toContain("unsupported image");
+  expect(document.querySelector("#edit-42-files-error")?.textContent).toBe("unsupported image");
+  expect(editRows().map((r) => r.querySelector("img")!.getAttribute("src"))).toEqual(["/media/m1/sm.webp"]);
+  expect((named("edit entry 42") as HTMLTextAreaElement).value).toBe("draft text");
+  expect(revoked).toEqual(["blob:preview-0"]);
+});
+
 test("an entry with 4 images refuses a fifth in the editor", async () => {
   previews();
   const fetch = editFetch(["a", "b", "c", "d"].map((id) => media(id)));

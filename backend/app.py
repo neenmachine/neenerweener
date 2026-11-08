@@ -78,6 +78,7 @@ from media import (
     sweep,
 )
 from timeline import (
+    TORONTO,
     InvalidAttachment,
     TimelineStore,
     TimelineStoreProtocol,
@@ -248,7 +249,13 @@ def list_timeline(
     return {
         "entries": entries,
         "next_cursor": rows[limit - 1]["id"] if has_next and rows else None,
+        # The one clock for every relative time on this page; older pages and new entries keep the first page's.
+        "now": utc_now().isoformat(),
     }
+
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 class LoginRequest(BaseModel):
@@ -293,6 +300,10 @@ class TokenRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     challenge_id: uuid.UUID
     signature: str
+
+
+# What /timeline shows when the profile cannot be read: the migration's defaults, so the feed still renders.
+DEFAULT_PROFILE = {"display_name": "neenerweener", "handle": None, "avatar_asset_id": None}
 
 
 def _public_profile(profile: dict) -> dict:
@@ -1150,8 +1161,13 @@ def home_page(request: Request) -> tuple[dict, dict, str, int]:
 
 
 def timeline_page_data(request: Request) -> tuple[dict, dict, str, int]:
-    page, markup, status_code = timeline_page(timeline_before(request))
-    return {"/api/timeline": page}, {"title": "timeline", "description": "timeline"}, markup, status_code
+    before = timeline_before(request)
+    try:
+        profile = get_profile()
+    except HTTPException:
+        profile = _public_profile(DEFAULT_PROFILE)
+    page, markup, status_code = timeline_page(before, profile)
+    return {"/api/timeline": page, "/api/profile": profile}, {"title": "timeline", "description": "timeline"}, markup, status_code
 
 
 def timeline_before(request: Request) -> int | None:
@@ -1211,15 +1227,15 @@ def not_found_page(label: str, back: bool = False) -> tuple[dict, dict, str, int
     return {"page": page}, {"title": "not found", "robots": "noindex"}, markup, 404
 
 
-def timeline_page(before: int | None) -> tuple[dict | None, str, int]:
+def timeline_page(before: int | None, profile: dict) -> tuple[dict | None, str, int]:
     try:
         page = list_timeline(before=before, limit=20)
     except HTTPException:
-        return None, timeline_markup(None), 503
+        return None, timeline_markup(None, profile), 503
     except Exception:
         logger.warning("timeline unavailable during page render")
-        return None, timeline_markup(None), 503
-    return page, timeline_markup(page), 200
+        return None, timeline_markup(None, profile), 503
+    return page, timeline_markup(page, profile), 200
 
 
 def summary(html: str, limit: int = 200) -> str:
@@ -1230,7 +1246,7 @@ def summary(html: str, limit: int = 200) -> str:
     return text if len(text) <= limit else text[: limit - 1].rsplit(" ", 1)[0] + "…"
 
 
-def timeline_markup(page: dict | None) -> str:
+def timeline_markup(page: dict | None, profile: dict) -> str:
     """The first timeline page as the client renders it; None means the timeline is unavailable."""
     entries = page["entries"] if page else []
     if page is None:
@@ -1239,23 +1255,30 @@ def timeline_markup(page: dict | None) -> str:
         content = '<p class="muted">nothing here yet</p>'
     else:
         items = []
+        avatar = avatar_markup(profile)
+        name = f'<span class="name">{escape(profile["display_name"], quote=False)}</span>'
+        if profile["handle"]:
+            name += f'<span class="handle">@{escape(profile["handle"], quote=False)}</span>'
         for entry in entries:
-            edited = (
-                f'<span class="edited" title="{escape(full_timestamp(entry["edited_at"]))}">'
-                f'edited<span class="sr-only"> {escape(full_timestamp(entry["edited_at"]))}</span></span>'
-                if entry.get("edited_at") else ""
-            )
+            edited = ""
+            if entry.get("edited_at"):
+                edited_full = escape(full_timestamp(entry["edited_at"], entry["edited_zone"]))
+                edited = (
+                    f'<span aria-hidden="true">·</span><span class="edited" title="{edited_full}">'
+                    f'edited<span class="sr-only"> {edited_full}</span></span>'
+                )
             created = entry["created_at"]
             created_utc = _utc_datetime(created).isoformat(timespec="milliseconds").replace("+00:00", "Z")
-            created_full = full_timestamp(created)
+            created_full = escape(full_timestamp(created, entry["created_zone"]))
             items.append(
-                f'<article class="timeline-entry" id="entry-{entry["id"]}">'
-                f'<div>{entry["html"]}</div>'
+                f'<article class="timeline-entry" id="entry-{entry["id"]}">{avatar}<div class="entry-main">'
+                f'<header>{name}<span class="when"><span aria-hidden="true">·</span>'
+                f'<a href="#entry-{entry["id"]}" aria-label="{created_full}">'
+                f'<time datetime="{escape(created_utc)}" title="{created_full}">{compact_timestamp(created, page["now"])}</time>'
+                f'</a>{edited}</span></header>'
+                f'<div class="entry-body">{entry["html"]}</div>'
                 f'{media_markup(entry["media"])}'
-                f'<footer><a href="#entry-{entry["id"]}" aria-label="{escape(created_full)}">'
-                f'<time datetime="{escape(created_utc)}" title="{escape(created_full)}">{escape(compact_timestamp(created))}</time>'
-                f'</a>{edited}</footer>'
-                "</article>"
+                "</div></article>"
             )
         content = f'<div class="timeline">{"".join(items)}</div>'
     if page is not None and page["next_cursor"] is not None:
@@ -1269,11 +1292,23 @@ def timeline_markup(page: dict | None) -> str:
 # A single image keeps its shape up to this height (CSS px); 2 to 4 images fill a grid of fixed cell shapes.
 SINGLE_IMAGE_MAX_HEIGHT = 512
 # Rendered widths for the sizes hints, from frontend/src/index.css (test_media_sizes_follow_the_css checks them):
-# 1rem is 15px, main is at most 52rem wide with 1.25rem side padding, a single image is capped at 100% - 2px,
-# and the 2 to 4 image grid has a 1px border and a 2px gap between its two columns.
+# 1rem is 15px, main is at most 52rem wide with 1.25rem side padding, images sit right of the 44px avatar and
+# its 12px gap, a single image is capped at 100% - 2px, and the 2 to 4 image grid has a 1px border and a 2px
+# gap between its two columns.
 PAGE_MAX_WIDTH = 52 * 15  # 780: above this the column stops growing
-SINGLE_GUTTER = 2 * 1.25 * 15 + 2  # 39.5: window width minus a single image's widest box
-GRID_SIZES = "(max-width: 780px) calc(50vw - 20.75px), 369.25px"  # (column - 2px border - 2px gap) / 2
+SINGLE_GUTTER = 2 * 1.25 * 15 + 44 + 12 + 2  # 95.5: window width minus a single image's widest box
+GRID_SIZES = "(max-width: 780px) calc(50vw - 48.75px), 341.25px"  # (window - 97.5px) / 2, capped at (780 - 97.5) / 2
+
+
+def avatar_markup(profile: dict) -> str:
+    """The poster's 44px picture, or a circle with the initial; Avatar in App.tsx renders the same markup."""
+    if not profile["avatar_id"]:
+        return f'<div class="avatar" aria-hidden="true">{escape(profile["avatar_initial"], quote=False)}</div>'
+    base = f'/media/{escape(profile["avatar_id"])}'
+    return (
+        f'<img class="avatar" sizes="44px" width="44" height="44" alt="" aria-hidden="true" '
+        f'srcset="{base}/sm.webp 96w, {base}/lg.webp 192w" src="{base}/sm.webp">'
+    )
 
 
 def media_markup(media: list[dict]) -> str:
@@ -1311,16 +1346,24 @@ def _utc_datetime(value: str) -> datetime:
     return parsed.astimezone(timezone.utc)
 
 
-def compact_timestamp(value: str, today: date | None = None) -> str:
-    current = today or datetime.now(timezone.utc).date()
-    moment = _utc_datetime(value)
-    year = "" if moment.date().year == current.year else f", {moment.year}"
-    return f"{moment.strftime('%b').lower()} {moment.day}{year}"
+def compact_timestamp(value: str, now: str) -> str:
+    """Age against the page's one now: "now", "12m", "3h", then the Toronto date, with the year if not now's."""
+    moment, current = _utc_datetime(value), _utc_datetime(now)
+    seconds = (current - moment).total_seconds()
+    if seconds < 60:
+        return "now"
+    if seconds < 3600:
+        return f"{int(seconds // 60)}m"
+    if seconds < 86400:
+        return f"{int(seconds // 3600)}h"
+    local = moment.astimezone(TORONTO)
+    year = "" if local.year == current.astimezone(TORONTO).year else f", {local.year}"
+    return f"{local.strftime('%b').lower()} {local.day}{year}"
 
 
-def full_timestamp(value: str) -> str:
-    moment = _utc_datetime(value)
-    return moment.strftime('%B %-d, %Y at %-I:%M %p')
+def full_timestamp(value: str, zone: str) -> str:
+    """Toronto wall time; zone is the serializer's EST or EDT for this instant."""
+    return _utc_datetime(value).astimezone(TORONTO).strftime(f"%B %-d, %Y at %-I:%M %p {zone}")
 
 
 def post_markup(post: dict) -> str:

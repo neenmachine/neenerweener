@@ -2,7 +2,7 @@ import { type ReactNode, type Ref, type RefObject, useEffect, useRef, useState }
 import { TimelineEntry } from "./App";
 import { type AdminEntry, type Result, hasText, LIMIT, length, request } from "./adminApi";
 import { Attachments, useAttachments } from "./attachments";
-import type { Entry } from "./timelineTypes";
+import type { Entry, Profile } from "./timelineTypes";
 
 // The admin-only entry controls shared by /admin and /timeline: edit in place and inline delete confirm.
 // Lazy loaded with the admin code, so public pages never download it.
@@ -141,6 +141,8 @@ export function Editor({
 // className and href are the entry's, as the page renders it (/timeline adds "target" and links in page).
 export function EntryRow({
   entry,
+  profile,
+  now,
   className,
   href = `/timeline#entry-${entry.id}`,
   send,
@@ -149,6 +151,8 @@ export function EntryRow({
   expire,
 }: {
   entry: Entry;
+  profile: Profile;
+  now: string;
   className?: string;
   href?: string;
   send: Send;
@@ -226,6 +230,8 @@ export function EntryRow({
   return (
     <TimelineEntry
       entry={entry}
+      profile={profile}
+      now={now}
       className={className}
       href={href}
       body={

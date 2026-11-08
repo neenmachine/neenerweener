@@ -125,7 +125,11 @@ def site(tmp_path, monkeypatch):
         def list(self, before, limit):
             return TIMELINE_ROWS
 
+        def get_profile(self):
+            return PROFILE
+
     monkeypatch.setattr(app, "timeline_store", Store())
+    monkeypatch.setattr(app, "utc_now", lambda: NOW)
     return TestClient(app.app)
 
 
@@ -133,16 +137,25 @@ def _image(n: int, width: int, height: int, alt: str = "") -> dict:
     return {"id": f"00000000-0000-4000-8000-{n:012d}", "width": width, "height": height, "alt": alt}
 
 
-# The timeline row in route_cases.json: a text-only entry and entries with 1 to 4 images. Year 2100, so the
-# compact date always shows the year and the markup does not change at new year.
+# The timeline row in route_cases.json: a configured avatar and handle, a text-only entry and entries with 1 to 4
+# images, at a fixed now (10:00 AM EST in Toronto) so each entry is in one of the compact time buckets.
+NOW = datetime(2100, 11, 8, 15, 0, tzinfo=timezone.utc)
+PROFILE = {"display_name": 'fixture & <name> "q"', "handle": "fixture_handle", "avatar_asset_id": "00000000-0000-4000-8000-000000000099"}
 TIMELINE_ROWS = [
-    {"id": id_, "body_markdown": f"entry {id_}", "created_at": datetime(2100, 1, 2, 3, 4, 5, tzinfo=timezone.utc), "edited_at": None, "media": media}
-    for id_, media in (
-        (5, [_image(1, 1312, 2048, '<script>alert("x")</script> & a "quote"')]),  # sm width 512.5 rounds half to even
-        (4, [_image(2, 2048, 1536, "left"), _image(3, 640, 480)]),
-        (3, [_image(4, 2048, 1152, "a"), _image(5, 1536, 2048, "b"), _image(6, 800, 800, "c")]),
-        (2, [_image(7, 2048, 1536, "1"), _image(8, 2048, 1536, "2"), _image(9, 2048, 1536, "3"), _image(10, 300, 200, "4")]),
-        (1, []),
+    {"id": id_, "body_markdown": f"entry {id_}", "created_at": created, "edited_at": edited, "media": media}
+    for id_, created, edited, media in (
+        # 30 s old: now
+        (6, datetime(2100, 11, 8, 14, 59, 30, tzinfo=timezone.utc), None, []),
+        # 12 minutes; sm width 512.5 rounds half to even
+        (5, datetime(2100, 11, 8, 14, 48, tzinfo=timezone.utc), None, [_image(1, 1312, 2048, '<script>alert("x")</script> & a "quote"')]),
+        # 3 hours, edited
+        (4, datetime(2100, 11, 8, 12, 0, tzinfo=timezone.utc), datetime(2100, 11, 8, 13, 30, tzinfo=timezone.utc), [_image(2, 2048, 1536, "left"), _image(3, 640, 480)]),
+        # the 6th in UTC is still the 5th in Toronto
+        (3, datetime(2100, 11, 6, 3, 30, tzinfo=timezone.utc), None, [_image(4, 2048, 1152, "a"), _image(5, 1536, 2048, "b"), _image(6, 800, 800, "c")]),
+        # summer: EDT, and July 4th UTC is the 3rd in Toronto
+        (2, datetime(2100, 7, 4, 3, 30, tzinfo=timezone.utc), None, [_image(7, 2048, 1536, "1"), _image(8, 2048, 1536, "2"), _image(9, 2048, 1536, "3"), _image(10, 300, 200, "4")]),
+        # New Year's Day in UTC is still the year before in Toronto
+        (1, datetime(2100, 1, 1, 3, 0, tzinfo=timezone.utc), None, []),
     )
 ]
 
@@ -172,6 +185,8 @@ def test_route_table(site, case):
     preload = json.loads(re.search(r'<script id="preload" type="application/json">(.*?)</script>', get.text)[1])
     assert preload["page"] == case["page"]
     assert set(preload) == {"page"} | set(case["data"])
+    if case["path"] == "/timeline":  # React renders this exact data; the markup check above is only fair if it is the server's
+        assert {key: preload[key] for key in case["data"]} == case["data"]
 
 
 def test_every_page_kind_has_a_renderer():

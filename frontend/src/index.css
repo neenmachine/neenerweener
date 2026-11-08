@@ -211,52 +211,117 @@ a {
   font-size: 0.9em;
 }
 
-/* Timeline: a plain stream of entries split by hairlines, the time and "edited" below each. */
+/* Timeline: entries like tweets, split by hairlines. The poster's avatar on the left; name, time, body and images
+   in the column beside it. The sizes hints in backend/app.py are derived from these widths. */
+.timeline-entry,
+.composer {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  column-gap: 12px;
+  align-items: start;
+}
+
 .timeline-entry {
   padding: 1.1rem 0;
   scroll-margin-top: 1.5rem;
 }
 
-.timeline-entry + .timeline-entry {
+.timeline-entry + .timeline-entry,
+.composer ~ .timeline > .timeline-entry:first-child {
   border-top: 1px solid color-mix(in srgb, var(--fg) 8%, transparent);
 }
 
-.timeline-entry > div {
-  overflow-wrap: anywhere;
+@media (max-width: 760px) {
+  .timeline-entry {
+    padding: 1rem 0;
+  }
 }
 
-.timeline-entry > div > :first-child {
-  margin-top: 0;
+.avatar {
+  box-sizing: border-box;
+  width: 44px;
+  height: 44px;
+  border: 1px solid color-mix(in srgb, var(--fg) 10%, transparent);
+  border-radius: 50%;
+  object-fit: cover;
 }
 
-.timeline-entry > div > :last-child {
-  margin-bottom: 0;
-}
-
-.timeline-entry footer {
-  display: flex;
-  gap: 1ch;
-  margin-top: 0.4rem;
+/* No picture: a neutral circle with the name's first letter. */
+div.avatar {
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
   color: var(--muted);
-  font-size: 0.85em;
+  font-weight: 600;
+  user-select: none;
+}
+
+/* Name, @handle, then the time; it wraps after the name or handle, never between a separator and the time. */
+.timeline-entry header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 0.3rem;
+  color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
 
-.timeline-entry footer a {
+.timeline-entry header .name {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.timeline-entry header :is(.name, .handle) {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.timeline-entry .when {
+  display: flex;
+  gap: 0.3rem;
+  white-space: nowrap;
+}
+
+.timeline-entry header a {
   text-decoration: none;
 }
 
-.timeline-entry footer a:hover {
+.timeline-entry header a:hover {
   color: var(--accent);
   text-decoration: underline;
   text-decoration-color: var(--faint);
+}
+
+.entry-body {
+  margin-top: 0.25rem;
+  overflow-wrap: anywhere;
+}
+
+.entry-body p {
+  margin: 0.55rem 0;
+}
+
+.entry-body > :first-child {
+  margin-top: 0;
+}
+
+.entry-body > :last-child {
+  margin-bottom: 0;
+}
+
+/* Admin controls under the entry, at its right edge. */
+.timeline-entry footer {
+  display: flex;
+  margin-top: 0.4rem;
+  color: var(--muted);
+  font-size: 0.85em;
 }
 
 /* Images under an entry, like a tweet's. One image keeps its shape: the server sets width and height to its
    display size (at most 512px tall), so the box is reserved before it loads. Two to four images fill a grid whose
    cells have fixed shapes (2: side by side, 3: one large and two, 4: 2x2) and are cropped to them. */
 .timeline-entry .media {
-  margin-top: 0.75rem;
+  margin-top: 0.65rem;
 }
 
 .media img {
@@ -321,7 +386,7 @@ a {
 }
 
 /* The entry a /timeline#entry-<id> link points to gets the "you are here" accent. */
-.timeline-entry:is(:target, .target) footer a {
+.timeline-entry:is(:target, .target) header a {
   color: var(--accent);
   font-weight: 600;
 }
@@ -495,7 +560,8 @@ a {
   margin-bottom: 1rem;
 }
 
-.editor > .admin-row {
+.editor > .admin-row,
+.composer > div > .admin-row {
   justify-content: space-between;
   margin-top: 0.5rem;
 }

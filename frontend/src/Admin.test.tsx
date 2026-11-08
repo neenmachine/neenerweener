@@ -5,9 +5,14 @@ import { afterEach, expect, test, vi } from "vitest";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-type Media = { id: string; width: number; height: number; alt: string };
-type Entry = { id: number; html: string; created_at: string; edited_at: string | null; media: Media[] };
-const entry = (id: number, body = `entry ${id}`, media: Media[] = []): Entry => ({ id, html: `<p>${body}</p>`, created_at: "2026-01-02T03:04:05Z", edited_at: null, media });
+import type { Entry, Media } from "./timelineTypes";
+
+const entry = (id: number, body = `entry ${id}`, media: Media[] = []): Entry => ({ id, html: `<p>${body}</p>`, created_at: "2026-01-02T03:04:05Z", created_zone: "EST", edited_at: null, edited_zone: null, media });
+const now = "2026-01-03T00:00:00Z";
+const profile = { display_name: "fixture name", handle: null, avatar_id: null, avatar_initial: "F" };
+// The public profile is answered here, so each test's fetch sees only the calls it is about.
+const withProfile = (fetch: (url: string, init?: RequestInit) => Promise<unknown>) =>
+  vi.fn((url: string, init?: RequestInit) => (url === "/api/profile" ? Promise.resolve(ok(profile)) : fetch(url, init)));
 const ok = (body: unknown, headers = new Headers()) => ({ ok: true, status: 200, headers, json: () => Promise.resolve(body) });
 const bad = (status: number, detail: unknown, headers = new Headers()) => ({ ok: false, status, headers, json: () => Promise.resolve({ detail }) });
 const session = { authenticated: true, csrf_token: "csrf" };
@@ -22,7 +27,7 @@ afterEach(() => {
 });
 
 async function render(fetch: (url: string, init?: RequestInit) => Promise<unknown>, entries: Entry[] = [entry(1)]) {
-  vi.stubGlobal("fetch", vi.fn(fetch));
+  vi.stubGlobal("fetch", withProfile(fetch));
   document.body.innerHTML = '<div id="root"></div>';
   const { default: Admin } = await import("./Admin");
   await act(async () => {
@@ -55,7 +60,7 @@ function loggedInFetch(pages: Entry[][] = [[entry(1)]]) {
   let page = 0;
   return vi.fn(async (url: string, init?: RequestInit) => {
     if (url === "/api/admin/session") return ok(session);
-    if (url === "/api/timeline" || url.startsWith("/api/timeline?")) return ok({ entries: pages[page++] ?? [], next_cursor: page < pages.length ? 2 : null });
+    if (url === "/api/timeline" || url.startsWith("/api/timeline?")) return ok({ entries: pages[page++] ?? [], next_cursor: page < pages.length ? 2 : null, now });
     return ok(json(1));
   });
 }
@@ -100,7 +105,7 @@ test("csrf protects create, duplicate create is ignored, and a 401 preserves the
   fetch.mockImplementation(async (url: string, init?: RequestInit) => {
     if (url === "/api/admin/session") return ok(session);
     if (url === "/api/admin/timeline") return new Promise((resolve) => (release = () => resolve(bad(401, "expired"))));
-    if (url === "/api/timeline") return ok({ entries: [entry(1)], next_cursor: null });
+    if (url === "/api/timeline") return ok({ entries: [entry(1)], next_cursor: null, now });
     return ok({});
   });
   await render(fetch);
@@ -130,7 +135,7 @@ test("create is guarded and edit saves the full replacement", async () => {
   let release!: () => void;
   fetch.mockImplementation(async (url: string, init?: RequestInit) => {
     if (url === "/api/admin/session") return ok(session);
-    if (url === "/api/timeline") return ok({ entries: [entry(1)], next_cursor: null });
+    if (url === "/api/timeline") return ok({ entries: [entry(1)], next_cursor: null, now });
     if (url === "/api/admin/timeline" && init?.method === "POST") return new Promise((resolve) => (release = () => resolve(ok(json(2, "new")))));
     if (url === "/api/admin/timeline/2" && init?.method === "GET") return ok(json(2, "old"));
     if (url === "/api/admin/timeline/2" && init?.method === "PATCH") return ok(json(2, "replacement"));
@@ -156,7 +161,7 @@ test("delete cancel preserves the entry, delete removes it and restores focus", 
   const fetch = loggedInFetch();
   fetch.mockImplementation(async (url: string) => {
     if (url === "/api/admin/session") return ok(session);
-    if (url === "/api/timeline") return ok({ entries: [entry(1), entry(2)], next_cursor: null });
+    if (url === "/api/timeline") return ok({ entries: [entry(1), entry(2)], next_cursor: null, now });
     return ok({});
   });
   await render(fetch);
@@ -209,7 +214,7 @@ test("a failed delete stays armed and shows the server detail", async () => {
   const fetch = loggedInFetch([[entry(42)]]);
   fetch.mockImplementation(async (url: string, init?: RequestInit) => {
     if (url === "/api/admin/session") return ok(session);
-    if (url === "/api/timeline") return ok({ entries: [entry(42)], next_cursor: null });
+    if (url === "/api/timeline") return ok({ entries: [entry(42)], next_cursor: null, now });
     if (init?.method === "DELETE") return bad(422, "invalid timeline id");
     return ok({});
   });
@@ -226,7 +231,7 @@ test("edit opens the private body with id names; Escape cancels to edit; a faile
   const fetch = loggedInFetch([[entry(42)]]);
   fetch.mockImplementation(async (url: string, init?: RequestInit) => {
     if (url === "/api/admin/session") return ok(session);
-    if (url === "/api/timeline") return ok({ entries: [entry(42)], next_cursor: null });
+    if (url === "/api/timeline") return ok({ entries: [entry(42)], next_cursor: null, now });
     if (url === "/api/admin/timeline/42" && init?.method === "GET") return ok(json(42, "private *markdown*"));
     if (url === "/api/admin/timeline/42" && init?.method === "PATCH") return bad(422, "unsafe link");
     return ok({});
@@ -273,7 +278,7 @@ test("429 uses Retry-After and the editor counts 10,000 Unicode code points", as
 // Fake timers; the 5 s timeout below guards against a hang if a pending promise never settles.
 async function renderPending(fetch: (url: string) => Promise<unknown>) {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  vi.stubGlobal("fetch", vi.fn(fetch));
+  vi.stubGlobal("fetch", withProfile(fetch));
   document.body.innerHTML = '<div id="root"></div>';
   const { default: Admin } = await import("./Admin");
   await act(async () => {
@@ -351,7 +356,7 @@ function mediaFetch(upload: (file: File, n: number) => Promise<unknown> = (_, n)
   let n = 0;
   return vi.fn(async (url: string, init?: RequestInit) => {
     if (url === "/api/admin/session") return ok(session);
-    if (url === "/api/timeline") return ok({ entries: [], next_cursor: null });
+    if (url === "/api/timeline") return ok({ entries: [], next_cursor: null, now });
     if (url === "/api/admin/media") return upload(init?.body as File, n++);
     if (url === "/api/admin/timeline") return ok({ ...json(9, "with images"), media: [{ id: "id-0", width: 4, height: 3, alt: "a red square" }] });
     return ok({});
@@ -546,7 +551,7 @@ const media = (id: string, alt = "") => ({ id, width: 4, height: 3, alt });
 function editFetch(start: Media[], upload: () => Promise<unknown> = () => Promise.resolve(ok({ id: "new-0", width: 4, height: 3 }))) {
   return vi.fn(async (url: string, init?: RequestInit) => {
     if (url === "/api/admin/session") return ok(session);
-    if (url === "/api/timeline") return ok({ entries: [entry(42, "entry 42", start)], next_cursor: null });
+    if (url === "/api/timeline") return ok({ entries: [entry(42, "entry 42", start)], next_cursor: null, now });
     if (url === "/api/admin/media") return upload();
     if (url === "/api/admin/timeline/42" && init?.method === "GET") return ok({ ...json(42), media: start });
     if (url === "/api/admin/timeline/42" && init?.method === "PATCH") {

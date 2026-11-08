@@ -8,12 +8,14 @@ RUN pnpm build
 
 FROM python:3.13.9-slim
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends openssh-client \
+    && apt-get install -y --no-install-recommends openssh-client tzdata \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=ghcr.io/astral-sh/uv:0.12.17 /uv /uvx /usr/local/bin/
 WORKDIR /app
 COPY backend/ /app/backend/
 RUN cd /app/backend && uv sync --frozen --no-dev
+# The site shows Toronto time; fail the build, not the first request, if the zone data is missing.
+RUN /app/backend/.venv/bin/python -c 'from zoneinfo import ZoneInfo; ZoneInfo("America/Toronto")'
 COPY posts/ /app/posts/
 COPY code/ /app/code/
 COPY --from=frontend /app/frontend/dist/ /app/frontend/dist/

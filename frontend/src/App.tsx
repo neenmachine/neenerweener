@@ -1,11 +1,10 @@
 import { type ComponentType, type MouseEvent, type ReactNode, lazy, Suspense, useEffect, useRef, useState } from "react";
 // Types only: the admin code itself stays out of the public chunk.
 import type { EntryRow, Send } from "./EntryEditor";
-import type { Entry, Media } from "./timelineTypes";
+import type { Entry, Media, Profile, Timeline, Zone } from "./timelineTypes";
 
 type Summary = { slug: string; title: string; excerpt: string | null; tags: string[]; draft: boolean };
 type Post = Summary & { html: string };
-type Timeline = { entries: Entry[]; next_cursor: number | null };
 type Project = { name: string; files: string[]; readme_html: string | null };
 type CodeFile = { path: string; html?: string; binary?: true };
 
@@ -139,6 +138,8 @@ function Footer() {
 // Newest first. The first page comes from the preload; "load more" fetches older pages by cursor.
 function TimelinePage() {
   const { data, error } = useApi<Timeline>("/api/timeline");
+  // The server always preloads it, with its defaults if the profile could not be read.
+  const profile = useApi<Profile>("/api/profile").data;
   const [older, setOlder] = useState<Timeline[]>([]);
   // Entries the admin posted from this page; the preload and the cursor stay as the server sent them.
   const [created, setCreated] = useState<Entry[]>([]);
@@ -172,7 +173,7 @@ function TimelinePage() {
   }, [data]);
   useEffect(() => {
     if (focusAt.current === null) return;
-    const links = list.current?.querySelectorAll<HTMLElement>(".timeline-entry > footer > a");
+    const links = list.current?.querySelectorAll<HTMLElement>(".timeline-entry header a");
     const link = links?.[Math.min(focusAt.current, links.length - 1)];
     (link ?? empty.current)?.focus();
     focusAt.current = null;
@@ -191,7 +192,9 @@ function TimelinePage() {
         <p className="muted">could not load timeline</p>
       </article>
     );
-  if (!data) return null;
+  if (!data || !profile) return null;
+  // The first page's clock for every entry, so one screen has one now and a new entry says "now".
+  const now = data.now;
   const pages = [data, ...older];
   const cursor = pages[pages.length - 1].next_cursor;
   const seen = new Set<number>();
@@ -228,7 +231,7 @@ function TimelinePage() {
   return (
     <article>
       {heading}
-      {admin && <admin.Composer onCreated={(e) => setCreated((prev) => [e, ...prev])} onExpired={expire} />}
+      {admin && <admin.Composer profile={profile} onCreated={(e) => setCreated((prev) => [e, ...prev])} onExpired={expire} />}
       {/* A page can be empty and still have older entries (the server skips bad rows); only the end is empty. */}
       {!entries.length && cursor === null && (
         <p className="muted" tabIndex={-1} ref={empty}>
@@ -244,6 +247,8 @@ function TimelinePage() {
             <admin.EntryRow
               key={e.id}
               entry={e}
+              profile={profile}
+              now={now}
               className={className}
               href={`#entry-${e.id}`}
               send={admin.send}
@@ -259,7 +264,7 @@ function TimelinePage() {
               expire={expire}
             />
           ) : (
-            <TimelineEntry key={e.id} entry={e} className={className} />
+            <TimelineEntry key={e.id} entry={e} profile={profile} now={now} className={className} />
           );
         })}
       </div>
@@ -291,8 +296,8 @@ const SM_EDGE = 800;
 const SINGLE_IMAGE_MAX_HEIGHT = 512;
 // Mirror of PAGE_MAX_WIDTH, SINGLE_GUTTER and GRID_SIZES in the backend, which derives them from index.css.
 const PAGE_MAX_WIDTH = 780;
-const SINGLE_GUTTER = 39.5;
-const GRID_SIZES = "(max-width: 780px) calc(50vw - 20.75px), 369.25px";
+const SINGLE_GUTTER = 95.5;
+const GRID_SIZES = "(max-width: 780px) calc(50vw - 48.75px), 341.25px";
 // Python's round(): a half goes to the even neighbour, so the numbers match the server markup.
 const round = (x: number) => {
   const r = Math.round(x);
@@ -304,10 +309,13 @@ const smWidth = (width: number, height: number) => {
 };
 
 // An entry's images like a tweet's: one keeps its shape, 2 to 4 fill a fixed grid, so nothing shifts on load.
-// One entry as timeline_markup in backend/app.py renders it. The admin editor (lazy) passes body to swap in its
-// edit form, actions for its footer buttons, and children after the footer.
+// One entry as timeline_markup in backend/app.py renders it: the avatar, then name, time, body and images in the
+// column beside it. now is the page's clock. The admin editor (lazy) passes body to swap in its edit form, actions
+// for its footer buttons, and children after the footer.
 export function TimelineEntry({
   entry,
+  profile,
+  now,
   className = "timeline-entry",
   href = `#entry-${entry.id}`,
   body,
@@ -315,36 +323,75 @@ export function TimelineEntry({
   children,
 }: {
   entry: Entry;
+  profile: Profile;
+  now: string;
   className?: string;
   href?: string;
   body?: ReactNode;
   actions?: ReactNode;
   children?: ReactNode;
 }) {
+  const created = full(entry.created_at, entry.created_zone);
   return (
     <article className={className} id={`entry-${entry.id}`}>
-      {body ?? (
-        <>
-          {/* Rendered server side from Henry's entry, with raw HTML disabled. */}
-          <div dangerouslySetInnerHTML={{ __html: entry.html }} />
-          <EntryMedia media={entry.media} />
-        </>
-      )}
-      <footer>
-        <a href={href} aria-label={full(entry.created_at)}>
-          <time dateTime={new Date(entry.created_at).toISOString()} title={full(entry.created_at)}>
-            {compact(entry.created_at)}
-          </time>
-        </a>
-        {entry.edited_at && (
-          <span className="edited" title={full(entry.edited_at)}>
-            edited<span className="sr-only"> {full(entry.edited_at)}</span>
+      <Avatar profile={profile} />
+      <div className="entry-main">
+        <header>
+          <span className="name">{profile.display_name}</span>
+          {profile.handle && <span className="handle">@{profile.handle}</span>}
+          {/* One unit, so the time never wraps away from its separator. */}
+          <span className="when">
+            <span aria-hidden="true">·</span>
+            <a href={href} aria-label={created}>
+              <time dateTime={new Date(entry.created_at).toISOString()} title={created}>
+                {compact(entry.created_at, now)}
+              </time>
+            </a>
+            {entry.edited_at && entry.edited_zone && (
+              <>
+                <span aria-hidden="true">·</span>
+                <span className="edited" title={full(entry.edited_at, entry.edited_zone)}>
+                  edited<span className="sr-only"> {full(entry.edited_at, entry.edited_zone)}</span>
+                </span>
+              </>
+            )}
           </span>
+        </header>
+        {body ?? (
+          <>
+            {/* Rendered server side from Henry's entry, with raw HTML disabled. */}
+            <div className="entry-body" dangerouslySetInnerHTML={{ __html: entry.html }} />
+            <EntryMedia media={entry.media} />
+          </>
         )}
-        {actions}
-      </footer>
-      {children}
+        {actions && <footer>{actions}</footer>}
+        {children}
+      </div>
     </article>
+  );
+}
+
+// The poster's picture, or a neutral circle with the server's initial. Hidden from screen readers: the name beside
+// it says who posted. avatar_markup in backend/app.py renders the same markup.
+export function Avatar({ profile }: { profile: Profile }) {
+  if (!profile.avatar_id)
+    return (
+      <div className="avatar" aria-hidden="true">
+        {profile.avatar_initial}
+      </div>
+    );
+  const base = `/media/${profile.avatar_id}`;
+  return (
+    <img
+      className="avatar"
+      sizes="44px"
+      width={44}
+      height={44}
+      alt=""
+      aria-hidden="true"
+      srcSet={`${base}/sm.webp 96w, ${base}/lg.webp 192w`}
+      src={`${base}/sm.webp`}
+    />
   );
 }
 
@@ -384,7 +431,7 @@ export function EntryMedia({ media }: { media: Media[] }) {
   );
 }
 
-type ComposerProps = { onCreated: (entry: Entry) => void; onExpired: () => void };
+type ComposerProps = { profile: Profile; onCreated: (entry: Entry) => void; onExpired: () => void };
 // The admin parts of /timeline, all from lazy chunks: the composer, the per-entry controls, and their request.
 type AdminKit = { Composer: ComponentType<ComposerProps>; EntryRow: typeof EntryRow; send: Send };
 
@@ -410,14 +457,35 @@ function useAdmin(): [AdminKit | null, () => void] {
   return [kit, expire];
 }
 
-// "nov 7" this year, "nov 7, 2025" before; the full date and time are in the tooltip.
-export function compact(iso: string) {
-  const d = new Date(iso);
-  const year = d.getUTCFullYear() === new Date().getUTCFullYear() ? undefined : "numeric";
-  return d.toLocaleDateString("en", { month: "short", day: "numeric", year, timeZone: "UTC" }).toLowerCase();
+// The site's one time zone; compact_timestamp and full_timestamp in backend/app.py format the same fields.
+const toronto = new Intl.DateTimeFormat("en-US", {
+  timeZone: "America/Toronto",
+  year: "numeric",
+  month: "long",
+  day: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+  hour12: true,
+});
+const fields = (iso: string) =>
+  Object.fromEntries(toronto.formatToParts(new Date(iso)).map((p) => [p.type, p.value])) as Record<Intl.DateTimeFormatPartTypes, string>;
+
+// Age against the page's now (never the wall clock): "now", "12m", "3h", then the Toronto date, "nov 7" in now's
+// Toronto year and "nov 7, 2025" before it. The full date and time are in the tooltip.
+export function compact(iso: string, now: string) {
+  const age = (Date.parse(now) - Date.parse(iso)) / 1000;
+  if (age < 60) return "now";
+  if (age < 3600) return `${Math.floor(age / 60)}m`;
+  if (age < 86400) return `${Math.floor(age / 3600)}h`;
+  const d = fields(iso);
+  return `${d.month.slice(0, 3).toLowerCase()} ${d.day}${d.year === fields(now).year ? "" : `, ${d.year}`}`;
 }
 
-export const full = (iso: string) => new Date(iso).toLocaleString("en", { dateStyle: "long", timeStyle: "short", timeZone: "UTC" });
+// "November 7, 2025 at 10:04 AM EST", with the zone the server named for this time.
+export function full(iso: string, zone: Zone) {
+  const d = fields(iso);
+  return `${d.month} ${d.day}, ${d.year} at ${d.hour}:${d.minute} ${d.dayPeriod} ${zone}`;
+}
 
 function Back({ href }: { href: string }) {
   return (

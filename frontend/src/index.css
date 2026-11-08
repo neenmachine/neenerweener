@@ -6,6 +6,10 @@
   /* The one accent: a darker grey, used bold for "you are here". */
   --accent: #4a4a48;
   --bg: #fdfdfc;
+  /* A primary (submit) button's border, one step stronger than other buttons at rest. */
+  --line-strong: color-mix(in srgb, var(--fg) 20%, transparent);
+  /* Timeline entry text: name, handle, time and body. */
+  --entry-font-size: 1rem;
   font: 15px/1.6 -apple-system, BlinkMacSystemFont, sans-serif;
   color: var(--fg);
   background: var(--bg);
@@ -19,6 +23,7 @@
     --faint: #82827e;
     --accent: #c4c4c0;
     --bg: #161616;
+    --line-strong: color-mix(in srgb, var(--fg) 20%, transparent);
   }
 }
 
@@ -211,52 +216,119 @@ a {
   font-size: 0.9em;
 }
 
-/* Timeline: a plain stream of entries split by hairlines, the time and "edited" below each. */
+/* Timeline: entries like tweets, split by hairlines. The poster's avatar on the left; name, time, body and images
+   in the column beside it. The sizes hints in backend/app.py are derived from these widths. */
+.timeline-entry,
+.composer {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  column-gap: 12px;
+  align-items: start;
+}
+
 .timeline-entry {
   padding: 1.1rem 0;
+  font-size: var(--entry-font-size);
   scroll-margin-top: 1.5rem;
 }
 
-.timeline-entry + .timeline-entry {
+.composer {
+  margin-top: 1.3333rem;
+}
+
+.timeline-entry + .timeline-entry,
+.composer ~ .timeline > .timeline-entry:first-child {
   border-top: 1px solid color-mix(in srgb, var(--fg) 8%, transparent);
 }
 
-.timeline-entry > div {
-  overflow-wrap: anywhere;
+.avatar {
+  box-sizing: border-box;
+  width: 44px;
+  height: 44px;
+  border: 1px solid color-mix(in srgb, var(--fg) 10%, transparent);
+  border-radius: 50%;
+  object-fit: cover;
 }
 
-.timeline-entry > div > :first-child {
-  margin-top: 0;
-}
-
-.timeline-entry > div > :last-child {
-  margin-bottom: 0;
-}
-
-.timeline-entry footer {
-  display: flex;
-  gap: 1ch;
-  margin-top: 0.4rem;
+/* No picture: a neutral circle with the name's first letter. */
+div.avatar {
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
   color: var(--muted);
-  font-size: 0.85em;
+  font-size: 1.1333rem;
+  font-weight: 600;
+  line-height: 1;
+  user-select: none;
+}
+
+/* Name, @handle, then the time; it wraps after the name or handle, never between a separator and the time. */
+.timeline-entry header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 0.33rem;
+  color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
 
-.timeline-entry footer a {
+.timeline-entry header .name {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.timeline-entry header :is(.name, .handle) {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.timeline-entry .when {
+  display: flex;
+  gap: 0.33rem;
+  white-space: nowrap;
+}
+
+.timeline-entry header a {
   text-decoration: none;
 }
 
-.timeline-entry footer a:hover {
+.timeline-entry header a:hover {
   color: var(--accent);
   text-decoration: underline;
   text-decoration-color: var(--faint);
+}
+
+.entry-body {
+  margin-top: 0.25rem;
+  overflow-wrap: anywhere;
+}
+
+.entry-body p {
+  margin: 0.55rem 0;
+}
+
+.entry-body > :first-child {
+  margin-top: 0;
+}
+
+.entry-body > :last-child {
+  margin-bottom: 0;
+}
+
+/* Admin controls under the entry, at its right edge. */
+.timeline-entry footer {
+  display: flex;
+  margin-top: 0.4rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+  line-height: 16px;
 }
 
 /* Images under an entry, like a tweet's. One image keeps its shape: the server sets width and height to its
    display size (at most 512px tall), so the box is reserved before it loads. Two to four images fill a grid whose
    cells have fixed shapes (2: side by side, 3: one large and two, 4: 2x2) and are cropped to them. */
 .timeline-entry .media {
-  margin-top: 0.75rem;
+  margin-top: 0.65rem;
 }
 
 .media img {
@@ -321,7 +393,7 @@ a {
 }
 
 /* The entry a /timeline#entry-<id> link points to gets the "you are here" accent. */
-.timeline-entry:is(:target, .target) footer a {
+.timeline-entry:is(:target, .target) header a {
   color: var(--accent);
   font-weight: 600;
 }
@@ -385,6 +457,11 @@ a {
   :is(.load-more a, .button):active {
     scale: none;
   }
+}
+
+.button[type="submit"] {
+  border-color: var(--line-strong);
+  color: var(--fg);
 }
 
 /* Buttons that cannot act right now (empty or too long text, a wait after too many logins). */
@@ -495,7 +572,8 @@ a {
   margin-bottom: 1rem;
 }
 
-.editor > .admin-row {
+.editor > .admin-row,
+.composer > div > .admin-row {
   justify-content: space-between;
   margin-top: 0.5rem;
 }
@@ -570,18 +648,30 @@ a {
   align-items: center;
 }
 
-/* Entry controls sit at the end of the time line, as plain text until hovered. */
+/* Entry controls sit in their own row under the body, at its right edge, as plain text until hovered. */
 .admin .timeline-entry footer {
   align-items: baseline;
 }
 
 .timeline-entry footer .admin-actions {
+  gap: 4px;
   margin-left: auto;
+}
+
+/* The edit form's buttons stay at the page size, whatever the entry text size. */
+.timeline-entry .editor .button {
+  font-size: 1rem;
 }
 
 .timeline-entry footer .button {
   padding: 0 0.4rem;
   border-color: transparent;
+}
+
+@media (max-width: 760px), (pointer: coarse) {
+  .timeline-entry footer .button {
+    padding-inline: 10px;
+  }
 }
 
 .timeline-entry footer .button:hover {

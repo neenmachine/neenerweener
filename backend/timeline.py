@@ -7,6 +7,7 @@ import uuid
 from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from typing import Protocol
+from zoneinfo import ZoneInfo
 
 from markdown_it import MarkdownIt
 from sqlalchemy import (
@@ -445,7 +446,9 @@ def serialize_entry(entry: dict, *, admin: bool = False) -> dict:
         "id": entry["id"],
         "html": render_timeline(entry["body_markdown"]),
         "created_at": _timestamp(entry["created_at"]),
+        "created_zone": _zone(entry["created_at"]),
         "edited_at": _timestamp(entry.get("edited_at")),
+        "edited_zone": _zone(entry.get("edited_at")),
         "media": entry["media"],
     }
     if admin:
@@ -455,3 +458,12 @@ def serialize_entry(entry: dict, *, admin: bool = False) -> dict:
 
 def _timestamp(value: datetime | None) -> str | None:
     return value.astimezone(timezone.utc).isoformat() if value is not None else None
+
+
+# The site shows every time in Toronto. Python alone names the zone (EST or EDT) for each timestamp, so both
+# renderers print the same abbreviation; browsers' Intl can say "GMT-5" instead.
+TORONTO = ZoneInfo("America/Toronto")
+
+
+def _zone(value: datetime | None) -> str | None:
+    return value.astimezone(TORONTO).tzname() if value is not None else None

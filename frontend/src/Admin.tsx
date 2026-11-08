@@ -3,12 +3,10 @@ import { AdminHead } from "./App";
 import { checkSession, createTimeline, hasText, login, logout as signOut } from "./adminApi";
 import { Attachments, useAttachments } from "./attachments";
 import { Button, Editor, EntryRow, type Send, sendOrExpire } from "./EntryEditor";
-import type { Entry } from "./timelineTypes";
+import type { Entry, Profile, Timeline } from "./timelineTypes";
 
 // The private /admin page: a password form, then compose, edit and delete for timeline entries.
 // It is lazy loaded, so public pages never download it, and nothing on the site links here.
-
-type Timeline = { entries: Entry[]; next_cursor: number | null };
 
 export default function Admin() {
   const [auth, setAuth] = useState<"loading" | "unavailable" | "out" | "in">("loading");
@@ -168,6 +166,8 @@ function Manager({ send, expire }: { send: Send; expire: () => void }) {
   const [list, setList] = useState<"loading" | "ok" | "failed">("loading");
   const [more, setMore] = useState(false);
   const [listError, setListError] = useState("");
+  // The poster and the first page's clock, which every entry here is shown with.
+  const [shown, setShown] = useState<{ profile: Profile; now: string } | null>(null);
   const [draft, setDraft] = useState("");
   const [posting, setPosting] = useState(false);
   const [postError, setPostError] = useState("");
@@ -190,9 +190,11 @@ function Manager({ send, expire }: { send: Send; expire: () => void }) {
 
   const first = async () => {
     setList("loading");
-    const r = await page(null);
-    setListError(r.ok ? "" : r.message);
-    setList(r.ok ? "ok" : "failed");
+    const [r, p] = await Promise.all([page(null), send<Profile>("GET", "/api/profile")]);
+    const failed = !r.ok ? r : !p.ok ? p : null;
+    setListError(failed ? failed.message : "");
+    setList(failed ? "failed" : "ok");
+    if (r.ok && p.ok) setShown({ profile: p.data, now: r.data.now });
   };
 
   useEffect(() => {
@@ -266,19 +268,22 @@ function Manager({ send, expire }: { send: Send; expire: () => void }) {
         </div>
       )}
       <div className="timeline" ref={listRef}>
-        {entries.map((e) => (
-          <EntryRow
-            key={e.id}
-            entry={e}
-            send={send}
-            onSaved={(saved, message) => {
-              setEntries((prev) => prev.map((p) => (p.id === saved.id ? saved : p)));
-              setStatus(message);
-            }}
-            onGone={remove}
-            expire={expire}
-          />
-        ))}
+        {shown &&
+          entries.map((e) => (
+            <EntryRow
+              key={e.id}
+              entry={e}
+              profile={shown.profile}
+              now={shown.now}
+              send={send}
+              onSaved={(saved, message) => {
+                setEntries((prev) => prev.map((p) => (p.id === saved.id ? saved : p)));
+                setStatus(message);
+              }}
+              onGone={remove}
+              expire={expire}
+            />
+          ))}
       </div>
       {list === "ok" && cursor !== null && (
         <div className="admin-row load-more">

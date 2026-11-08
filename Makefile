@@ -15,12 +15,12 @@ test:
 	$(MAKE) chunk-guard
 
 # The public entry script (from dist/index.html) must not carry or statically import the admin composer, entry editor or CSRF code,
-# nor the quoted admin status literals "saved"/"deleted";
+# nor the profile editor labels and endpoint, nor the quoted admin status literals "saved"/"deleted";
 # those are lazy chunks for signed-in admins.
 chunk-guard:
 	@entry=$$(sed -nE 's|.*<script type="module"[^>]* src="/?([^"]+)".*|\1|p' frontend/dist/index.html); \
 	test -n "$$entry" || { echo "no module script in frontend/dist/index.html"; exit 1; }; \
-	if grep -oE 'tweet|new timeline entry|attach images|up to 4 images|edit entry|delete entry|confirm delete|X-CSRF-Token|csrf_token|from"\./(TimelineComposer|adminApi|EntryEditor)-|["'"'"'`](saved|deleted)["'"'"'`]' "frontend/dist/$$entry"; then \
+	if grep -oE 'tweet|new timeline entry|choose picture|replace picture|remove picture|save profile|api/admin/profile|attach images|up to 4 images|edit entry|delete entry|confirm delete|X-CSRF-Token|csrf_token|from"\./(TimelineComposer|adminApi|EntryEditor)-|["'"'"'`](saved|deleted)["'"'"'`]' "frontend/dist/$$entry"; then \
 	  echo "frontend/dist/$$entry carries admin code"; exit 1; fi; \
 	echo "chunk-guard: frontend/dist/$$entry is clean"
 

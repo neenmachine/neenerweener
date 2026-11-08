@@ -1,12 +1,14 @@
 import asyncio
+import json
 import logging
 import re
 import threading
 import time
-from datetime import date
+from datetime import datetime, timezone
 from pathlib import Path
 
 import app
+from timeline import serialize_entry
 import pytest
 from fastapi.testclient import TestClient
 
@@ -565,6 +567,7 @@ def test_server_rendered_pages(tmp_path, monkeypatch):
             return [{"id": 2, "body_markdown": "first & <safe>", "created_at": datetime(2026, 1, 2, tzinfo=timezone.utc), "edited_at": datetime(2026, 1, 3, tzinfo=timezone.utc), "media": []}]
 
     monkeypatch.setattr(app, "timeline_store", Store())
+    monkeypatch.setattr(app, "utc_now", lambda: datetime(2026, 3, 1, tzinfo=timezone.utc))
     c = TestClient(app.app)
 
     page = c.get("/posts/hello").text
@@ -584,11 +587,14 @@ def test_server_rendered_pages(tmp_path, monkeypatch):
     assert "<title>timeline</title>" in timeline
     assert '<meta name="description" content="timeline" />' in timeline
     assert 'id="entry-2"' in timeline
-    assert 'title="January 2, 2026 at 12:00 AM"' in timeline
+    # Toronto time: midnight UTC is the evening before
+    assert 'title="January 1, 2026 at 7:00 PM EST"' in timeline
     assert 'datetime="2026-01-02T00:00:00.000Z"' in timeline
-    assert 'aria-label="January 2, 2026 at 12:00 AM"' in timeline
-    assert '<span class="edited" title="January 3, 2026 at 12:00 AM">edited<span class="sr-only"> January 3, 2026 at 12:00 AM</span></span>' in timeline
-    assert '>jan 2<' in timeline
+    assert 'aria-label="January 1, 2026 at 7:00 PM EST"' in timeline
+    assert '<span class="edited" title="January 2, 2026 at 7:00 PM EST">edited<span class="sr-only"> January 2, 2026 at 7:00 PM EST</span></span>' in timeline
+    assert '>jan 1<' in timeline
+    # this store has no profile, so the page shows the migration's defaults instead of failing
+    assert '<div class="avatar" aria-hidden="true">N</div><div class="entry-main"><header><span class="name">neenerweener</span><span class="when">' in timeline
     assert '<footer><a href="/">neenerweener</a><a href="/timeline" aria-current="page">timeline</a><a href="/feed.xml">rss</a></footer>' in timeline
     assert "first &amp; &lt;safe&gt;" in timeline
     assert '"/api/timeline"' in timeline
@@ -614,6 +620,7 @@ def test_timeline_html_is_the_same_for_visitors_and_admins(tmp_path, monkeypatch
             return [{"id": 2, "body_markdown": "entry", "created_at": datetime(2026, 1, 2, tzinfo=timezone.utc), "edited_at": None, "media": []}]
 
     monkeypatch.setattr(app, "timeline_store", Store())
+    monkeypatch.setattr(app, "utc_now", lambda: datetime(2026, 3, 1, tzinfo=timezone.utc))
     responses = []
     # No cookies, a hint alone (maybe forged), and a hint with session cookies.
     for cookies in ({}, {"admin_hint": "1"}, {"admin_hint": "1", "__Host-ween_session": "x", "ween_session_dev": "x"}):
@@ -671,7 +678,7 @@ def test_timeline_ssr_and_preload_share_one_initial_page(tmp_path, monkeypatch, 
     assert len(h1s(html)) == 1
     preload = html.split('<script id="preload" type="application/json">')[1].split("</script>")[0]
     data = __import__("json").loads(preload)
-    assert set(data) == {"page", "/api/timeline"}
+    assert set(data) == {"page", "/api/timeline", "/api/profile"}
     assert data["/api/timeline"]["entries"][0]["id"] == expected_id
     assert f'id="entry-{expected_id}"' in html
     control = f'<div class="load-more"><a href="/timeline?before={next_cursor}">load more</a></div>'
@@ -689,8 +696,9 @@ def test_timeline_empty_and_unavailable_are_distinct(tmp_path, monkeypatch):
             return []
 
     monkeypatch.setattr(app, "timeline_store", EmptyStore())
+    monkeypatch.setattr(app, "utc_now", lambda: datetime(2026, 3, 1, tzinfo=timezone.utc))
     empty = TestClient(app.app).get("/timeline").text
-    assert '"/api/timeline": {"entries": [], "next_cursor": null}' in empty
+    assert '"/api/timeline": {"entries": [], "next_cursor": null, "now": "2026-03-01T00:00:00+00:00"}' in empty
     assert "nothing here yet" in empty
     assert "could not load timeline" not in empty
 
@@ -706,7 +714,7 @@ def test_timeline_empty_and_unavailable_are_distinct(tmp_path, monkeypatch):
 
     monkeypatch.setattr(app, "timeline_store", MalformedPageStore())
     malformed = TestClient(app.app).get("/timeline").text
-    assert '"/api/timeline": {"entries": [], "next_cursor": 11}' in malformed
+    assert '"/api/timeline": {"entries": [], "next_cursor": 11, "now": "2026-03-01T00:00:00+00:00"}' in malformed
     assert "nothing here yet" not in malformed
     assert '<div class="load-more"><a href="/timeline?before=11">load more</a></div>' in malformed
 
@@ -721,17 +729,22 @@ def test_timeline_empty_and_unavailable_are_distinct(tmp_path, monkeypatch):
     assert "database details" not in broken.text
 
 
+NOW = "2026-03-01T00:00:00+00:00"
+PROFILE = {"display_name": "neenerweener", "handle": None, "avatar_id": None, "avatar_initial": "N"}
+TEXT_ENTRY = {"id": 1, "html": "<p>x</p>", "created_at": "2026-01-01T00:00:00+00:00", "created_zone": "EST", "edited_at": None, "edited_zone": None, "media": []}
+
+
 @pytest.mark.parametrize(
     ("page", "has_control", "href"),
     [
         ({"entries": [], "next_cursor": 11}, True, "/timeline?before=11"),
         ({"entries": [], "next_cursor": None}, False, None),
-        ({"entries": [{"id": 1, "html": "<p>x</p>", "created_at": "2026-01-01T00:00:00+00:00", "media": []}], "next_cursor": 11}, True, "/timeline?before=11"),
-        ({"entries": [{"id": 1, "html": "<p>x</p>", "created_at": "2026-01-01T00:00:00+00:00", "media": []}], "next_cursor": None}, False, None),
+        ({"entries": [TEXT_ENTRY], "next_cursor": 11}, True, "/timeline?before=11"),
+        ({"entries": [TEXT_ENTRY], "next_cursor": None}, False, None),
     ],
 )
 def test_timeline_markup_pagination_control_matches_cursor(page, has_control, href):
-    markup = app.timeline_markup(page)
+    markup = app.timeline_markup({**page, "now": NOW}, PROFILE)
     control = '<div class="load-more"><a href="' + href + '">load more</a></div>' if href else ""
     assert (control != "" and control in markup) is has_control
     assert ('class="load-more"' in markup) is has_control
@@ -756,7 +769,7 @@ def test_entry_images_reserve_their_box_and_load_lazily(count):
         assert f'alt="photo {n}"' in img
         # one image: its own shape, at most 512px tall; a grid cell: the stored size, cropped by CSS
         assert ('width="683" height="512"' if count == 1 else 'width="2048" height="1536"') in img
-        assert ('sizes="(max-width: 722.5px) calc(100vw - 39.5px), 683px"' if count == 1 else f'sizes="{app.GRID_SIZES}"') in img
+        assert ('sizes="(max-width: 778.5px) calc(100vw - 95.5px), 683px"' if count == 1 else f'sizes="{app.GRID_SIZES}"') in img
 
 
 def _css_px(css: str, pattern: str) -> float:
@@ -767,17 +780,23 @@ def _css_px(css: str, pattern: str) -> float:
 
 def test_media_sizes_follow_the_css():
     """The sizes hints are the widths index.css gives the images; a CSS change that moves them fails here."""
+    def sizes(media):
+        return re.findall(r'sizes="([^"]*)"', app.media_markup(media))
+
+    # The images sit right of the 44px avatar and its 12px gap: 18.75px main padding each side + 56 + 2px border.
+    assert sizes([_image(1, 2048, 1152)]) == ["(max-width: 780px) calc(100vw - 95.5px), 684.5px"]
+    assert sizes([_image(1), _image(2)]) == ["(max-width: 780px) calc(50vw - 48.75px), 341.25px"] * 2
+
     css = (Path(__file__).parents[1] / "frontend/src/index.css").read_text()
     rem = _css_px(css, r":root \{[^}]*font: ([\d.]+)px/")
     main = re.search(r"\nmain \{([^}]*)\}", css).group(1)
     page = _css_px(main, r"max-width: ([\d.]+)rem;") * rem
-    padding = 2 * _css_px(main, r"padding: [\d.]+rem ([\d.]+)rem") * rem
+    entry = re.search(r"\n\.timeline-entry,\n\.composer \{([^}]*)\}", css).group(1)
+    avatar = _css_px(entry, r"grid-template-columns: ([\d.]+)px minmax\(0, 1fr\);") + _css_px(entry, r"column-gap: ([\d.]+)px;")
+    padding = 2 * _css_px(main, r"padding: [\d.]+rem ([\d.]+)rem") * rem + avatar
     single_cap = _css_px(css, r"\.media-1 img \{[^}]*max-width: calc\(100% - ([\d.]+)px\)")
     grid = re.search(r"\.media-4 \{([^}]*)\}", css).group(1)
     grid_gutter = padding + 2 * _css_px(grid, r"border: ([\d.]+)px") + _css_px(grid, r"gap: ([\d.]+)px;")
-
-    def sizes(media):
-        return re.findall(r'sizes="([^"]*)"', app.media_markup(media))
 
     gutter = padding + single_cap
     # a wide image is capped by the column; a narrow (tall) one keeps its own width once the window is wide enough
@@ -799,14 +818,23 @@ def test_entry_image_alt_is_escaped_text_and_empty_alt_stays_empty():
 def test_small_image_has_one_srcset_candidate_and_text_only_entry_has_no_media():
     assert 'srcset="/media/00000000-0000-4000-8000-000000000001/sm.webp 300w" ' in app.media_markup([_image(1, 300, 200)])
     assert app.media_markup([]) == ""
-    page = {"entries": [{"id": 1, "html": "<p>x</p>", "created_at": "2026-01-01T00:00:00+00:00", "edited_at": None, "media": []}], "next_cursor": None}
-    assert 'class="media' not in app.timeline_markup(page)
+    page = {"entries": [TEXT_ENTRY], "next_cursor": None, "now": NOW}
+    assert 'class="media' not in app.timeline_markup(page, PROFILE)
 
 
-def test_timeline_timestamp_format_is_utc_and_year_aware():
-    assert app.compact_timestamp("2025-03-01T23:30:00-05:00", date(2026, 11, 7)) == "mar 2, 2025"
-    assert app.compact_timestamp("2026-11-07T00:30:00-05:00", date(2026, 11, 7)) == "nov 7"
-    assert app.full_timestamp("2026-11-07T00:30:00-05:00") == "November 7, 2026 at 5:30 AM"
+TIME_CASES = json.loads((Path(__file__).parents[1] / "frontend/src/time_cases.json").read_text())
+
+
+@pytest.mark.parametrize(("instant", "zone", "expected"), TIME_CASES["full"])
+def test_full_time_is_toronto_with_the_serializers_zone(instant, zone, expected):
+    entry = serialize_entry({"id": 1, "body_markdown": "x", "created_at": datetime.fromisoformat(instant), "edited_at": None, "media": []})
+    assert entry["created_zone"] == zone
+    assert app.full_timestamp(entry["created_at"], entry["created_zone"]) == expected
+
+
+@pytest.mark.parametrize(("instant", "now", "expected"), TIME_CASES["compact"])
+def test_compact_time_is_age_then_toronto_date(instant, now, expected):
+    assert app.compact_timestamp(instant, now) == expected
 
 
 def test_image_caption():

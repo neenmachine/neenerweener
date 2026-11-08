@@ -3,7 +3,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import type { Entry } from "./timelineTypes";
+import type { Profile, Timeline } from "./timelineTypes";
 
 // Counts loads of the composer chunk; the real module still renders. doMock per test, after resetModules,
 // so each test loads it afresh (a hoisted vi.mock factory runs once per file).
@@ -22,14 +22,28 @@ beforeEach(() => {
   });
 });
 
-type Page = { entries: Entry[]; next_cursor: number | null };
+type Page = Timeline;
+// The server's preload always has the profile (its defaults when the store cannot read it).
+const PROFILE: Profile = { display_name: "fixture name", handle: null, avatar_id: null, avatar_initial: "F" };
+const NOW = "2026-01-03T00:00:00+00:00";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const page = (ids: number[], next_cursor: number | null): Page => ({
-  entries: ids.map((id) => ({ id, html: `<p>entry ${id}</p>`, created_at: "2026-01-02T03:04:05+00:00", edited_at: null, media: [] })),
+  entries: ids.map((id) => ({
+    id,
+    html: `<p>entry ${id}</p>`,
+    created_at: "2026-01-02T03:04:05+00:00",
+    created_zone: "EST",
+    edited_at: null,
+    edited_zone: null,
+    media: [],
+  })),
   next_cursor,
+  now: NOW,
 });
+const preload = (first: Page) =>
+  `<script id="preload" type="application/json">${JSON.stringify({ page: { kind: "timeline" }, "/api/timeline": first, "/api/profile": PROFILE })}</script><div id="root"></div>`;
 
 let root: Root | undefined;
 
@@ -54,7 +68,7 @@ async function open(first: Page, older: Page[], query = "") {
   );
   vi.stubGlobal("fetch", fetch);
   history.replaceState(null, "", `/timeline${query}`);
-  document.body.innerHTML = `<script id="preload" type="application/json">${JSON.stringify({ page: { kind: "timeline" }, "/api/timeline": first })}</script><div id="root"></div>`;
+  document.body.innerHTML = preload(first);
   const { default: App } = await import("./App");
   act(() => {
     root = createRoot(document.getElementById("root")!);
@@ -147,7 +161,9 @@ const created = {
   id: 10,
   html: "<p>new</p>",
   created_at: "2026-01-03T00:00:00+00:00",
+  created_zone: "EST",
   edited_at: null,
+  edited_zone: null,
   media: [photo(1, '<script>alert("x")</script>'), photo(2, ""), photo(3, "c")],
   body_markdown: "new",
 };
@@ -163,7 +179,7 @@ async function openAdmin(hint: boolean, handle: (url: string, init?: RequestInit
   );
   if (hint) document.cookie = "admin_hint=1; Path=/";
   history.replaceState(null, "", "/timeline");
-  document.body.innerHTML = `<script id="preload" type="application/json">${JSON.stringify({ page: { kind: "timeline" }, "/api/timeline": first })}</script><div id="root"></div>`;
+  document.body.innerHTML = preload(first);
   const { default: App } = await import("./App");
   await act(async () => {
     root = createRoot(document.getElementById("root")!);
@@ -212,6 +228,31 @@ test("hint and a signed-in session show the composer, with the CSRF token kept o
   expect(JSON.stringify({ ...localStorage, ...sessionStorage })).not.toContain("csrf-secret");
 });
 
+test("the composer shows the poster's avatar beside the box, only after the session check", { timeout: 5000 }, async () => {
+  await openAdmin(true, signedIn);
+  expect(document.querySelectorAll("main .avatar")).toHaveLength(1); // the entry's, before the session answers
+  await showsComposer();
+  const form = textarea()!.form!;
+  expect(form.firstElementChild?.outerHTML).toBe('<div class="avatar" aria-hidden="true">F</div>');
+  expect(form.children[1].contains(textarea())).toBe(true);
+});
+
+test("entries share the first page's now: a new entry says now, an older page keeps the first page's clock", { timeout: 5000 }, async () => {
+  const older = { ...page([3], null), now: "2027-06-01T00:00:00+00:00" };
+  await openAdmin(true, (url) => (url === "/api/timeline?before=4" ? reply(200, older) : signedIn(url)), page([4], 4));
+  await showsComposer();
+  type("new");
+  submit();
+  await settle();
+  click();
+  await settle();
+  const times = [...document.querySelectorAll(".timeline-entry time")].map((t) => t.textContent);
+  // 10 is created at the page's now; 4 and 3 are 20h older than it, whatever the older page's own clock says.
+  expect(ids()).toEqual(["entry-10", "entry-4", "entry-3"]);
+  expect(times).toEqual(["now", "20h", "20h"]);
+  expect(document.querySelector("#entry-4 time")?.getAttribute("title")).toBe("January 1, 2026 at 10:04 PM EST");
+});
+
 test("hint and a signed-out session clear the hint and never load the composer", { timeout: 5000 }, async () => {
   const calls = await openAdmin(true, () => reply(200, { authenticated: false }));
   await until(() => !document.cookie.includes("admin_hint"), "hint cleared");
@@ -242,12 +283,12 @@ test("tweet posts with the CSRF token and shows the new entry first, without a r
   expect(init?.headers).toMatchObject({ "Content-Type": "application/json", "X-CSRF-Token": "csrf-secret" });
   expect(ids()).toEqual(["entry-10", "entry-4"]);
   // The new entry's images use the same markup as the server's: a three-image grid, alt kept as text.
-  const media = document.querySelector("#entry-10 > .media");
+  const media = document.querySelector("#entry-10 .entry-main > .media");
   expect(media?.className).toBe("media media-3");
   expect([...media!.querySelectorAll("img")].map((img) => img.getAttribute("alt"))).toEqual(['<script>alert("x")</script>', "", "c"]);
   expect(media!.querySelector("script")).toBeNull();
   expect(media!.querySelector("a")?.getAttribute("href")).toBe("/media/00000000-0000-4000-8000-000000000001/lg.webp");
-  expect(document.querySelector("#entry-4 > .media")).toBeNull();
+  expect(document.querySelector("#entry-4 .entry-main > .media")).toBeNull();
   expect(textarea()!.value).toBe("");
   expect(document.activeElement).toBe(textarea());
   expect(location.href).toBe(href);
@@ -383,7 +424,7 @@ test("attached images upload with the CSRF token, go in the create payload in or
     ],
   });
   expect(ids()).toEqual(["entry-10", "entry-4"]);
-  expect(document.querySelector("#entry-10 > .media")?.className).toBe("media media-3");
+  expect(document.querySelector("#entry-10 .entry-main > .media")?.className).toBe("media media-3");
   // The form is empty again and the previews are freed.
   expect(rows()).toHaveLength(0);
   expect(revoked).toEqual(["blob:preview-0", "blob:preview-1"]);
@@ -466,7 +507,9 @@ const entry = (id: number, html: string, extra: object = {}) => ({
   id,
   html,
   created_at: "2026-01-02T03:04:05+00:00",
+  created_zone: "EST",
   edited_at: null,
+  edited_zone: null,
   media: [],
   ...extra,
 });
@@ -478,7 +521,7 @@ const admin =
     (url === "/api/admin/timeline/4" && init?.method === "GET"
       ? reply(200, entry(4, "<p>entry 4</p>", { body_markdown: "entry 4 *md*", media: [photo(1, "kept")] }))
       : url === "/api/admin/timeline/4" && init?.method === "PATCH"
-        ? reply(200, entry(4, "<p>changed</p>", { edited_at: "2026-01-03T00:00:00+00:00", body_markdown: "changed" }))
+        ? reply(200, entry(4, "<p>changed</p>", { edited_at: "2026-01-03T00:00:00+00:00", edited_zone: "EST", body_markdown: "changed" }))
         : url === "/api/admin/timeline/4" && init?.method === "DELETE"
           ? reply(204, undefined)
           : signedIn(url));
@@ -495,7 +538,8 @@ test("a signed-in admin gets edit and delete on preloaded, new and older entries
   for (const id of [9, 8, 4]) expect(shown(`delete entry ${id}`)).toBe("delete");
   expect(shown("edit entry 9")).toBe("edit");
   // The entry markup is the public one, with the controls added in its footer.
-  expect(document.querySelector("#entry-9 > footer > a")?.getAttribute("href")).toBe("#entry-9");
+  expect(document.querySelector("#entry-9 header a")?.getAttribute("href")).toBe("#entry-9");
+  expect(document.querySelector("#entry-9 .entry-main > footer > .admin-actions")).not.toBeNull();
   type("new");
   submit();
   await settle();
@@ -516,7 +560,7 @@ test("edit loads the private Markdown, saves with the CSRF token and the image l
   expect(editBox(4)?.value).toBe("entry 4 *md*");
   expect(document.activeElement).toBe(editBox(4));
   // The private Markdown is only in the edit box, never in the public entry markup.
-  expect(document.querySelector("#entry-4 > div")).toBeNull();
+  expect(document.querySelector("#entry-4 .entry-body")).toBeNull();
   fill(editBox(4)!, "changed");
   press("save entry 4");
   await settle();
@@ -524,7 +568,7 @@ test("edit loads the private Markdown, saves with the CSRF token and the image l
   expect(patch?.[1]?.headers).toMatchObject({ "X-CSRF-Token": "csrf-secret", "Content-Type": "application/json" });
   expect(JSON.parse(patch?.[1]?.body as string)).toEqual({ body_markdown: "changed", attachments: [{ id: photo(1, "").id, alt: "kept" }] });
   expect(editBox(4)).toBeNull();
-  expect(document.querySelector("#entry-4 > div")?.innerHTML).toBe("<p>changed</p>");
+  expect(document.querySelector("#entry-4 .entry-body")?.innerHTML).toBe("<p>changed</p>");
   expect(document.querySelector("#entry-4 .edited")).not.toBeNull();
   expect(ids()).toEqual(["entry-4", "entry-3"]);
   expect(document.activeElement).toBe(control("edit entry 4"));
@@ -602,7 +646,7 @@ test("a delete failure stays armed and shows the server's detail", { timeout: 50
   await settle();
   expect(ids()).toEqual(["entry-4"]);
   expect(control("confirm delete entry 4")).not.toBeNull();
-  expect(document.querySelector("#entry-4 > p.error")?.textContent).toBe("unavailable, try again");
+  expect(document.querySelector("#entry-4 .entry-main > p.error")?.textContent).toBe("unavailable, try again");
 });
 
 test("a 401 from an entry action removes every control, the composer and the hint", { timeout: 5000 }, async () => {
@@ -647,5 +691,5 @@ test("load more after a delete and an edit shows no deleted entry, no duplicate 
   await settle();
   expect(calls.filter(([url]) => url.startsWith("/api/timeline")).map(([url]) => url)).toEqual(["/api/timeline?before=4"]);
   expect(ids()).toEqual(["entry-4", "entry-2"]);
-  expect(document.querySelector("#entry-4 > div")?.innerHTML).toBe("<p>changed</p>");
+  expect(document.querySelector("#entry-4 .entry-body")?.innerHTML).toBe("<p>changed</p>");
 });

@@ -72,10 +72,21 @@
     "/api/timeline": {
      "entries": [
       {
+       "id": 6,
+       "html": "<p>entry 6</p>\n",
+       "created_at": "2100-11-08T14:59:30+00:00",
+       "created_zone": "EST",
+       "edited_at": null,
+       "edited_zone": null,
+       "media": []
+      },
+      {
        "id": 5,
        "html": "<p>entry 5</p>\n",
-       "created_at": "2100-01-02T03:04:05+00:00",
+       "created_at": "2100-11-08T14:48:00+00:00",
+       "created_zone": "EST",
        "edited_at": null,
+       "edited_zone": null,
        "media": [
         {
          "id": "00000000-0000-4000-8000-000000000001",
@@ -88,8 +99,10 @@
       {
        "id": 4,
        "html": "<p>entry 4</p>\n",
-       "created_at": "2100-01-02T03:04:05+00:00",
-       "edited_at": null,
+       "created_at": "2100-11-08T12:00:00+00:00",
+       "created_zone": "EST",
+       "edited_at": "2100-11-08T13:30:00+00:00",
+       "edited_zone": "EST",
        "media": [
         {
          "id": "00000000-0000-4000-8000-000000000002",
@@ -108,8 +121,10 @@
       {
        "id": 3,
        "html": "<p>entry 3</p>\n",
-       "created_at": "2100-01-02T03:04:05+00:00",
+       "created_at": "2100-11-06T03:30:00+00:00",
+       "created_zone": "EDT",
        "edited_at": null,
+       "edited_zone": null,
        "media": [
         {
          "id": "00000000-0000-4000-8000-000000000004",
@@ -134,8 +149,10 @@
       {
        "id": 2,
        "html": "<p>entry 2</p>\n",
-       "created_at": "2100-01-02T03:04:05+00:00",
+       "created_at": "2100-07-04T03:30:00+00:00",
+       "created_zone": "EDT",
        "edited_at": null,
+       "edited_zone": null,
        "media": [
         {
          "id": "00000000-0000-4000-8000-000000000007",
@@ -166,18 +183,27 @@
       {
        "id": 1,
        "html": "<p>entry 1</p>\n",
-       "created_at": "2100-01-02T03:04:05+00:00",
+       "created_at": "2100-01-01T03:00:00+00:00",
+       "created_zone": "EST",
        "edited_at": null,
+       "edited_zone": null,
        "media": []
       }
      ],
-     "next_cursor": null
+     "next_cursor": null,
+     "now": "2100-11-08T15:00:00+00:00"
+    },
+    "/api/profile": {
+     "display_name": "fixture & <name> \"q\"",
+     "handle": "fixture_handle",
+     "avatar_id": "00000000-0000-4000-8000-000000000099",
+     "avatar_initial": "F"
     }
    },
    "h1": [
     "timeline"
    ],
-   "markup": "<main><article><h1>timeline</h1><div class=\"timeline\"><article class=\"timeline-entry\" id=\"entry-5\"><div><p>entry 5</p>\n</div><div class=\"media media-1\"><a href=\"/media/00000000-0000-4000-8000-000000000001/lg.webp\"><img sizes=\"(max-width: 367.5px) calc(100vw - 39.5px), 328px\" width=\"328\" height=\"512\" alt=\"&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt; &amp; a &quot;quote&quot;\" loading=\"lazy\" decoding=\"async\" srcset=\"/media/00000000-0000-4000-8000-000000000001/sm.webp 512w, /media/00000000-0000-4000-8000-000000000001/lg.webp 1312w\" src=\"/media/00000000-0000-4000-8000-000000000001/sm.webp\"></a></div><footer><a href=\"#entry-5\" aria-label=\"January 2, 2100 at 3:04 AM\"><time datetime=\"2100-01-02T03:04:05.000Z\" title=\"January 2, 2100 at 3:04 AM\">jan 2, 2100</time></a></footer></article><article class=\"timeline-entry\" id=\"entry-4\"><div><p>entry 4</p>\n</div><div class=\"media media-2\"><a href=\"/media/00000000-0000-4000-8000-000000000002/lg.webp\"><img sizes=\"(max-width: 780px) calc(50vw - 20.75px), 369.25px\" width=\"2048\" height=\"1536\" alt=\"left\" loading=\"lazy\" decoding=\"async\" srcset=\"/media/00000000-0000-4000-8000-000000000002/sm.webp 800w, /media/00000000-0000-4000-8000-000000000002/lg.webp 2048w\" src=\"/media/00000000-0000-4000-8000-000000000002/sm.webp\"></a><a href=\"/media/00000000-0000-4000-8000-000000000003/lg.webp\" aria-label=\"open image\"><img sizes=\"(max-width: 780px) calc(50vw - 20.75px), 369.25px\" width=\"640\" height=\"480\" alt=\"\" loading=\"lazy\" decoding=\"async\" srcset=\"/media/00000000-0000-4000-8000-000000000003/sm.webp 640w\" src=\"/media/00000000-0000-4000-8000-000000000003/sm.webp\"></a></div><footer><a href=\"#entry-4\" aria-label=\"January 2, 2100 at 3:04 AM\"><time datetime=\"2100-01-02T03:04:05.000Z\" title=\"January 2, 2100 at 3:04 AM\">jan 2, 2100</time></a></footer></article><article class=\"timeline-entry\" id=\"entry-3\"><div><p>entry 3</p>\n</div><div class=\"media media-3\"><a href=\"/media/00000000-0000-4000-8000-000000000004/lg.webp\"><img sizes=\"(max-width: 780px) calc(50vw - 20.75px), 369.25px\" width=\"2048\" height=\"1152\" alt=\"a\" loading=\"lazy\" decoding=\"async\" srcset=\"/media/00000000-0000-4000-8000-000000000004/sm.webp 800w, /media/00000000-0000-4000-8000-000000000004/lg.webp 2048w\" src=\"/media/00000000-0000-4000-8000-000000000004/sm.webp\"></a><a href=\"/media/00000000-0000-4000-8000-000000000005/lg.webp\"><img sizes=\"(max-width: 780px) calc(50vw - 20.75px), 369.25px\" width=\"1536\" height=\"2048\" alt=\"b\" loading=\"lazy\" decoding=\"async\" srcset=\"/media/00000000-0000-4000-8000-000000000005/sm.webp 600w, /media/00000000-0000-4000-8000-000000000005/lg.webp 1536w\" src=\"/media/00000000-0000-4000-8000-000000000005/sm.webp\"></a><a href=\"/media/00000000-0000-4000-8000-000000000006/lg.webp\"><img sizes=\"(max-width: 780px) calc(50vw - 20.75px), 369.25px\" width=\"800\" height=\"800\" alt=\"c\" loading=\"lazy\" decoding=\"async\" srcset=\"/media/00000000-0000-4000-8000-000000000006/sm.webp 800w\" src=\"/media/00000000-0000-4000-8000-000000000006/sm.webp\"></a></div><footer><a href=\"#entry-3\" aria-label=\"January 2, 2100 at 3:04 AM\"><time datetime=\"2100-01-02T03:04:05.000Z\" title=\"January 2, 2100 at 3:04 AM\">jan 2, 2100</time></a></footer></article><article class=\"timeline-entry\" id=\"entry-2\"><div><p>entry 2</p>\n</div><div class=\"media media-4\"><a href=\"/media/00000000-0000-4000-8000-000000000007/lg.webp\"><img sizes=\"(max-width: 780px) calc(50vw - 20.75px), 369.25px\" width=\"2048\" height=\"1536\" alt=\"1\" loading=\"lazy\" decoding=\"async\" srcset=\"/media/00000000-0000-4000-8000-000000000007/sm.webp 800w, /media/00000000-0000-4000-8000-000000000007/lg.webp 2048w\" src=\"/media/00000000-0000-4000-8000-000000000007/sm.webp\"></a><a href=\"/media/00000000-0000-4000-8000-000000000008/lg.webp\"><img sizes=\"(max-width: 780px) calc(50vw - 20.75px), 369.25px\" width=\"2048\" height=\"1536\" alt=\"2\" loading=\"lazy\" decoding=\"async\" srcset=\"/media/00000000-0000-4000-8000-000000000008/sm.webp 800w, /media/00000000-0000-4000-8000-000000000008/lg.webp 2048w\" src=\"/media/00000000-0000-4000-8000-000000000008/sm.webp\"></a><a href=\"/media/00000000-0000-4000-8000-000000000009/lg.webp\"><img sizes=\"(max-width: 780px) calc(50vw - 20.75px), 369.25px\" width=\"2048\" height=\"1536\" alt=\"3\" loading=\"lazy\" decoding=\"async\" srcset=\"/media/00000000-0000-4000-8000-000000000009/sm.webp 800w, /media/00000000-0000-4000-8000-000000000009/lg.webp 2048w\" src=\"/media/00000000-0000-4000-8000-000000000009/sm.webp\"></a><a href=\"/media/00000000-0000-4000-8000-000000000010/lg.webp\"><img sizes=\"(max-width: 780px) calc(50vw - 20.75px), 369.25px\" width=\"300\" height=\"200\" alt=\"4\" loading=\"lazy\" decoding=\"async\" srcset=\"/media/00000000-0000-4000-8000-000000000010/sm.webp 300w\" src=\"/media/00000000-0000-4000-8000-000000000010/sm.webp\"></a></div><footer><a href=\"#entry-2\" aria-label=\"January 2, 2100 at 3:04 AM\"><time datetime=\"2100-01-02T03:04:05.000Z\" title=\"January 2, 2100 at 3:04 AM\">jan 2, 2100</time></a></footer></article><article class=\"timeline-entry\" id=\"entry-1\"><div><p>entry 1</p>\n</div><footer><a href=\"#entry-1\" aria-label=\"January 2, 2100 at 3:04 AM\"><time datetime=\"2100-01-02T03:04:05.000Z\" title=\"January 2, 2100 at 3:04 AM\">jan 2, 2100</time></a></footer></article></div><p class=\"sr-only\" role=\"status\"></p></article><footer><a href=\"/\">neenerweener</a><a href=\"/timeline\" aria-current=\"page\">timeline</a><a href=\"/feed.xml\">rss</a></footer></main>"
+   "markup": "<main><article><h1>timeline</h1><div class=\"timeline\"><article class=\"timeline-entry\" id=\"entry-6\"><img class=\"avatar\" sizes=\"44px\" width=\"44\" height=\"44\" alt=\"\" aria-hidden=\"true\" srcset=\"/media/00000000-0000-4000-8000-000000000099/sm.webp 96w, /media/00000000-0000-4000-8000-000000000099/lg.webp 192w\" src=\"/media/00000000-0000-4000-8000-000000000099/sm.webp\"><div class=\"entry-main\"><header><span class=\"name\">fixture &amp; &lt;name&gt; \"q\"</span><span class=\"handle\">@fixture_handle</span><span class=\"when\"><span aria-hidden=\"true\">·</span><a href=\"#entry-6\" aria-label=\"November 8, 2100 at 9:59 AM EST\"><time datetime=\"2100-11-08T14:59:30.000Z\" title=\"November 8, 2100 at 9:59 AM EST\">now</time></a></span></header><div class=\"entry-body\"><p>entry 6</p>\n</div></div></article><article class=\"timeline-entry\" id=\"entry-5\"><img class=\"avatar\" sizes=\"44px\" width=\"44\" height=\"44\" alt=\"\" aria-hidden=\"true\" srcset=\"/media/00000000-0000-4000-8000-000000000099/sm.webp 96w, /media/00000000-0000-4000-8000-000000000099/lg.webp 192w\" src=\"/media/00000000-0000-4000-8000-000000000099/sm.webp\"><div class=\"entry-main\"><header><span class=\"name\">fixture &amp; &lt;name&gt; \"q\"</span><span class=\"handle\">@fixture_handle</span><span class=\"when\"><span aria-hidden=\"true\">·</span><a href=\"#entry-5\" aria-label=\"November 8, 2100 at 9:48 AM EST\"><time datetime=\"2100-11-08T14:48:00.000Z\" title=\"November 8, 2100 at 9:48 AM EST\">12m</time></a></span></header><div class=\"entry-body\"><p>entry 5</p>\n</div><div class=\"media media-1\"><a href=\"/media/00000000-0000-4000-8000-000000000001/lg.webp\"><img sizes=\"(max-width: 423.5px) calc(100vw - 95.5px), 328px\" width=\"328\" height=\"512\" alt=\"&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt; &amp; a &quot;quote&quot;\" loading=\"lazy\" decoding=\"async\" srcset=\"/media/00000000-0000-4000-8000-000000000001/sm.webp 512w, /media/00000000-0000-4000-8000-000000000001/lg.webp 1312w\" src=\"/media/00000000-0000-4000-8000-000000000001/sm.webp\"></a></div></div></article><article class=\"timeline-entry\" id=\"entry-4\"><img class=\"avatar\" sizes=\"44px\" width=\"44\" height=\"44\" alt=\"\" aria-hidden=\"true\" srcset=\"/media/00000000-0000-4000-8000-000000000099/sm.webp 96w, /media/00000000-0000-4000-8000-000000000099/lg.webp 192w\" src=\"/media/00000000-0000-4000-8000-000000000099/sm.webp\"><div class=\"entry-main\"><header><span class=\"name\">fixture &amp; &lt;name&gt; \"q\"</span><span class=\"handle\">@fixture_handle</span><span class=\"when\"><span aria-hidden=\"true\">·</span><a href=\"#entry-4\" aria-label=\"November 8, 2100 at 7:00 AM EST\"><time datetime=\"2100-11-08T12:00:00.000Z\" title=\"November 8, 2100 at 7:00 AM EST\">3h</time></a><span aria-hidden=\"true\">·</span><span class=\"edited\" title=\"November 8, 2100 at 8:30 AM EST\">edited<span class=\"sr-only\"> November 8, 2100 at 8:30 AM EST</span></span></span></header><div class=\"entry-body\"><p>entry 4</p>\n</div><div class=\"media media-2\"><a href=\"/media/00000000-0000-4000-8000-000000000002/lg.webp\"><img sizes=\"(max-width: 780px) calc(50vw - 48.75px), 341.25px\" width=\"2048\" height=\"1536\" alt=\"left\" loading=\"lazy\" decoding=\"async\" srcset=\"/media/00000000-0000-4000-8000-000000000002/sm.webp 800w, /media/00000000-0000-4000-8000-000000000002/lg.webp 2048w\" src=\"/media/00000000-0000-4000-8000-000000000002/sm.webp\"></a><a href=\"/media/00000000-0000-4000-8000-000000000003/lg.webp\" aria-label=\"open image\"><img sizes=\"(max-width: 780px) calc(50vw - 48.75px), 341.25px\" width=\"640\" height=\"480\" alt=\"\" loading=\"lazy\" decoding=\"async\" srcset=\"/media/00000000-0000-4000-8000-000000000003/sm.webp 640w\" src=\"/media/00000000-0000-4000-8000-000000000003/sm.webp\"></a></div></div></article><article class=\"timeline-entry\" id=\"entry-3\"><img class=\"avatar\" sizes=\"44px\" width=\"44\" height=\"44\" alt=\"\" aria-hidden=\"true\" srcset=\"/media/00000000-0000-4000-8000-000000000099/sm.webp 96w, /media/00000000-0000-4000-8000-000000000099/lg.webp 192w\" src=\"/media/00000000-0000-4000-8000-000000000099/sm.webp\"><div class=\"entry-main\"><header><span class=\"name\">fixture &amp; &lt;name&gt; \"q\"</span><span class=\"handle\">@fixture_handle</span><span class=\"when\"><span aria-hidden=\"true\">·</span><a href=\"#entry-3\" aria-label=\"November 5, 2100 at 11:30 PM EDT\"><time datetime=\"2100-11-06T03:30:00.000Z\" title=\"November 5, 2100 at 11:30 PM EDT\">nov 5</time></a></span></header><div class=\"entry-body\"><p>entry 3</p>\n</div><div class=\"media media-3\"><a href=\"/media/00000000-0000-4000-8000-000000000004/lg.webp\"><img sizes=\"(max-width: 780px) calc(50vw - 48.75px), 341.25px\" width=\"2048\" height=\"1152\" alt=\"a\" loading=\"lazy\" decoding=\"async\" srcset=\"/media/00000000-0000-4000-8000-000000000004/sm.webp 800w, /media/00000000-0000-4000-8000-000000000004/lg.webp 2048w\" src=\"/media/00000000-0000-4000-8000-000000000004/sm.webp\"></a><a href=\"/media/00000000-0000-4000-8000-000000000005/lg.webp\"><img sizes=\"(max-width: 780px) calc(50vw - 48.75px), 341.25px\" width=\"1536\" height=\"2048\" alt=\"b\" loading=\"lazy\" decoding=\"async\" srcset=\"/media/00000000-0000-4000-8000-000000000005/sm.webp 600w, /media/00000000-0000-4000-8000-000000000005/lg.webp 1536w\" src=\"/media/00000000-0000-4000-8000-000000000005/sm.webp\"></a><a href=\"/media/00000000-0000-4000-8000-000000000006/lg.webp\"><img sizes=\"(max-width: 780px) calc(50vw - 48.75px), 341.25px\" width=\"800\" height=\"800\" alt=\"c\" loading=\"lazy\" decoding=\"async\" srcset=\"/media/00000000-0000-4000-8000-000000000006/sm.webp 800w\" src=\"/media/00000000-0000-4000-8000-000000000006/sm.webp\"></a></div></div></article><article class=\"timeline-entry\" id=\"entry-2\"><img class=\"avatar\" sizes=\"44px\" width=\"44\" height=\"44\" alt=\"\" aria-hidden=\"true\" srcset=\"/media/00000000-0000-4000-8000-000000000099/sm.webp 96w, /media/00000000-0000-4000-8000-000000000099/lg.webp 192w\" src=\"/media/00000000-0000-4000-8000-000000000099/sm.webp\"><div class=\"entry-main\"><header><span class=\"name\">fixture &amp; &lt;name&gt; \"q\"</span><span class=\"handle\">@fixture_handle</span><span class=\"when\"><span aria-hidden=\"true\">·</span><a href=\"#entry-2\" aria-label=\"July 3, 2100 at 11:30 PM EDT\"><time datetime=\"2100-07-04T03:30:00.000Z\" title=\"July 3, 2100 at 11:30 PM EDT\">jul 3</time></a></span></header><div class=\"entry-body\"><p>entry 2</p>\n</div><div class=\"media media-4\"><a href=\"/media/00000000-0000-4000-8000-000000000007/lg.webp\"><img sizes=\"(max-width: 780px) calc(50vw - 48.75px), 341.25px\" width=\"2048\" height=\"1536\" alt=\"1\" loading=\"lazy\" decoding=\"async\" srcset=\"/media/00000000-0000-4000-8000-000000000007/sm.webp 800w, /media/00000000-0000-4000-8000-000000000007/lg.webp 2048w\" src=\"/media/00000000-0000-4000-8000-000000000007/sm.webp\"></a><a href=\"/media/00000000-0000-4000-8000-000000000008/lg.webp\"><img sizes=\"(max-width: 780px) calc(50vw - 48.75px), 341.25px\" width=\"2048\" height=\"1536\" alt=\"2\" loading=\"lazy\" decoding=\"async\" srcset=\"/media/00000000-0000-4000-8000-000000000008/sm.webp 800w, /media/00000000-0000-4000-8000-000000000008/lg.webp 2048w\" src=\"/media/00000000-0000-4000-8000-000000000008/sm.webp\"></a><a href=\"/media/00000000-0000-4000-8000-000000000009/lg.webp\"><img sizes=\"(max-width: 780px) calc(50vw - 48.75px), 341.25px\" width=\"2048\" height=\"1536\" alt=\"3\" loading=\"lazy\" decoding=\"async\" srcset=\"/media/00000000-0000-4000-8000-000000000009/sm.webp 800w, /media/00000000-0000-4000-8000-000000000009/lg.webp 2048w\" src=\"/media/00000000-0000-4000-8000-000000000009/sm.webp\"></a><a href=\"/media/00000000-0000-4000-8000-000000000010/lg.webp\"><img sizes=\"(max-width: 780px) calc(50vw - 48.75px), 341.25px\" width=\"300\" height=\"200\" alt=\"4\" loading=\"lazy\" decoding=\"async\" srcset=\"/media/00000000-0000-4000-8000-000000000010/sm.webp 300w\" src=\"/media/00000000-0000-4000-8000-000000000010/sm.webp\"></a></div></div></article><article class=\"timeline-entry\" id=\"entry-1\"><img class=\"avatar\" sizes=\"44px\" width=\"44\" height=\"44\" alt=\"\" aria-hidden=\"true\" srcset=\"/media/00000000-0000-4000-8000-000000000099/sm.webp 96w, /media/00000000-0000-4000-8000-000000000099/lg.webp 192w\" src=\"/media/00000000-0000-4000-8000-000000000099/sm.webp\"><div class=\"entry-main\"><header><span class=\"name\">fixture &amp; &lt;name&gt; \"q\"</span><span class=\"handle\">@fixture_handle</span><span class=\"when\"><span aria-hidden=\"true\">·</span><a href=\"#entry-1\" aria-label=\"December 31, 2099 at 10:00 PM EST\"><time datetime=\"2100-01-01T03:00:00.000Z\" title=\"December 31, 2099 at 10:00 PM EST\">dec 31, 2099</time></a></span></header><div class=\"entry-body\"><p>entry 1</p>\n</div></div></article></div><p class=\"sr-only\" role=\"status\"></p></article><footer><a href=\"/\">neenerweener</a><a href=\"/timeline\" aria-current=\"page\">timeline</a><a href=\"/feed.xml\">rss</a></footer></main>"
   },
   {
    "path": "/posts/hello",

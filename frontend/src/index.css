@@ -8,6 +8,8 @@
   --bg: #fdfdfc;
   /* A primary (submit) button's border, one step stronger than other buttons at rest. */
   --line-strong: color-mix(in srgb, var(--fg) 20%, transparent);
+  /* The current admin nav item's fill. */
+  --tint-current: color-mix(in srgb, var(--fg) 5%, transparent);
   /* Timeline entry text: name, handle, time and body. */
   --entry-font-size: 1rem;
   font: 15px/1.6 -apple-system, BlinkMacSystemFont, sans-serif;
@@ -24,6 +26,7 @@
     --accent: #c4c4c0;
     --bg: #161616;
     --line-strong: color-mix(in srgb, var(--fg) 20%, transparent);
+    --tint-current: color-mix(in srgb, var(--fg) 7%, transparent);
   }
 }
 
@@ -89,7 +92,8 @@ main:has(> footer) {
   padding-bottom: 2.5rem;
 }
 
-main > footer {
+main > footer,
+.admin-content > footer {
   display: flex;
   gap: 1.5rem;
   margin-top: auto;
@@ -98,24 +102,25 @@ main > footer {
 }
 
 /* A 44px tap target; the negative margin keeps the footer looking the same. */
-main > footer a {
+main > footer a,
+.admin-content > footer a {
   padding-block: 0.8rem;
   margin-block: -0.8rem;
   color: var(--muted);
   text-decoration: none;
 }
 
-main > footer a:first-child {
+:is(main, .admin-content) > footer a:first-child {
   font-weight: 600;
 }
 
-main > footer a:hover,
-main > footer a[aria-current] {
+:is(main, .admin-content) > footer a:hover,
+:is(main, .admin-content) > footer a[aria-current] {
   color: var(--accent);
 }
 
 /* The current page is also underlined: the site name is always bold, so color alone did not show it. */
-main > footer a[aria-current] {
+:is(main, .admin-content) > footer a[aria-current] {
   text-decoration: underline;
   text-decoration-color: var(--faint);
   text-underline-offset: 0.3em;
@@ -248,6 +253,13 @@ a {
   border: 1px solid color-mix(in srgb, var(--fg) 10%, transparent);
   border-radius: 50%;
   object-fit: cover;
+}
+
+.avatar.small {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  font-size: 0.7rem;
 }
 
 /* No picture: a neutral circle with the name's first letter. */
@@ -481,17 +493,256 @@ div.avatar {
   }
 }
 
-.admin-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 1rem;
-  margin-bottom: 1.5rem;
-}
-
-.admin-head .button,
+/* Signed out: the admin h1, then one section under a hairline. */
 .admin .load-more {
   font-size: 0.9rem;
+}
+
+/* A part of an admin page: a hairline above, then its h2 and content. */
+.admin-section {
+  margin: 0;
+  padding: 2rem 0 1.25rem;
+  border-top: 1px solid color-mix(in srgb, var(--fg) 8%, transparent);
+}
+
+section.admin-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9333rem;
+}
+
+section.admin-section.entries {
+  gap: 0.4rem;
+}
+
+.admin-section h2 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.sign-in {
+  max-width: 24rem;
+}
+
+/* loading, an error with retry, or nothing here yet, in place of a list. */
+.admin-state {
+  margin: 0;
+  padding-top: 4px;
+  font-size: 0.9rem;
+  line-height: 18px;
+}
+
+.admin-state p {
+  margin: 0;
+}
+
+.admin-state.admin-row {
+  gap: 0.5rem 14px;
+}
+
+/* Signed in: a 1000px shell, the nav rail on the left (it stays in view while the page scrolls) and the page with
+   the footer on the right. The rail's hairline is the content's left border, so it runs to the footer. */
+main.admin-shell {
+  display: grid;
+  grid-template-columns: 179px minmax(0, 1fr);
+  align-items: start;
+  max-width: 1000px;
+  padding-bottom: 2.5rem;
+}
+
+.admin-nav:not([hidden]) {
+  position: sticky;
+  top: 3rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.2rem;
+  padding-right: 20px;
+}
+
+.admin-title {
+  align-self: start;
+  padding: 6px 10px 0;
+  font-size: 1.1333rem;
+  font-weight: 700;
+  line-height: 1.25;
+  text-decoration: none;
+}
+
+.admin-nav ul {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.admin-nav li a {
+  display: flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 0 10px;
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 0.9333rem;
+  text-decoration: none;
+}
+
+.admin-nav li a:hover {
+  color: var(--fg);
+}
+
+.admin-nav li a[aria-current] {
+  background: var(--tint-current);
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.admin-session {
+  display: flex;
+  flex-direction: column;
+  align-items: start;
+  gap: 10px;
+  padding: 14px 10px 0;
+  border-top: 1px solid color-mix(in srgb, var(--fg) 8%, transparent);
+}
+
+.admin-session .button {
+  font-size: 0.9rem;
+}
+
+/* The poster beside a 24px avatar: in the rail and on the overview's profile row. */
+.identity {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.identity .name {
+  min-width: 0;
+  color: var(--fg);
+  font-size: 0.9rem;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.admin-content:not([hidden]) {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding-left: 39px;
+  border-left: 1px solid color-mix(in srgb, var(--fg) 8%, transparent);
+}
+
+.admin-section .composer {
+  margin-top: 0;
+}
+
+.composer > .editor {
+  margin-bottom: 0;
+}
+
+/* Overview: one link row per page, with what the page holds at the right. */
+.admin-links {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid color-mix(in srgb, var(--fg) 8%, transparent);
+}
+
+.admin-links a {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  padding: 16px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--fg) 8%, transparent);
+  text-decoration: none;
+}
+
+.admin-links .label {
+  font-size: 1.0667rem;
+  font-weight: 600;
+  line-height: 20px;
+  text-decoration: underline 1px var(--faint);
+  text-underline-offset: 4px;
+}
+
+.admin-links a:hover .label {
+  text-decoration-color: currentColor;
+}
+
+.admin-links :is(.muted, .name) {
+  font-size: 0.9rem;
+  line-height: 18px;
+}
+
+/* Under 760px the rail is a top bar (avatar, admin, log out) over a row of tabs, across the whole width. */
+@media (max-width: 760px) {
+  main.admin-shell {
+    display: block;
+    padding: 0 0 2.5rem;
+  }
+
+  .admin-nav:not([hidden]) {
+    position: static;
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    grid-template-areas:
+      "avatar title out"
+      "tabs tabs tabs";
+    align-items: center;
+    gap: 8px;
+    padding: 14px 1.25rem 8px;
+    border-bottom: 1px solid color-mix(in srgb, var(--fg) 8%, transparent);
+  }
+
+  .admin-session,
+  .admin-session .identity {
+    display: contents;
+  }
+
+  .admin-session .avatar {
+    grid-area: avatar;
+  }
+
+  .admin-session .name {
+    display: none;
+  }
+
+  .admin-title {
+    grid-area: title;
+    align-self: center;
+    padding: 0;
+  }
+
+  .admin-session .button {
+    grid-area: out;
+  }
+
+  .admin-nav ul {
+    grid-area: tabs;
+    flex-direction: row;
+    gap: 4px;
+  }
+
+  .admin-nav li a {
+    padding: 0 12px;
+  }
+
+  .admin-content:not([hidden]) {
+    padding: 2rem 1.25rem 0;
+    border-left: 0;
+  }
+}
+
+@media (max-width: 760px), (pointer: coarse) {
+  .admin-nav li a {
+    min-height: 40px;
+  }
 }
 
 .admin-row {
@@ -543,7 +794,7 @@ div.avatar {
 .admin textarea {
   display: block;
   width: 100%;
-  min-height: 7.5rem;
+  min-height: 112px;
   resize: vertical;
   line-height: 1.55;
 }
@@ -639,9 +890,32 @@ div.avatar {
   margin-top: 1rem;
 }
 
-/* The login button matches the password field's height. */
+/* The login button matches the password field's height; the field takes the rest of the row. */
 .login .admin-row {
+  flex-wrap: nowrap;
   align-items: stretch;
+  gap: 10px;
+}
+
+.login input {
+  flex: 1;
+  width: auto;
+  min-width: 0;
+}
+
+.login label {
+  margin-bottom: 6px;
+}
+
+@media (max-width: 760px) {
+  .login .admin-row {
+    flex-direction: column;
+    align-items: start;
+  }
+
+  .login input {
+    width: 100%;
+  }
 }
 
 .login .button {

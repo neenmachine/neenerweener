@@ -97,7 +97,7 @@ def test_only_admin_page_has_no_javascript_notice(tmp_path, monkeypatch):
             response = client.get(path)
             assert response.status_code == 200
             page = response.text
-            assert "<title>admin</title>" in page
+            assert "<title>overview · admin</title>" in page
             assert response.headers["X-Robots-Tag"] == "noindex"
             # The shell is visible with JavaScript on too (it is the first paint); only the notice is noscript.
             noscripts = re.findall(r"<noscript>(.*?)</noscript>", page, re.S)

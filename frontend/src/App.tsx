@@ -39,19 +39,21 @@ export default function App() {
         </main>
       );
     case "admin":
+      // Admin draws its own main: signed in, the footer sits in the shell's content column.
       return (
-        <Shell>
-          {/* The shell Admin renders first, so the page never shows the footer alone while the chunk loads. */}
-          <Suspense
-            fallback={
+        // The signed-out look Admin renders first, so the page never shows the footer alone while the chunk loads.
+        <Suspense
+          fallback={
+            <main>
               <article className="admin">
                 <AdminHead />
               </article>
-            }
-          >
-            <Admin />
-          </Suspense>
-        </Shell>
+              <Footer />
+            </main>
+          }
+        >
+          <Admin />
+        </Suspense>
       );
     case "post":
       return (
@@ -79,13 +81,12 @@ export default function App() {
   }
 }
 
-// The admin heading, here in the main chunk so the Suspense fallback does not need the Admin chunk.
+// The signed-out admin heading, here in the main chunk so the Suspense fallback does not need the Admin chunk.
 // Mirrors ADMIN_SHELL in backend/app.py.
-export function AdminHead({ children }: { children?: ReactNode }) {
+export function AdminHead() {
   return (
     <div className="admin-head">
       <h1>admin</h1>
-      {children}
     </div>
   );
 }
@@ -120,7 +121,7 @@ function NotFound({ label, back }: { label: string; back: boolean }) {
 }
 
 // Mirrors site_footer in backend/page_markup.py.
-function Footer() {
+export function Footer() {
   const current = page.kind === "home" && !tag ? "home" : page.kind === "timeline" ? "timeline" : null;
   return (
     <footer>
@@ -373,20 +374,22 @@ export function TimelineEntry({
 
 // The poster's picture, or a neutral circle with the server's initial. Hidden from screen readers: the name beside
 // it says who posted. avatar_markup in backend/app.py renders the same markup.
-export function Avatar({ profile }: { profile: Profile }) {
+// The admin shell shows a 24px one beside the name.
+export function Avatar({ profile, size = 44 }: { profile: Profile; size?: 24 | 44 }) {
+  const className = size === 44 ? "avatar" : "avatar small";
   if (!profile.avatar_id)
     return (
-      <div className="avatar" aria-hidden="true">
+      <div className={className} aria-hidden="true">
         {profile.avatar_initial}
       </div>
     );
   const base = `/media/${profile.avatar_id}`;
   return (
     <img
-      className="avatar"
-      sizes="44px"
-      width={44}
-      height={44}
+      className={className}
+      sizes={`${size}px`}
+      width={size}
+      height={size}
       alt=""
       aria-hidden="true"
       srcSet={`${base}/sm.webp 96w, ${base}/lg.webp 192w`}

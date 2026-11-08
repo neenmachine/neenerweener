@@ -1,5 +1,5 @@
 {
- "_comment": "Every page URL case, run by backend/test_routes.py (server) and src/routes.test.tsx (React). `data` is the server's preload besides `page`; `fetched` is what the React page then fetches. Fixtures: post hello, code project demo with hello.py, timeline entries from TIMELINE_ROWS in test_routes.py, favicon.svg in dist. `noscript` is the text the server shows without JavaScript.",
+ "_comment": "Every page URL case, run by backend/test_routes.py (server) and src/routes.test.tsx (React). `data` is the server's preload besides `page`; `fetched` is what the React page then fetches. Fixtures: post hello, code project demo with hello.py, timeline entries from TIMELINE_ROWS in test_routes.py, favicon.svg in dist. `noscript` is the text the server shows without JavaScript. `admin_pages` is the admin page list (path, nav label): backend/routes.py and src/adminPages.tsx must both equal it.",
  "rows": [
   {
    "path": "/",
@@ -356,7 +356,60 @@
    "markup": "<main><h1 class=\"muted\">file not found</h1><a href=\"/\">neenerweener</a><footer><a href=\"/\">neenerweener</a><a href=\"/timeline\">timeline</a><a href=\"/feed.xml\">rss</a></footer></main>"
   },
   {
+   "path": "/admin/timeline",
+   "status": 200,
+   "noindex": true,
+   "page": {
+    "kind": "admin",
+    "section": "timeline"
+   },
+   "data": {},
+   "h1": [
+    "admin"
+   ],
+   "fetched": {
+    "/api/admin/session": {
+     "authenticated": false
+    }
+   },
+   "noscript": "the admin panel needs JavaScript"
+  },
+  {
+   "path": "/admin/profile",
+   "status": 200,
+   "noindex": true,
+   "page": {
+    "kind": "admin",
+    "section": "profile"
+   },
+   "data": {},
+   "h1": [
+    "admin"
+   ],
+   "fetched": {
+    "/api/admin/session": {
+     "authenticated": false
+    }
+   },
+   "noscript": "the admin panel needs JavaScript"
+  },
+  {
    "path": "/admin/settings",
+   "status": 404,
+   "noindex": true,
+   "page": {
+    "kind": "not-found",
+    "label": "not found",
+    "back": false
+   },
+   "data": {},
+   "h1": [
+    "not found"
+   ],
+   "markup": "<main><h1 class=\"muted\">not found</h1><a href=\"/\">neenerweener</a><footer><a href=\"/\">neenerweener</a><a href=\"/timeline\">timeline</a><a href=\"/feed.xml\">rss</a></footer></main>"
+  },
+  {
+   "path": "/admin/timeline/1",
    "status": 404,
    "noindex": true,
    "page": {
@@ -460,6 +513,20 @@
    "path": "/api/nope",
    "status": 404,
    "noindex": false
+  }
+ ],
+ "admin_pages": [
+  {
+   "path": "/admin",
+   "label": "overview"
+  },
+  {
+   "path": "/admin/timeline",
+   "label": "timeline"
+  },
+  {
+   "path": "/admin/profile",
+   "label": "profile"
   }
  ]
 }

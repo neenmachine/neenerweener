@@ -698,7 +698,20 @@ def test_concurrent_failures_cannot_exceed_ip_allowance(configured_app):
     assert sum(isinstance(result, int) for result in results) == 5
 
 
-@pytest.mark.parametrize("operation", ["create", "get", "update", "delete"])
+def test_overview_counts_every_entry_and_needs_a_session(configured_app, make_client):
+    password, _, store = configured_app
+    anonymous = make_client(base_url="http://127.0.0.1")
+    assert anonymous.get("/api/admin/overview").status_code == 401
+    client, _ = authenticated_client(password, make_client)
+    assert client.get("/api/admin/overview").json() == {"entry_count": 0}
+    ids = [store.create(f"fixture {n}")["id"] for n in range(23)]  # more than one 20-entry page
+    store.delete(ids[0])
+    response = client.get("/api/admin/overview")
+    assert response.json() == {"entry_count": 22}
+    assert response.headers["cache-control"] == "no-store"
+
+
+@pytest.mark.parametrize("operation", ["create", "get", "update", "delete", "count"])
 def test_timeline_storage_failures_are_safe_503(configured_app, monkeypatch, operation, make_client):
     password, _, _ = configured_app
     client, csrf = authenticated_client(password, make_client)
@@ -717,6 +730,7 @@ def test_timeline_storage_failures_are_safe_503(configured_app, monkeypatch, ope
         "get": ("get", "/api/admin/timeline/1", None),
         "update": ("patch", "/api/admin/timeline/1", {"body_markdown": "fixture"}),
         "delete": ("delete", "/api/admin/timeline/1", None),
+        "count": ("get", "/api/admin/overview", None),
     }[operation]
     response = client.request(method, path, headers=mutation_headers(csrf), json=body)
     assert response.status_code == 503

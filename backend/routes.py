@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import re
 
+# The admin pages the server serves: section -> nav label. The client registry is frontend/src/adminPages.tsx;
+# test_routes.py holds both equal to the admin_pages rows in frontend/src/route_cases.json.
+ADMIN_PAGES = {"": "overview", "timeline": "timeline", "profile": "profile"}
+
 # One line per page. A new page is one row here plus one branch in App.tsx's switch.
 ROUTES = [
     ("home", r""),
     ("timeline", r"timeline"),
-    ("admin", r"admin"),
+    ("admin", r"admin(?:/(?P<section>" + "|".join(s for s in ADMIN_PAGES if s) + "))?"),
     ("post", r"posts/(?P<slug>[a-z0-9-]+)"),
     ("code", r"code/(?P<project>[a-z0-9-]+)(?:/(?P<path>.+))?"),
 ]

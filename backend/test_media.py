@@ -823,6 +823,51 @@ def test_profile_replacement_locks_profile_before_assets_and_detaches_old_avatar
     assert old_detached_at is not None
 
 
+def test_profile_avatar_cannot_be_attached_to_timeline_create_or_update(media_db):
+    _machine, store = media_db
+    timeline: TimelineStore = app.timeline_store
+    asset = attachable(store)
+    profile = timeline.update_profile("profile owner", None, asset)
+    entry = timeline.create("entry without media")
+
+    assert isinstance(profile, dict)
+    with pytest.raises(InvalidAttachment):
+        timeline.create("second owner", [(asset, "")])
+    with pytest.raises(InvalidAttachment):
+        timeline.update(entry["id"], "second owner", [(asset, "")])
+
+    with timeline.engine.connect() as connection:
+        timeline_owner = connection.execute(
+            select(timeline_entry_media.c.entry_id).where(timeline_entry_media.c.asset_id == asset)
+        ).scalar_one_or_none()
+        profile_owner = connection.execute(
+            select(site_profile.c.id).where(site_profile.c.avatar_asset_id == asset)
+        ).scalar_one_or_none()
+    assert timeline_owner is None
+    assert profile_owner == 1
+
+
+def test_timeline_attachment_cannot_become_profile_avatar(media_db):
+    _machine, store = media_db
+    timeline: TimelineStore = app.timeline_store
+    asset = attachable(store)
+    entry = timeline.create("timeline owner", [(asset, "")])
+
+    assert isinstance(entry, dict)
+    with pytest.raises(InvalidAttachment):
+        timeline.update_profile("second owner", None, asset)
+
+    with timeline.engine.connect() as connection:
+        timeline_owner = connection.execute(
+            select(timeline_entry_media.c.entry_id).where(timeline_entry_media.c.asset_id == asset)
+        ).scalar_one_or_none()
+        profile_owner = connection.execute(
+            select(site_profile.c.id).where(site_profile.c.avatar_asset_id == asset)
+        ).scalar_one_or_none()
+    assert timeline_owner == entry["id"]
+    assert profile_owner is None
+
+
 @pytest.mark.parametrize(
     "values",
     [

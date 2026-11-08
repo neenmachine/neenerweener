@@ -61,6 +61,18 @@ media_assets = Table(
     Column("detached_at", DateTime(timezone=True), nullable=True),
     CheckConstraint("char_length(alt_text) <= 1000", name="ck_media_assets_alt_text_length"),
 )
+site_profile = Table(
+    "site_profile", metadata,
+    Column("id", SmallInteger, primary_key=True, server_default="1"),
+    Column("display_name", Text, nullable=False, server_default="neenerweener"),
+    Column("handle", Text),
+    Column("avatar_asset_id", UUID(as_uuid=True), ForeignKey("media_assets.id")),
+    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    CheckConstraint("id = 1", name="ck_site_profile_singleton"),
+    CheckConstraint("char_length(btrim(display_name)) BETWEEN 1 AND 80", name="ck_site_profile_display_name"),
+    CheckConstraint("handle IS NULL OR handle ~ '^[A-Za-z0-9_]{1,30}$'", name="ck_site_profile_handle"),
+    UniqueConstraint("avatar_asset_id"),
+)
 timeline_entry_media = Table(
     "timeline_entry_media",
     metadata,
@@ -74,7 +86,7 @@ timeline_entry_media = Table(
 # The sweep never deletes the row of an attached asset, but it deletes objects before the row. Attach therefore
 # refuses never-attached assets older than ATTACH_WINDOW, an hour before the sweep may touch them, and delete
 # sets detached_at so the sweep waits DETACHED_GRACE.
-_unattached = ~exists().where(timeline_entry_media.c.asset_id == media_assets.c.id)
+_unused = ~exists().where(timeline_entry_media.c.asset_id == media_assets.c.id) & ~exists().where(site_profile.c.avatar_asset_id == media_assets.c.id)
 NEVER_ATTACHED_GRACE = timedelta(hours=24)
 ATTACH_WINDOW = timedelta(hours=23)
 DETACHED_GRACE = timedelta(days=7)
@@ -114,7 +126,9 @@ class TimelineStoreProtocol(Protocol):
     def create_media_asset(self, asset_id: uuid.UUID, width: int, height: int, byte_size: int, sha256: bytes) -> None: ...
     def expired_media_assets(self, limit: int) -> list[uuid.UUID]: ...
     def delete_media_asset(self, asset_id: uuid.UUID) -> None: ...
-    def is_attached(self, asset_id: uuid.UUID) -> bool: ...
+    def is_in_use(self, asset_id: uuid.UUID) -> bool: ...
+    def get_profile(self) -> dict: ...
+    def update_profile(self, display_name: str, handle: str | None, avatar_asset_id=...) -> dict: ...
     def schema_revisions(self) -> frozenset[str]: ...
     def ping(self) -> None: ...
     def close(self) -> None: ...
@@ -193,6 +207,7 @@ class TimelineStore:
         validate_timeline_create(body_markdown, [alt for _id, alt in attachments])
         try:
             with self.engine.begin() as connection:
+                connection.execute(select(site_profile.c.id).where(site_profile.c.id == 1).with_for_update()).one()
                 if ids:
                     attachable = connection.execute(
                         select(media_assets.c.id)
@@ -200,7 +215,7 @@ class TimelineStore:
                             media_assets.c.id.in_(ids),
                             media_assets.c.detached_at.is_(None),
                             media_assets.c.created_at > func.now() - ATTACH_WINDOW,
-                            _unattached,
+                            _unused,
                         )
                         .order_by(media_assets.c.id)
                         .with_for_update()
@@ -235,6 +250,7 @@ class TimelineStore:
         validate_timeline_create(body_markdown, [alt for _id, alt in attachments or ()])
         try:
             with self.engine.begin() as connection:
+                connection.execute(select(site_profile.c.id).where(site_profile.c.id == 1).with_for_update()).one()
                 current = _lock_entry(connection, entry_id)
                 if current is None:
                     return None
@@ -254,7 +270,7 @@ class TimelineStore:
                                 media_assets.c.id.in_(new),
                                 media_assets.c.detached_at.is_(None),
                                 media_assets.c.created_at > func.now() - ATTACH_WINDOW,
-                                _unattached,
+                                _unused,
                             )
                         ).scalar_one()
                         if attachable != len(new):
@@ -309,7 +325,7 @@ class TimelineStore:
         query = (
             select(media_assets.c.id)
             .where(
-                _unattached,
+                _unused,
                 or_(
                     media_assets.c.detached_at < now - DETACHED_GRACE,
                     and_(media_assets.c.detached_at.is_(None), media_assets.c.created_at < now - NEVER_ATTACHED_GRACE),
@@ -323,13 +339,47 @@ class TimelineStore:
 
     def delete_media_asset(self, asset_id: uuid.UUID) -> None:
         with self.engine.begin() as connection:
-            connection.execute(delete(media_assets).where(media_assets.c.id == asset_id, _unattached))
+            connection.execute(delete(media_assets).where(media_assets.c.id == asset_id, _unused))
 
-    def is_attached(self, asset_id: uuid.UUID) -> bool:
+    def is_in_use(self, asset_id: uuid.UUID) -> bool:
         with self.engine.connect() as connection:
-            return connection.execute(
-                select(exists().where(timeline_entry_media.c.asset_id == asset_id))
-            ).scalar_one()
+            return connection.execute(select(exists().where(timeline_entry_media.c.asset_id == asset_id) | exists().where(site_profile.c.avatar_asset_id == asset_id))).scalar_one()
+
+    def get_profile(self) -> dict:
+        with self.engine.connect() as connection:
+            return dict(connection.execute(select(site_profile).where(site_profile.c.id == 1)).mappings().one())
+
+    def update_profile(self, display_name: str, handle: str | None, avatar_asset_id=...) -> dict:
+        if not isinstance(display_name, str) or not 1 <= len(display_name.strip()) <= 80:
+            raise ValueError("invalid display name")
+        if handle is not None and (not isinstance(handle, str) or not re.fullmatch(r"[A-Za-z0-9_]{1,30}", handle)):
+            raise ValueError("invalid handle")
+        with self.engine.begin() as connection:
+            profile = connection.execute(select(site_profile).where(site_profile.c.id == 1).with_for_update()).mappings().one()
+            old = profile["avatar_asset_id"]
+            new = old if avatar_asset_id is ... else avatar_asset_id
+            if new != old:
+                _lock_assets(connection, {new, old} - {None})
+                if new is not None:
+                    eligible = connection.execute(
+                        select(
+                            exists().where(
+                                media_assets.c.id == new,
+                                media_assets.c.detached_at.is_(None),
+                                media_assets.c.created_at > func.now() - ATTACH_WINDOW,
+                                _unused,
+                            )
+                        )
+                    ).scalar_one()
+                    if not eligible:
+                        raise InvalidAttachment
+                    connection.execute(update(media_assets).where(media_assets.c.id == new).values(detached_at=None))
+                if old is not None:
+                    connection.execute(update(media_assets).where(media_assets.c.id == old).values(detached_at=func.now()))
+            values = {"display_name": display_name.strip(), "handle": handle, "updated_at": func.now()}
+            if avatar_asset_id is not ...:
+                values["avatar_asset_id"] = new
+            return dict(connection.execute(update(site_profile).where(site_profile.c.id == 1).values(**values).returning(site_profile)).mappings().one())
 
     def schema_revisions(self) -> frozenset[str]:
         with self.engine.connect() as connection:

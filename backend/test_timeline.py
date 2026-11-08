@@ -20,6 +20,9 @@ class FakeStore:
         self.calls.append((before, limit))
         return self.rows
 
+    def get_profile(self):
+        return {"display_name": "neenerweener", "handle": None, "avatar_asset_id": None}
+
 
 def test_non_attachment_integrity_errors_are_not_reclassified():
     class Orig:
@@ -106,6 +109,41 @@ def test_validate_timeline_create(body, alts, valid):
             validate_timeline_create(body, alts)
 
 
+def test_public_profile_returns_defaults_and_no_cache(monkeypatch):
+    monkeypatch.setattr(app, "timeline_store", FakeStore([]))
+    response = TestClient(app.app).get("/api/profile")
+    assert response.status_code == 200
+    assert response.json() == {"display_name": "neenerweener", "handle": None, "avatar_id": None, "avatar_initial": "N"}
+    assert response.headers["cache-control"] == "no-cache"
+
+
+def test_public_profile_returns_configured_values_and_storage_failure_is_503(monkeypatch):
+    avatar_id = "7b150c14-6f3d-4d73-a642-621acb840cea"
+
+    class ConfiguredStore:
+        def get_profile(self):
+            return {"display_name": " configured ", "handle": "valid_handle", "avatar_asset_id": avatar_id}
+
+    monkeypatch.setattr(app, "timeline_store", ConfiguredStore())
+    configured = TestClient(app.app).get("/api/profile")
+    assert configured.status_code == 200
+    assert configured.json() == {
+        "display_name": " configured ",
+        "handle": "valid_handle",
+        "avatar_id": avatar_id,
+        "avatar_initial": "C",
+    }
+    assert configured.headers["cache-control"] == "no-cache"
+
+    class FailingStore:
+        def get_profile(self):
+            raise RuntimeError("storage unavailable")
+
+    monkeypatch.setattr(app, "timeline_store", FailingStore())
+    unavailable = TestClient(app.app).get("/api/profile")
+    assert (unavailable.status_code, unavailable.json()) == (503, {"detail": "profile unavailable"})
+
+
 def test_list_timeline_is_newest_first_and_paginated(monkeypatch):
     rows = [
         {"id": 8, "body_markdown": "new", "created_at": datetime(2026, 1, 2, tzinfo=timezone.utc), "edited_at": None, "media": []},
@@ -166,11 +204,12 @@ def test_alembic_has_one_head():
 
     config = Config(str(Path(__file__).with_name('alembic.ini')))
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == ['004_media']
+    assert script.get_heads() == ['005_profile']
     assert script.get_revision('001_timeline').down_revision is None
     assert script.get_revision('002_admin_auth').down_revision == '001_timeline'
     assert script.get_revision('003_machine_auth').down_revision == '002_admin_auth'
     assert script.get_revision('004_media').down_revision == '003_machine_auth'
+    assert script.get_revision('005_profile').down_revision == '004_media'
 
 
 @pytest.mark.skipif(not os.environ.get('DATABASE_URL'), reason='DATABASE_URL not configured')
@@ -183,6 +222,7 @@ def test_alembic_upgrade_from_empty():
     engine = create_engine(os.environ['DATABASE_URL'])
     try:
         with engine.begin() as connection:
+            connection.exec_driver_sql('DROP TABLE IF EXISTS site_profile CASCADE')
             connection.exec_driver_sql('DROP TABLE IF EXISTS timeline_entry_media CASCADE')
             connection.exec_driver_sql('DROP TABLE IF EXISTS media_assets CASCADE')
             connection.exec_driver_sql('DROP TABLE IF EXISTS machine_auth_events CASCADE')
@@ -214,7 +254,7 @@ def test_alembic_upgrade_down_up_is_repeatable():
     engine = create_engine(os.environ['DATABASE_URL'])
     try:
         with engine.connect() as connection:
-            assert connection.execute(text('select version_num from alembic_version')).scalar() == '004_media'
+            assert connection.execute(text('select version_num from alembic_version')).scalar() == '005_profile'
     finally:
         engine.dispose()
         app.configure_logging()

@@ -98,8 +98,7 @@ function ProfileForm({ initial, send, setProfile }: { initial: Profile; send: Se
   };
 
   const submit = async (e: FormEvent) => {
-    e.preventDefault();
-    if (saving || uploading) return;
+    e.preventDefault(); // a busy or off save button already stops its own submit
     setSaving(true);
     setError("");
     setStatus("");

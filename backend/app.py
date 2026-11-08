@@ -73,6 +73,7 @@ from media import (
     fit,
     media_key,
     process_image,
+    process_avatar,
     store_image,
     sweep,
 )
@@ -214,6 +215,17 @@ async def healthz():
     return {"status": "ok"}
 
 
+@app.api_route("/api/profile", methods=["GET", "HEAD"])
+def get_profile():
+    if timeline_store is None:
+        raise HTTPException(503, "profile unavailable")
+    try:
+        return _public_profile(timeline_store.get_profile())
+    except Exception as exc:
+        logger.warning("profile unavailable: %s", type(exc).__name__)
+        raise HTTPException(503, "profile unavailable") from exc
+
+
 @app.api_route("/api/timeline", methods=["GET", "HEAD"])
 def list_timeline(
     before: int | None = Query(default=None, gt=0),
@@ -262,6 +274,13 @@ class TimelineCreate(TimelineMutation):
     attachments: list[Attachment] = []
 
 
+class ProfileMutation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    display_name: str
+    handle: str | None
+    avatar_id: uuid.UUID | None = None
+
+
 MAX_TIMELINE_JSON_BYTES = 65_536  # body plus four alt texts; matches the CLI's JSON cap
 
 
@@ -274,6 +293,16 @@ class TokenRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     challenge_id: uuid.UUID
     signature: str
+
+
+def _public_profile(profile: dict) -> dict:
+    display_name = profile["display_name"]
+    return {
+        "display_name": display_name,
+        "handle": profile["handle"],
+        "avatar_id": str(profile["avatar_asset_id"]) if profile["avatar_asset_id"] else None,
+        "avatar_initial": display_name.strip()[0].upper(),
+    }
 
 
 def trusted_client_ip(request: Request) -> str | None:
@@ -678,6 +707,47 @@ async def _sweep_media(assets, store) -> None:
         logger.warning("media.sweep.unavailable: %s", type(exc).__name__)
 
 
+@app.post("/api/admin/profile/avatar", status_code=201)
+async def upload_profile_avatar(
+    request: Request, background: BackgroundTasks, _access: Access = Depends(require_browser_mutation)
+):
+    store, assets = media_store, timeline_store
+    if store is None or assets is None:
+        raise HTTPException(503, "media unavailable")
+    if request.headers.get("Content-Length") is None:
+        raise HTTPException(411, "length required")
+    data = await _bounded_body(request, MAX_UPLOAD_BYTES)
+    try:
+        async with _decode:
+            image = await asyncio.to_thread(process_avatar, data)
+    except UnsupportedImage as exc:
+        raise HTTPException(422, "unsupported image") from exc
+    try:
+        asset_id = await asyncio.to_thread(store_image, assets, store, image)
+    except Exception as exc:
+        logger.warning("media.store.unavailable: %s", type(exc).__name__)
+        raise HTTPException(503, "media unavailable") from exc
+    return {"id": str(asset_id)}
+
+
+@app.patch("/api/admin/profile")
+def update_profile(
+    payload: ProfileMutation, _access: Access = Depends(require_browser_mutation)
+):
+    try:
+        avatar = payload.avatar_id if "avatar_id" in payload.model_fields_set else ...
+        return _public_profile(_timeline_storage().update_profile(payload.display_name, payload.handle, avatar))
+    except InvalidAttachment as exc:
+        raise HTTPException(422, "invalid avatar") from exc
+    except ValueError as exc:
+        raise HTTPException(422, "invalid profile") from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("profile storage unavailable: %s", type(exc).__name__)
+        raise HTTPException(503, "admin unavailable") from exc
+
+
 @app.get("/api/admin/timeline/{entry_id}")
 def get_admin_timeline(
     entry_id: int,
@@ -1021,7 +1091,7 @@ def get_media(asset_id: str, variant: str, request: Request):
     if store is None or assets is None:
         raise HTTPException(503, "media unavailable")
     try:
-        if not assets.is_attached(parsed):
+        if not assets.is_in_use(parsed):
             raise not_found
         data = store.get(media_key(parsed, name))
     except HTTPException:

@@ -17,7 +17,7 @@ from sqlalchemy import delete, insert, select, update
 import app
 from auth import hash_password
 from machine_auth import Principal, machine_auth_tokens
-from media import MAX_UPLOAD_BYTES, MediaConfig, MemoryMediaStore, S3MediaStore
+from media import MAX_UPLOAD_BYTES, MediaConfig, MemoryMediaStore, S3MediaStore, process_avatar
 from test_machine_auth import challenge_and_token, key_pair, machine_app  # noqa: F401 -- shared fixtures
 from timeline import TimelineStore, media_assets, timeline_entries, timeline_entry_media
 
@@ -119,6 +119,17 @@ def post(client, data, **headers):
 def stored(store, response):
     asset_id = uuid.UUID(response.json()["id"])
     return {variant: store.get(f"media/{asset_id}/{variant}.webp") for variant in ("lg", "sm")}
+
+
+def test_avatar_is_center_cropped_to_fixed_square_variants_and_stripped():
+    image = process_avatar(gps_jpeg())
+    assert (image.width, image.height) == (192, 192)
+    for data, size in ((image.lg, (192, 192)), (image.sm, (96, 96))):
+        assert not {b"EXIF", b"XMP ", b"ICCP"} & set(riff_chunks(data))
+        with Image.open(io.BytesIO(data)) as decoded:
+            assert decoded.format == "WEBP"
+            assert decoded.size == size
+            assert not decoded.getexif()
 
 
 def test_jpeg_is_stripped_rotated_and_stored_under_server_keys(uploads):

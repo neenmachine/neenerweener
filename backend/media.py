@@ -183,6 +183,20 @@ def _srgb(image: Image.Image) -> Image.Image:
     return image if image.mode == mode else image.convert(mode)
 
 
+def process_avatar(data: bytes) -> ProcessedImage:
+    """Decode, center-crop, and emit the two fixed square avatar variants."""
+    base = process_image(data)
+    with Image.open(io.BytesIO(base.lg)) as source:
+        edge = min(source.size)
+        left = (source.width - edge) // 2
+        top = (source.height - edge) // 2
+        square = source.crop((left, top, left + edge, top + edge))
+        lg = square.resize((192, 192), Image.Resampling.LANCZOS)
+        sm = square.resize((96, 96), Image.Resampling.LANCZOS)
+        lg_bytes, sm_bytes = _webp(lg, LG_QUALITY), _webp(sm, SM_QUALITY)
+    return ProcessedImage(lg_bytes, sm_bytes, 192, 192, hashlib.sha256(lg_bytes).digest())
+
+
 def _webp(image: Image.Image, quality: int) -> bytes:
     out = io.BytesIO()
     # No exif=, icc_profile= or xmp= arguments: the saved file carries pixels only.

@@ -406,7 +406,18 @@ def test_create_read_edit_same_body_and_hard_delete(configured_app, make_client)
     assert entry["body_markdown"] == "first"
     assert entry["html"] == "<p>first</p>\n"
     assert entry["edited_at"] is None
-    assert set(entry) == {"id", "body_markdown", "html", "created_at", "edited_at", "media"}
+    assert entry["created_zone"] in {"EST", "EDT"}
+    assert entry["edited_zone"] is None
+    assert set(entry) == {
+        "id",
+        "body_markdown",
+        "html",
+        "created_at",
+        "created_zone",
+        "edited_at",
+        "edited_zone",
+        "media",
+    }
     assert entry["media"] == []
 
     read = client.get(f"/api/admin/timeline/{entry['id']}")
@@ -420,6 +431,8 @@ def test_create_read_edit_same_body_and_hard_delete(configured_app, make_client)
     ).json()
     assert edited["body_markdown"] == "second"
     assert edited["edited_at"] is not None
+    assert edited["created_zone"] in {"EST", "EDT"}
+    assert edited["edited_zone"] in {"EST", "EDT"}
 
     assert client.delete(f"/api/admin/timeline/{entry['id']}", headers=headers).status_code == 204
     assert client.get(f"/api/admin/timeline/{entry['id']}").status_code == 404

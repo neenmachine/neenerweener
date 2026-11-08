@@ -719,13 +719,200 @@ def test_invalid_attachments_are_422_and_create_nothing(author, case):
         assert connection.execute(select(media_assets.c.alt_text).where(media_assets.c.id == fresh)).scalar_one() == ""
 
 
-def test_edit_cannot_change_attachments(author):
+# Edits (T2b): PATCH replaces the full ordered image list in one transaction.
+
+
+def patch(client, entry_id, attachments, body="edited"):
+    payload = {"body_markdown": body}
+    if attachments is not None:
+        payload["attachments"] = attachments
+    return client.patch(f"/api/admin/timeline/{entry_id}", json=payload)
+
+
+def stored_state(entry_id):
+    """The entry body, its (asset, position) rows, and every asset's (alt, detached) by id."""
+    with app.timeline_store.engine.connect() as connection:
+        body = connection.execute(
+            select(timeline_entries.c.body_markdown).where(timeline_entries.c.id == entry_id)
+        ).scalar_one_or_none()
+        rows = connection.execute(
+            select(timeline_entry_media.c.asset_id, timeline_entry_media.c.position)
+            .where(timeline_entry_media.c.entry_id == entry_id)
+            .order_by(timeline_entry_media.c.position)
+        ).all()
+        assets = {
+            row.id: (row.alt_text, row.detached_at is not None)
+            for row in connection.execute(select(media_assets.c.id, media_assets.c.alt_text, media_assets.c.detached_at))
+        }
+    return body, [tuple(row) for row in rows], assets
+
+
+def test_edit_replaces_body_order_and_alts_and_detaches_removed_images(author):
     client, store = author
-    entry_id = client.post("/api/admin/timeline", json={"body_markdown": "x"}).json()["id"]
-    response = client.patch(
-        f"/api/admin/timeline/{entry_id}", json={"body_markdown": "x", "attachments": [{"id": str(attachable(store))}]}
-    )
-    assert (response.status_code, response.json()) == (422, {"detail": "invalid request"})
+    a, b, c = (attachable(store) for _ in range(3))
+    entry_id = created_id(client, [{"id": str(a), "alt": "A"}, {"id": str(b), "alt": "B"}, {"id": str(c), "alt": "C"}])
+    d = attachable(store)
+    response = patch(client, entry_id, [{"id": str(c), "alt": "C2"}, {"id": str(d), "alt": "D"}, {"id": str(a), "alt": "A"}])
+    assert response.status_code == 200, response.json()
+    expected = [{"id": str(i), "width": 30, "height": 20, "alt": alt} for i, alt in ((c, "C2"), (d, "D"), (a, "A"))]
+    assert response.json()["media"] == expected
+    assert response.json()["html"] == "<p>edited</p>\n"
+    assert response.json()["edited_at"] is not None
+    assert client.get(f"/api/admin/timeline/{entry_id}").json()["media"] == expected
+    assert TestClient(app.app).get("/api/timeline").json()["entries"][0]["media"] == expected
+    body, rows, assets = stored_state(entry_id)
+    assert rows == [(c, 0), (d, 1), (a, 2)]
+    assert assets[b] == ("B", True), "a removed image waits for the 7-day sweep"
+    assert [assets[i][1] for i in (a, c, d)] == [False, False, False]
+    public = TestClient(app.app)
+    assert public.get(f"/media/{b}/lg.webp").status_code == 404
+    assert all(public.get(f"/media/{i}/sm.webp").status_code == 200 for i in (a, c, d))
+
+
+def test_edit_without_attachments_keeps_images_and_an_empty_list_removes_them(author):
+    client, store = author
+    ids = [attachable(store) for _ in range(2)]
+    entry_id = created_id(client, [{"id": str(i), "alt": "x"} for i in ids])
+    text_only = client.patch(f"/api/admin/timeline/{entry_id}", content=b'{"body_markdown": "text only"}',
+                             headers={"Content-Type": "application/json"})
+    assert text_only.status_code == 200
+    assert [m["id"] for m in text_only.json()["media"]] == [str(i) for i in ids]
+    assert stored_state(entry_id)[1] == [(ids[0], 0), (ids[1], 1)]
+    cleared = patch(client, entry_id, [])
+    assert (cleared.status_code, cleared.json()["media"]) == (200, [])
+    _body, rows, assets = stored_state(entry_id)
+    assert rows == [] and all(assets[i][1] for i in ids)
+
+
+def test_edit_keeps_old_images_at_any_age(author):
+    client, store = author
+    old = attachable(store)
+    entry_id = created_id(client, [{"id": str(old)}])
+    with app.timeline_store.engine.begin() as connection:
+        connection.execute(update(media_assets).values(created_at=datetime.now(UTC) - timedelta(days=30)))
+    response = patch(client, entry_id, [{"id": str(old), "alt": "now described"}])
+    assert response.status_code == 200, response.json()
+    assert response.json()["media"][0] == {"id": str(old), "width": 30, "height": 20, "alt": "now described"}
+
+
+@pytest.mark.parametrize(
+    "case", ["foreign", "five", "duplicate", "unknown", "detached", "too-old", "alt-too-long"]
+)
+def test_invalid_edit_attachments_are_422_and_change_nothing(author, case):
+    client, store = author
+    now = datetime.now(UTC)
+    kept, dropped = attachable(store), attachable(store)
+    entry_id = created_id(client, [{"id": str(kept), "alt": "k"}, {"id": str(dropped), "alt": "d"}])
+    foreign = attachable(store)
+    created_id(client, [{"id": str(foreign)}])
+    new = {
+        "foreign": [foreign],
+        "five": [attachable(store) for _ in range(4)],
+        "duplicate": [kept],
+        "unknown": [uuid.uuid4()],
+        "detached": [attachable(store, detached_at=now)],
+        "too-old": [attachable(store, created_at=now - timedelta(hours=23, minutes=5))],
+        "alt-too-long": [attachable(store)],
+    }[case]
+    before = stored_state(entry_id)
+    alt = "a" * 1001 if case == "alt-too-long" else "changed"
+    response = patch(client, entry_id, [{"id": str(kept), "alt": alt}, *({"id": str(i)} for i in new)])
+    assert (response.status_code, response.json()) == (422, {"detail": "invalid attachment"})
+    assert stored_state(entry_id) == before
+
+
+def test_a_failed_edit_leaves_the_entry_and_its_images_unchanged(author, caplog):
+    from sqlalchemy import event
+
+    client, store = author
+    kept, dropped = attachable(store), attachable(store)
+    entry_id = created_id(client, [{"id": str(kept), "alt": "k"}, {"id": str(dropped), "alt": "d"}])
+    added = attachable(store)
+    before = stored_state(entry_id)
+
+    def fail_last_statement(_conn, _cursor, statement, *_args):
+        if statement.lstrip().upper().startswith("UPDATE TIMELINE_ENTRIES"):
+            raise RuntimeError("forced database failure")
+
+    event.listen(app.timeline_store.engine, "before_cursor_execute", fail_last_statement)
+    try:
+        response = patch(client, entry_id, [{"id": str(added), "alt": "a"}, {"id": str(kept), "alt": "k2"}])
+    finally:
+        event.remove(app.timeline_store.engine, "before_cursor_execute", fail_last_statement)
+    assert (response.status_code, response.json()) == (503, {"detail": "admin unavailable"})
+    assert stored_state(entry_id) == before
+
+
+def test_edit_locks_the_entry_then_assets_in_id_order(author):
+    from sqlalchemy import event
+
+    client, store = author
+    a, b = attachable(store), attachable(store)
+    entry_id = created_id(client, [{"id": str(a)}])
+    locks = []
+
+    def record(_conn, _cursor, statement, *_args):
+        if "FOR UPDATE" in statement:
+            locks.append(" ".join(statement.split()))
+
+    event.listen(app.timeline_store.engine, "before_cursor_execute", record)
+    try:
+        assert patch(client, entry_id, [{"id": str(b)}, {"id": str(a)}]).status_code == 200
+        assert client.delete(f"/api/admin/timeline/{entry_id}").status_code == 204
+    finally:
+        event.remove(app.timeline_store.engine, "before_cursor_execute", record)
+    assert len(locks) == 4, locks
+    for entry_lock, asset_lock in (locks[:2], locks[2:]):
+        assert entry_lock.startswith("SELECT timeline_entries.id")
+        assert asset_lock.startswith("SELECT media_assets.id") and "ORDER BY media_assets.id FOR UPDATE" in asset_lock
+
+
+def race(*requests):
+    """Run each request at the same moment on its own client; statement_timeout bounds any lock wait."""
+    import concurrent.futures
+
+    barrier = threading.Barrier(len(requests))
+
+    def run(request):
+        client = TestClient(app.app, base_url="http://127.0.0.1")
+        barrier.wait(timeout=10)
+        return request(client)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(requests)) as executor:
+        return [future.result(timeout=30) for future in [executor.submit(run, r) for r in requests]]
+
+
+def test_concurrent_edits_claim_a_new_image_once_without_deadlock(author):
+    client, store = author
+    for _round in range(5):
+        x, y = attachable(store), attachable(store)
+        first, second = created_id(client, []), created_id(client, [])
+        responses = race(
+            lambda c: patch(c, first, [{"id": str(x)}, {"id": str(y)}]),
+            lambda c: patch(c, second, [{"id": str(y)}, {"id": str(x)}]),
+        )
+        assert sorted(r.status_code for r in responses) == [200, 422], [r.json() for r in responses]
+        loser = next(r for r in responses if r.status_code == 422)
+        assert loser.json() == {"detail": "invalid attachment"}
+        winner = first if responses[0].status_code == 200 else second
+        assert {row[0] for row in stored_state(winner)[1]} == {x, y}
+        assert stored_state(second if winner == first else first)[1] == []
+
+
+def test_concurrent_edit_and_delete_never_deadlock(author):
+    client, store = author
+    for _round in range(5):
+        kept, added = attachable(store), attachable(store)
+        entry_id = created_id(client, [{"id": str(kept)}])
+        edited, deleted = race(
+            lambda c: patch(c, entry_id, [{"id": str(added)}, {"id": str(kept)}]),
+            lambda c: c.delete(f"/api/admin/timeline/{entry_id}"),
+        )
+        assert deleted.status_code == 204
+        assert edited.status_code in (200, 404), edited.json()
+        _body, rows, assets = stored_state(entry_id)
+        assert rows == [] and assets[kept][1]
+        assert assets[added][1] == (edited.status_code == 200), "an image the edit attached is detached by the delete"
 
 
 def test_create_json_cap_is_64_kib(author):

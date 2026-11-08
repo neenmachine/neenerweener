@@ -107,7 +107,9 @@ class TimelineStoreProtocol(Protocol):
     def list(self, before: int | None, limit: int) -> list[dict]: ...
     def get(self, entry_id: int) -> dict | None: ...
     def create(self, body_markdown: str, attachments: Sequence[tuple[uuid.UUID, str]] = ()) -> dict: ...
-    def update(self, entry_id: int, body_markdown: str) -> dict | None: ...
+    def update(
+        self, entry_id: int, body_markdown: str, attachments: Sequence[tuple[uuid.UUID, str]] | None = None
+    ) -> dict | None: ...
     def delete(self, entry_id: int) -> bool: ...
     def create_media_asset(self, asset_id: uuid.UUID, width: int, height: int, byte_size: int, sha256: bytes) -> None: ...
     def expired_media_assets(self, limit: int) -> list[uuid.UUID]: ...
@@ -200,6 +202,7 @@ class TimelineStore:
                             media_assets.c.created_at > func.now() - ATTACH_WINDOW,
                             _unattached,
                         )
+                        .order_by(media_assets.c.id)
                         .with_for_update()
                     ).scalars().all()
                     if len(attachable) != len(ids):
@@ -214,42 +217,83 @@ class TimelineStore:
                     )
                 return _with_media(connection, row)
         except IntegrityError as exc:
-            constraint_name = getattr(getattr(exc.orig, "diag", None), "constraint_name", None)
-            if constraint_name in {"timeline_entry_media_asset_id_key", "ck_timeline_entry_media_position"}:
-                raise InvalidAttachment from exc
+            _raise_attachment_conflict(exc)
             raise
 
-    def update(self, entry_id: int, body_markdown: str) -> dict | None:
-        with self.engine.begin() as connection:
-            current = connection.execute(
-                select(timeline_entries).where(timeline_entries.c.id == entry_id).with_for_update()
-            ).mappings().one_or_none()
-            if current is None:
-                return None
-            if current["body_markdown"] == body_markdown:
-                return _with_media(connection, current)
-            row = connection.execute(
-                update(timeline_entries)
-                .where(timeline_entries.c.id == entry_id)
-                .values(body_markdown=body_markdown, edited_at=func.now())
-                .returning(timeline_entries)
-            ).mappings().one()
-            return _with_media(connection, row)
+    def update(
+        self, entry_id: int, body_markdown: str, attachments: Sequence[tuple[uuid.UUID, str]] | None = None
+    ) -> dict | None:
+        """Replace the body and, unless attachments is None, the full ordered image list, all or nothing.
+
+        Locks the entry, then its current and requested assets in id order, the same order as delete, so two
+        edits or an edit and a delete never deadlock. Kept images stay valid at any age; new ones follow create's
+        rules; removed ones get detached_at so the sweep keeps their objects for DETACHED_GRACE.
+        """
+        ids = [asset_id for asset_id, _alt in attachments or ()]
+        if len(ids) > MAX_ATTACHMENTS or len(set(ids)) != len(ids):
+            raise InvalidAttachment
+        validate_timeline_create(body_markdown, [alt for _id, alt in attachments or ()])
+        try:
+            with self.engine.begin() as connection:
+                current = _lock_entry(connection, entry_id)
+                if current is None:
+                    return None
+                media = media_for(connection, [entry_id]).get(entry_id, [])
+                kept = {uuid.UUID(m["id"]) for m in media}
+                same_media = attachments is None or [(uuid.UUID(m["id"]), m["alt"]) for m in media] == list(attachments)
+                if current["body_markdown"] == body_markdown and same_media:
+                    return {**current, "media": media}
+                if attachments is not None:
+                    _lock_assets(connection, kept | set(ids))
+                    new = set(ids) - kept
+                    if new:
+                        attachable = connection.execute(
+                            select(func.count())
+                            .select_from(media_assets)
+                            .where(
+                                media_assets.c.id.in_(new),
+                                media_assets.c.detached_at.is_(None),
+                                media_assets.c.created_at > func.now() - ATTACH_WINDOW,
+                                _unattached,
+                            )
+                        ).scalar_one()
+                        if attachable != len(new):
+                            raise InvalidAttachment
+                    removed = kept - set(ids)
+                    if removed:
+                        connection.execute(
+                            update(media_assets).where(media_assets.c.id.in_(removed)).values(detached_at=func.now())
+                        )
+                    connection.execute(delete(timeline_entry_media).where(timeline_entry_media.c.entry_id == entry_id))
+                    for position, (asset_id, alt) in enumerate(attachments):
+                        connection.execute(update(media_assets).where(media_assets.c.id == asset_id).values(alt_text=alt))
+                        connection.execute(
+                            insert(timeline_entry_media).values(entry_id=entry_id, asset_id=asset_id, position=position)
+                        )
+                row = connection.execute(
+                    update(timeline_entries)
+                    .where(timeline_entries.c.id == entry_id)
+                    .values(body_markdown=body_markdown, edited_at=func.now())
+                    .returning(timeline_entries)
+                ).mappings().one()
+                return _with_media(connection, row)
+        except IntegrityError as exc:
+            _raise_attachment_conflict(exc)
+            raise
 
     def delete(self, entry_id: int) -> bool:
         with self.engine.begin() as connection:
+            if _lock_entry(connection, entry_id) is None:
+                return False
+            attached = connection.execute(
+                select(timeline_entry_media.c.asset_id).where(timeline_entry_media.c.entry_id == entry_id)
+            ).scalars().all()
+            _lock_assets(connection, attached)
             # Mark the assets first so the sweep keeps their objects for DETACHED_GRACE.
-            connection.execute(
-                update(media_assets)
-                .where(
-                    media_assets.c.id.in_(
-                        select(timeline_entry_media.c.asset_id).where(timeline_entry_media.c.entry_id == entry_id)
-                    )
-                )
-                .values(detached_at=func.now())
-            )
-            result = connection.execute(delete(timeline_entries).where(timeline_entries.c.id == entry_id))
-        return result.rowcount == 1
+            if attached:
+                connection.execute(update(media_assets).where(media_assets.c.id.in_(attached)).values(detached_at=func.now()))
+            connection.execute(delete(timeline_entries).where(timeline_entries.c.id == entry_id))
+        return True
 
     def create_media_asset(self, asset_id: uuid.UUID, width: int, height: int, byte_size: int, sha256: bytes) -> None:
         with self.engine.begin() as connection:
@@ -298,6 +342,26 @@ class TimelineStore:
 
     def close(self) -> None:
         self.engine.dispose()
+
+
+def _lock_entry(connection: Connection, entry_id: int):
+    return connection.execute(
+        select(timeline_entries).where(timeline_entries.c.id == entry_id).with_for_update()
+    ).mappings().one_or_none()
+
+
+def _lock_assets(connection: Connection, ids) -> None:
+    """Row locks in id order (Postgres locks after the sort), the one asset lock order for update and delete."""
+    if ids:
+        connection.execute(
+            select(media_assets.c.id).where(media_assets.c.id.in_(ids)).order_by(media_assets.c.id).with_for_update()
+        ).all()
+
+
+def _raise_attachment_conflict(exc: IntegrityError) -> None:
+    constraint_name = getattr(getattr(exc.orig, "diag", None), "constraint_name", None)
+    if constraint_name in {"timeline_entry_media_asset_id_key", "ck_timeline_entry_media_position"}:
+        raise InvalidAttachment from exc
 
 
 def media_for(connection: Connection, entry_ids: Sequence[int]) -> dict[int, list[dict]]:

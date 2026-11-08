@@ -78,9 +78,13 @@ def test_favicons_need_no_inline_styles_and_dark_icon_is_linked():
     for name, svg in icons.items():
         assert "<style" not in svg and "style=" not in svg, name
     assert set(icons) == {"favicon.svg", "favicon-dark.svg"}
+    # Browsers that ignore media on icon links take the last one, so light must come last.
     head = (FRONTEND / "index.html").read_text()
-    assert '<link rel="icon" href="/favicon.svg" type="image/svg+xml" />' in head
-    assert '<link rel="icon" href="/favicon-dark.svg" type="image/svg+xml" media="(prefers-color-scheme: dark)" />' in head
+    icon_links = re.findall(r'<link rel="icon"[^>]*>', head)
+    assert icon_links == [
+        '<link rel="icon" href="/favicon-dark.svg" type="image/svg+xml" media="(prefers-color-scheme: dark)" />',
+        '<link rel="icon" href="/favicon.svg" type="image/svg+xml" media="(prefers-color-scheme: light)" />',
+    ]
 
 
 def test_api_404_stays_json(client):

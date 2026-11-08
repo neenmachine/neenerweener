@@ -1,6 +1,6 @@
 import { type MouseEvent, Suspense, useEffect, useRef, useState } from "react";
 import { AdminHead, Avatar, Footer } from "./App";
-import { checkSession, login, profileChannel, logout as signOut, type Result } from "./adminApi";
+import { checkSession, login, type ProfileChannel, profileChannel, logout as signOut, type Result } from "./adminApi";
 import { adminPages } from "./adminPages";
 import { Button, sendOrExpire } from "./EntryEditor";
 import type { Profile } from "./timelineTypes";
@@ -84,7 +84,7 @@ export default function Admin() {
     profileFlight.current = Promise.resolve({ ok: true, data: p });
     setProfile(p);
   };
-  const channel = useRef<BroadcastChannel>(null);
+  const channel = useRef<ProfileChannel>(null);
   useEffect(() => {
     const c = (channel.current = profileChannel(applyProfile));
     return () => c.close();

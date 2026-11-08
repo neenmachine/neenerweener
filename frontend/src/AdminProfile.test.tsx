@@ -377,7 +377,7 @@ test("an upload that answers after log out makes no preview URL", async () => {
 
 // Another tab of the same browser: its profile page posts the saved profile on the "profile" channel.
 const newer: Profile = { display_name: "newer name", handle: "newer_handle", avatar_id: configured.avatar_id, avatar_initial: "N" };
-async function otherTabSaves(p: Profile) {
+async function otherTabSaves(p: unknown) {
   const tab = new BroadcastChannel("profile");
   tab.postMessage(p);
   tab.close();
@@ -409,6 +409,69 @@ test("another tab's save keeps typed text and a staged picture; untouched fields
   expect(identity()).toBe("newer name");
   await save();
   expect(s.mutations().at(-1)!.body).toEqual({ display_name: "typed name", handle: "newer_handle", avatar_id: "staged-3" });
+});
+
+test("another tab's save keeps a field typed back to its saved text", async () => {
+  const s = await render();
+  await type(field("display-name"), "typed name");
+  await type(field("display-name"), "fixture name");
+  await type(field("handle"), "typed");
+  await type(field("handle"), "fixture_handle");
+  await otherTabSaves(newer);
+  expect(field("display-name").value).toBe("fixture name");
+  expect(field("handle").value).toBe("fixture_handle");
+  expect(identity()).toBe("newer name");
+  await save();
+  expect(s.mutations().at(-1)!.body).toEqual({ display_name: "fixture name", handle: "fixture_handle" });
+});
+
+test("another tab's save keeps a handle typed back to empty, from no handle or to empty", async () => {
+  await render(server({ ...fixture, handle: null }));
+  await type(field("handle"), "typed");
+  await type(field("handle"), "");
+  await otherTabSaves(newer);
+  expect(field("handle").value).toBe("");
+  expect(field("display-name").value).toBe("newer name");
+  act(() => root!.unmount());
+  const s = await render();
+  await type(field("handle"), "");
+  await otherTabSaves(newer);
+  expect(field("handle").value).toBe("");
+  await save();
+  expect(s.mutations().at(-1)!.body).toEqual({ display_name: "newer name", handle: null });
+});
+
+test("after a save, another tab's save updates the fields again", async () => {
+  await render();
+  await type(field("display-name"), "typed name");
+  await type(field("handle"), "typed");
+  await save();
+  expect(statusText()).toBe("profile saved");
+  await otherTabSaves(newer);
+  expect(field("display-name").value).toBe("newer name");
+  expect(field("handle").value).toBe("newer_handle");
+});
+
+test("a message that is not a profile is ignored", async () => {
+  await render();
+  for (const bad of [null, "x", {}, { ...newer, display_name: 1 }, { ...newer, handle: undefined }, { ...newer, avatar_id: 2 }, { ...newer, avatar_initial: null }])
+    await otherTabSaves(bad);
+  expect(identity()).toBe("Ffixture name"); // the initial, then the name
+  expect(field("display-name").value).toBe("fixture name");
+  await otherTabSaves(newer);
+  expect(identity()).toBe("newer name");
+});
+
+test("without BroadcastChannel the admin works and saves", async () => {
+  vi.stubGlobal("BroadcastChannel", undefined);
+  const s = server();
+  await render(s).catch(() => {}); // a throw here is the bug; the page check below names it
+  expect(field("display-name")?.value).toBe("fixture name");
+  await type(field("display-name"), "saved name");
+  await save();
+  expect(statusText()).toBe("profile saved");
+  expect(identity()).toBe("Ssaved name"); // the initial, then the name
+  expect(s.mutations()).toHaveLength(1);
 });
 
 test("a save posts the saved profile to the other tabs", async () => {

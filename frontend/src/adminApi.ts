@@ -79,16 +79,16 @@ export async function request<T = undefined>(method: string, url: string, body?:
 // A 401 here is a wrong password, not an ended session.
 export const login = (password: string, signal: AbortSignal) => send("POST", "/api/admin/login", { password }, signal);
 
-export async function checkSession(): Promise<Result<Session>> {
-  const r = await send<Session>("GET", "/api/admin/session");
+export async function checkSession(signal?: AbortSignal): Promise<Result<Session>> {
+  const r = await send<Session>("GET", "/api/admin/session", undefined, signal);
   if (!r.ok) return r; // a 503 is not proof of sign-out: keep the hint
   csrf = r.data.authenticated ? r.data.csrf_token : null;
   if (!r.data.authenticated) clearHint();
   return r;
 }
 
-export async function logout() {
-  const r = await request("POST", "/api/admin/logout");
+export async function logout(signal: AbortSignal) {
+  const r = await request("POST", "/api/admin/logout", undefined, signal);
   if (r.ok) csrf = null;
   return r;
 }

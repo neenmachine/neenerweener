@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // The request lifecycle (useRequest) on every admin request path, driven through the real pages: one request per
 // double activation, busy owned by the running request, newest load wins, and nothing runs after unmount.
-import { act } from "react";
+import { act, StrictMode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, expect, test, vi } from "vitest";
 
@@ -33,16 +33,19 @@ const settle = async () => {
 };
 
 // Reads answer at once; every mutation (and any GET that hold() picks) waits in held until the test answers it.
-async function render(path: string, { signedIn = true, hold = (_url: string, method: string) => method !== "GET" } = {}) {
+async function render(
+  path: string,
+  { signedIn = true, strict = false, hold = (url: string, method: string) => method !== "GET" && url !== "/api/admin/logout" } = {},
+) {
   const held: Held[] = [];
   const fetch = vi.fn((url: string, init: RequestInit = {}) => {
     const method = init.method ?? "GET";
-    if (url === "/api/admin/session") return Promise.resolve(reply(200, signedIn ? { authenticated: true, csrf_token: "csrf" } : { authenticated: false }));
-    if (url === "/api/admin/logout") return Promise.resolve(reply(204, null));
     if (hold(url, method))
       return new Promise<Reply>((resolve) =>
         held.push({ url, method, signal: init.signal ?? undefined, answer: async (r) => (resolve(r), await settle()) }),
       );
+    if (url === "/api/admin/session") return Promise.resolve(reply(200, signedIn ? { authenticated: true, csrf_token: "csrf" } : { authenticated: false }));
+    if (url === "/api/admin/login") return Promise.resolve(reply(200, null));
     if (url === "/api/profile") return Promise.resolve(reply(200, profile));
     if (url === "/api/timeline") return Promise.resolve(reply(200, first));
     if (url === "/api/admin/overview") return Promise.resolve(reply(200, { entry_count: 1 }));
@@ -63,7 +66,7 @@ async function render(path: string, { signedIn = true, hold = (_url: string, met
   const { default: App } = await import("./App");
   await act(async () => {
     root = createRoot(document.getElementById("root")!);
-    root.render(<App />);
+    root.render(strict ? <StrictMode><App /></StrictMode> : <App />);
   });
   for (let i = 0; i < 20 && !document.querySelector("form, .admin-links"); i++)
     await act(async () => await new Promise((resolve) => setTimeout(resolve, 10)));
@@ -209,6 +212,7 @@ const unmountRows = [
     .filter((p) => p.field)
     .map((p) => ({ name: `${p.name} (submit)`, path: p.path, signedIn: p.signedIn, start: async () => (await p.ready(), act(() => enter(p.field!()))), answer: reply(422, "late") })),
   { name: "overview (load)", path: "/admin", signedIn: true, start: async () => {}, answer: reply(200, { entry_count: 5 }) },
+  { name: "shell profile (load)", path: "/admin/profile", signedIn: true, start: async () => {}, answer: reply(200, profile) },
   {
     name: "profile picture upload (load)",
     path: "/admin/profile",
@@ -225,7 +229,10 @@ const unmountRows = [
 ];
 
 test.each(unmountRows)("unmount while $name is pending: fetch aborted, no continuation after unmount", { timeout: 5000 }, async ({ name, path, signedIn, start, answer }) => {
-  const { held } = await render(path, { signedIn, hold: (url, method) => (name.startsWith("overview") ? overview(url) : method !== "GET") });
+  const { held } = await render(path, {
+    signedIn,
+    hold: (url, method) => (name.startsWith("overview") ? overview(url) : name.startsWith("shell profile") ? url === "/api/profile" : method !== "GET"),
+  });
   await start();
   await settle();
   expect(held).toHaveLength(1);
@@ -240,4 +247,48 @@ test.each(unmountRows)("unmount while $name is pending: fetch aborted, no contin
   expect(objectUrl).not.toHaveBeenCalled();
   expect(focus).not.toHaveBeenCalled();
   expect(error).not.toHaveBeenCalled();
+});
+
+// The shell's own flows, each its whole chain under one signal: logout, and login's session check after the password.
+test("unmount while logout is pending: fetch aborted, no continuation after unmount", { timeout: 5000 }, async () => {
+  const { held } = await render("/admin", { hold: (url) => url === "/api/admin/logout" });
+  await act(() => button("log out").click());
+  await settle();
+  expect(held.map((h) => h.url)).toEqual(["/api/admin/logout"]);
+  const error = vi.spyOn(console, "error");
+  act(() => root!.unmount());
+  root = undefined;
+  expect(held[0].signal?.aborted).toBe(true);
+  await held[0].answer(reply(204, null));
+  expect(error).not.toHaveBeenCalled();
+});
+
+test("unmount while login's session check is pending: fetch aborted, no session applied, no profile load", { timeout: 5000 }, async () => {
+  let sessions = 0;
+  const { fetch, held } = await render("/admin", { signedIn: false, hold: (url) => url === "/api/admin/session" && ++sessions > 1 });
+  await type(document.querySelector<HTMLInputElement>("#password")!, "secret");
+  await act(() => button("log in").click());
+  await settle();
+  expect(held.map((h) => h.url)).toEqual(["/api/admin/session"]);
+  const error = vi.spyOn(console, "error");
+  act(() => root!.unmount());
+  root = undefined;
+  expect(held[0].signal?.aborted).toBe(true);
+  const before = fetch.mock.calls.length;
+  await held[0].answer(reply(200, { authenticated: true, csrf_token: "csrf" }));
+  // session() applying the reply would start the profile load: no request at all may follow the unmount.
+  expect(fetch.mock.calls.slice(before)).toEqual([]);
+  expect(error).not.toHaveBeenCalled();
+});
+
+// Strict mode (as main.tsx renders) mounts the shell twice in dev: the first session check is aborted with it, and
+// its late reply must not apply, or it would overwrite the second check's result.
+test("strict mode replay: the aborted first session check never applies over the second", { timeout: 5000 }, async () => {
+  const { held } = await render("/admin", { strict: true, hold: (url) => url === "/api/admin/session" });
+  expect(held.map((h) => h.signal?.aborted)).toEqual([true, false]);
+  await held[1].answer(reply(200, { authenticated: true, csrf_token: "csrf" }));
+  expect(button("log out")).toBeDefined();
+  await held[0].answer(reply(200, { authenticated: true, csrf_token: "csrf" }));
+  expect(button("log out")).toBeDefined();
+  expect(button("retry")).toBeUndefined();
 });

@@ -4,13 +4,14 @@ import type { AdminPageProps } from "./adminPages";
 import { Button } from "./EntryEditor";
 
 // A link row per page, with what that page holds: the entry count and the poster.
-export default function AdminOverview({ send, profile, loadProfile }: AdminPageProps) {
+export default function AdminOverview({ send, profile, loadProfile, active }: AdminPageProps) {
   const [count, setCount] = useState<number | null>(null);
   const [state, setState] = useState<"loading" | "ok" | "failed">("loading");
   const [error, setError] = useState("");
 
-  const load = async () => {
-    setState("loading");
+  // quiet: a refresh keeps the shown count until the new one arrives.
+  const load = async (quiet = false) => {
+    if (!quiet) setState("loading");
     const [c, p] = await Promise.all([send<{ entry_count: number }>("GET", "/api/admin/overview"), loadProfile()]);
     const failed = !c.ok ? c : !p.ok ? p : null;
     if (c.ok) setCount(c.data.entry_count);
@@ -18,9 +19,10 @@ export default function AdminOverview({ send, profile, loadProfile }: AdminPageP
     setState(failed ? "failed" : "ok");
   };
 
+  // Each time the page is shown, since posts and deletes on other pages change the count.
   useEffect(() => {
-    load();
-  }, []);
+    if (active) load(count !== null);
+  }, [active]);
 
   return (
     <>
@@ -31,7 +33,7 @@ export default function AdminOverview({ send, profile, loadProfile }: AdminPageP
           <p className="error" role="alert">
             {error}
           </p>
-          <Button onClick={load} label="retry" />
+          <Button onClick={() => load()} label="retry" />
         </div>
       )}
       {state === "ok" && profile && count !== null && (

@@ -1,6 +1,7 @@
 // The one owner of browser admin auth: the session check, the in-memory CSRF token, requests and their
 // error text, and the empty-text check. Used by /admin and by the composer on /timeline; lazy loaded.
 
+import { fetchWithSignal } from "./request";
 import type { Entry } from "./timelineTypes";
 
 export type AdminEntry = Entry & { body_markdown: string };
@@ -44,7 +45,7 @@ async function send<T>(method: string, url: string, body?: object, signal?: Abor
   const raw = body instanceof Blob;
   let r: Response;
   try {
-    r = await fetch(url, {
+    r = await fetchWithSignal(url, signal, {
       method,
       cache: "no-store",
       headers: {
@@ -52,7 +53,6 @@ async function send<T>(method: string, url: string, body?: object, signal?: Abor
         ...(method !== "GET" && csrf && { "X-CSRF-Token": csrf }),
       },
       body: raw ? body : body && JSON.stringify(body),
-      signal,
     });
   } catch {
     return { ok: false, status: 0, message: "could not reach the server" };

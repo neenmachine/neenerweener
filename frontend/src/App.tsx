@@ -1,6 +1,7 @@
 import { type ComponentType, type MouseEvent, type ReactNode, lazy, Suspense, useEffect, useRef, useState } from "react";
 // Types only: the admin code itself stays out of the public chunk.
 import type { EntryRow, Send } from "./EntryEditor";
+import { fetchWithSignal } from "./request";
 import type { Entry, Media, Profile, Timeline, Zone } from "./timelineTypes";
 
 type Summary = { slug: string; title: string; excerpt: string | null; tags: string[]; draft: boolean };
@@ -215,7 +216,7 @@ function TimelinePage() {
     setBusy(true);
     setFailed(false);
     setStatus("loading");
-    fetch(`/api/timeline?before=${cursor}`, { signal: life.current.signal })
+    fetchWithSignal(`/api/timeline?before=${cursor}`, life.current.signal)
       .then((r) => (r.ok ? r.json() : Promise.reject()))
       .then(
         (page: Timeline) => {
@@ -510,7 +511,7 @@ function useApi<T>(url: string) {
   useEffect(() => {
     if (known) return;
     const c = new AbortController();
-    fetch(url, { signal: c.signal })
+    fetchWithSignal(url, c.signal)
       .then((r) => (r.ok ? r.json() : Promise.reject()))
       .then(
         (d) => !c.signal.aborted && setData(d),

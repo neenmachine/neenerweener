@@ -4,6 +4,7 @@ import { checkSession, login, logout as signOut, type Result } from "./adminApi"
 import { adminPages } from "./adminPages";
 import { Button, sendOrExpire } from "./EntryEditor";
 import type { Profile } from "./timelineTypes";
+import { useRequest } from "./useRequest";
 
 // The private admin area: a password form, then the shell (nav, the current page, the footer) around the pages in
 // adminPages.tsx. It is lazy loaded, so public pages never download it, and nothing on the site links here.
@@ -13,8 +14,7 @@ export default function Admin() {
   // The pages are kept (hidden) while the session is out after a 401, so unsaved text survives logging in again.
   const [mounted, setMounted] = useState(false);
   const [notice, setNotice] = useState("");
-  const [loggingOut, setLoggingOut] = useState(false);
-  const outFlight = useRef(false);
+  const { run: logoutRun, busy: loggingOut } = useRequest("submit");
   // The session check is usually fast; say "loading" only when it is not, so a fast check shows no flash.
   const [slow, setSlow] = useState(false);
   useEffect(() => {
@@ -102,12 +102,7 @@ export default function Admin() {
   }, []);
 
   const logout = async () => {
-    if (outFlight.current) return;
-    outFlight.current = true;
-    setLoggingOut(true);
-    const r = await signOut();
-    outFlight.current = false;
-    setLoggingOut(false);
+    const r = await logoutRun(() => signOut());
     if (!r.ok && r.status !== 401) return setNotice(r.message);
     // A deliberate logout drops unsaved text with the pages; the URL stays.
     setMounted(false);
@@ -204,11 +199,10 @@ function Loaded({ onLoad }: { onLoad: () => void }) {
 }
 
 function Login({ session, notice }: { session: () => Promise<boolean>; notice: string }) {
-  const [busy, setBusy] = useState(false);
+  const { run, busy } = useRequest("submit");
   const [error, setError] = useState(notice);
   const [blockedFor, setBlockedFor] = useState(0);
   const input = useRef<HTMLInputElement>(null);
-  const inFlight = useRef(false);
   useEffect(() => {
     if (!blockedFor) return;
     const t = setTimeout(() => setBlockedFor(0), blockedFor * 1000);
@@ -216,16 +210,14 @@ function Login({ session, notice }: { session: () => Promise<boolean>; notice: s
   }, [blockedFor]);
   const submit = async () => {
     const field = input.current!;
-    if (inFlight.current || blockedFor || !field.value) return;
-    inFlight.current = true;
-    setBusy(true);
-    setError("");
-    // Read from the field at submit time: the password never goes into React state.
-    const r = await login(field.value);
-    field.value = "";
-    const ok = r.ok && (await session());
-    inFlight.current = false;
-    setBusy(false);
+    if (blockedFor || !field.value) return;
+    const { r, ok } = await run(async (signal) => {
+      setError("");
+      // Read from the field at submit time: the password never goes into React state.
+      const r = await login(field.value, signal);
+      field.value = "";
+      return { r, ok: r.ok && (await session()) };
+    });
     if (ok) return;
     if (!r.ok && r.status === 429) setBlockedFor(r.retryAfter ?? 60);
     setError(!r.ok && r.status !== 401 ? r.message : "login failed");

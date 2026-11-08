@@ -39,8 +39,8 @@ function failure(status: number, detail: unknown, retryAfter?: number): string {
   return "something went wrong";
 }
 
-// A Blob body (an image upload) goes raw; any other object goes as JSON.
-async function send<T>(method: string, url: string, body?: object): Promise<Result<T>> {
+// A Blob body (an image upload) goes raw; any other object goes as JSON. signal is the caller's useRequest run.
+async function send<T>(method: string, url: string, body?: object, signal?: AbortSignal): Promise<Result<T>> {
   const raw = body instanceof Blob;
   let r: Response;
   try {
@@ -52,11 +52,14 @@ async function send<T>(method: string, url: string, body?: object): Promise<Resu
         ...(method !== "GET" && csrf && { "X-CSRF-Token": csrf }),
       },
       body: raw ? body : body && JSON.stringify(body),
+      signal,
     });
   } catch {
     return { ok: false, status: 0, message: "could not reach the server" };
   }
   const json = await r.json().catch(() => undefined);
+  // Aborted (superseded or unmounted) after the headers came: never read as a success with no body.
+  if (signal?.aborted) return { ok: false, status: 0, message: "" };
   if (r.ok) return { ok: true, data: json };
   const seconds = Number(r.headers.get("Retry-After"));
   const retryAfter = seconds > 0 ? Math.ceil(seconds) : undefined;
@@ -64,8 +67,8 @@ async function send<T>(method: string, url: string, body?: object): Promise<Resu
 }
 
 // An authenticated request; a 401 means the session ended, so the token and the hint go.
-export async function request<T = undefined>(method: string, url: string, body?: object): Promise<Result<T>> {
-  const r = await send<T>(method, url, body);
+export async function request<T = undefined>(method: string, url: string, body?: object, signal?: AbortSignal): Promise<Result<T>> {
+  const r = await send<T>(method, url, body, signal);
   if (!r.ok && r.status === 401) {
     csrf = null;
     clearHint();
@@ -74,7 +77,7 @@ export async function request<T = undefined>(method: string, url: string, body?:
 }
 
 // A 401 here is a wrong password, not an ended session.
-export const login = (password: string) => send("POST", "/api/admin/login", { password });
+export const login = (password: string, signal: AbortSignal) => send("POST", "/api/admin/login", { password }, signal);
 
 export async function checkSession(): Promise<Result<Session>> {
   const r = await send<Session>("GET", "/api/admin/session");
@@ -93,8 +96,10 @@ export async function logout() {
 export type Uploaded = { id: string; width: number; height: number };
 export type Attachment = { id: string; alt: string };
 export const uploadMedia = (file: File) => request<Uploaded>("POST", "/api/admin/media", file);
-export const createTimeline = (body_markdown: string, attachments: Attachment[] = []) =>
-  request<AdminEntry>("POST", "/api/admin/timeline", {
-    body_markdown,
-    ...(attachments.length > 0 && { attachments }),
-  });
+export const createTimeline = (body_markdown: string, attachments: Attachment[], signal: AbortSignal) =>
+  request<AdminEntry>(
+    "POST",
+    "/api/admin/timeline",
+    { body_markdown, ...(attachments.length > 0 && { attachments }) },
+    signal,
+  );

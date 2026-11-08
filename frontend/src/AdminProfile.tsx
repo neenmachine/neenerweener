@@ -4,6 +4,7 @@ import { hasText, length } from "./adminApi";
 import type { AdminPageProps } from "./adminPages";
 import { Button, type Send } from "./EntryEditor";
 import type { Profile } from "./timelineTypes";
+import { useRequest } from "./useRequest";
 
 // The poster shown on every entry: picture, display name and handle.
 export default function AdminProfile({ send, profile, loadProfile, setProfile }: AdminPageProps) {
@@ -52,8 +53,9 @@ function ProfileForm({ initial, send, setProfile }: { initial: Profile; send: Se
   const [name, setName] = useState(initial.display_name);
   const [handle, setHandle] = useState(initial.handle ?? "");
   const [staged, setStaged] = useState<Staged>(undefined);
-  const [uploading, setUploading] = useState(false);
-  const [saving, setSaving] = useState(false);
+  // A new pick supersedes an upload still running; one save at a time (Enter in a field submits without the button).
+  const { run: uploadRun, busy: uploading } = useRequest("load");
+  const { run: saveRun, busy: saving } = useRequest("submit");
   const [error, setError] = useState("");
   const [invalid, setInvalid] = useState<"name" | "handle" | null>(null);
   const [status, setStatus] = useState("");
@@ -69,11 +71,9 @@ function ProfileForm({ initial, send, setProfile }: { initial: Profile; send: Se
     preview.current = next ? next.url : null;
     setStaged(next);
   };
-  // Off once the form goes, so an upload that answers after sign-out makes no preview URL nobody revokes.
-  const mounted = useRef(true);
+  // An upload that answers after the form goes (sign-out) never settles, so it makes no preview URL nobody revokes.
   useEffect(
     () => () => {
-      mounted.current = false;
       if (preview.current) URL.revokeObjectURL(preview.current);
     },
     [],
@@ -94,12 +94,11 @@ function ProfileForm({ initial, send, setProfile }: { initial: Profile; send: Se
     job.then(() => pending.current === job && (pending.current = null));
   };
   const uploadFile = async (picked: File): Promise<Staged | false> => {
-    setUploading(true);
-    setError("");
-    setStatus("");
-    const r = await send<{ id: string }>("POST", "/api/admin/profile/avatar", picked);
-    if (!mounted.current) return false;
-    setUploading(false);
+    const r = await uploadRun((signal) => {
+      setError("");
+      setStatus("");
+      return send<{ id: string }>("POST", "/api/admin/profile/avatar", picked, signal);
+    });
     if (r.ok) {
       const next = { id: r.data.id, url: URL.createObjectURL(picked) };
       stage(next);
@@ -117,30 +116,27 @@ function ProfileForm({ initial, send, setProfile }: { initial: Profile; send: Se
     pick.current?.focus(); // the remove button is gone
   };
 
-  // Enter in a field submits the form without the save button, so one save at a time is kept here, synchronously.
   // A save submitted during an upload waits for it, then saves with the new picture, or not at all if it failed.
-  const inFlight = useRef(false);
   const submit = async (e: FormEvent) => {
     e.preventDefault();
-    if (inFlight.current) return;
-    inFlight.current = true;
-    setSaving(true);
-    setStatus("");
-    setInvalid(null);
-    const avatar = pending.current ? await pending.current : staged;
-    if (avatar === false) {
-      inFlight.current = false;
-      setSaving(false);
-      return;
-    }
-    setError("");
-    const r = await send<Profile>("PATCH", "/api/admin/profile", {
-      display_name: name,
-      handle: handle || null,
-      ...(avatar !== undefined && { avatar_id: avatar && avatar.id }),
+    const r = await saveRun(async (signal) => {
+      setStatus("");
+      setInvalid(null);
+      const avatar = pending.current ? await pending.current : staged;
+      if (avatar === false) return null;
+      setError("");
+      return send<Profile>(
+        "PATCH",
+        "/api/admin/profile",
+        {
+          display_name: name,
+          handle: handle || null,
+          ...(avatar !== undefined && { avatar_id: avatar && avatar.id }),
+        },
+        signal,
+      );
     });
-    inFlight.current = false;
-    setSaving(false);
+    if (!r) return;
     if (!r.ok) {
       if (r.status === 401) return;
       setError(r.message);

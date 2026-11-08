@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Avatar } from "./App";
 import type { AdminPageProps } from "./adminPages";
 import { Button } from "./EntryEditor";
+import { useRequest } from "./useRequest";
 
 // A link row per page, with what that page holds: the entry count and the poster.
 export default function AdminOverview({ send, profile, loadProfile, active }: AdminPageProps) {
@@ -9,15 +10,14 @@ export default function AdminOverview({ send, profile, loadProfile, active }: Ad
   const [state, setState] = useState<"loading" | "ok" | "failed">("loading");
   const [error, setError] = useState("");
   // Only the newest load may write, and none after unmount, so a slow older reply cannot overwrite a newer count.
-  const generation = useRef(0);
-  useEffect(() => () => void generation.current++, []);
+  const { run } = useRequest("load");
 
   // quiet: a refresh keeps the shown count until the new one arrives.
   const load = async (quiet = false) => {
-    const mine = ++generation.current;
     if (!quiet) setState("loading");
-    const [c, p] = await Promise.all([send<{ entry_count: number }>("GET", "/api/admin/overview"), loadProfile()]);
-    if (mine !== generation.current) return;
+    const [c, p] = await run((signal) =>
+      Promise.all([send<{ entry_count: number }>("GET", "/api/admin/overview", undefined, signal), loadProfile()]),
+    );
     const failed = !c.ok ? c : !p.ok ? p : null;
     if (c.ok) setCount(c.data.entry_count);
     setError(failed ? failed.message : "");

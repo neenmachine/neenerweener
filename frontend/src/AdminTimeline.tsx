@@ -5,30 +5,29 @@ import type { AdminPageProps } from "./adminPages";
 import { Attachments, useAttachments } from "./attachments";
 import { Button, Editor, EntryRow } from "./EntryEditor";
 import type { Entry, Timeline } from "./timelineTypes";
+import { useRequest } from "./useRequest";
 
 // The timeline page: compose, then every entry with edit and delete.
 export default function AdminTimeline({ send, expire, profile, loadProfile }: AdminPageProps) {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [cursor, setCursor] = useState<number | null>(null);
   const [list, setList] = useState<"loading" | "ok" | "failed">("loading");
-  const [more, setMore] = useState(false);
   const [listError, setListError] = useState("");
   // The first page's clock, which every entry here is shown with.
   const [now, setNow] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
-  const [posting, setPosting] = useState(false);
+  const { run: postRun, busy: posting } = useRequest("submit");
+  const { run: moreRun, busy: more } = useRequest("submit");
   const [postError, setPostError] = useState("");
   const [status, setStatus] = useState("");
   const images = useAttachments(expire);
-  const inFlight = useRef(false);
-  const moreFlight = useRef(false);
   const listRef = useRef<HTMLDivElement>(null);
   const compose = useRef<HTMLTextAreaElement>(null);
   // Index of the entry whose edit button gets focus after a delete removes the focused one.
   const focusAt = useRef<number | null>(null);
 
-  const page = async (before: number | null) => {
-    const r = await send<Timeline>("GET", before ? `/api/timeline?before=${before}` : "/api/timeline");
+  const page = async (before: number | null, signal?: AbortSignal) => {
+    const r = await send<Timeline>("GET", before ? `/api/timeline?before=${before}` : "/api/timeline", undefined, signal);
     if (!r.ok) return r;
     setEntries((prev) => [...prev, ...r.data.entries.filter((e) => !prev.some((p) => p.id === e.id))]);
     setCursor(r.data.next_cursor);
@@ -61,25 +60,21 @@ export default function AdminTimeline({ send, expire, profile, loadProfile }: Ad
   }, [entries]);
 
   const loadMore = async () => {
-    if (moreFlight.current || cursor === null) return;
-    moreFlight.current = true;
-    setMore(true);
-    setStatus("loading");
-    const r = await page(cursor);
-    moreFlight.current = false;
-    setMore(false);
+    if (cursor === null) return;
+    const r = await moreRun((signal) => {
+      setStatus("loading");
+      return page(cursor, signal);
+    });
     setListError(r.ok ? "" : r.message);
     setStatus(r.ok ? `${r.data.entries.length} more loaded` : r.message);
   };
 
   const post = async () => {
-    if (inFlight.current || images.uploading) return;
-    inFlight.current = true;
-    setPosting(true);
-    setPostError("");
-    const r = await createTimeline(draft, images.payload());
-    inFlight.current = false;
-    setPosting(false);
+    if (images.uploading) return;
+    const r = await postRun((signal) => {
+      setPostError("");
+      return createTimeline(draft, images.payload(), signal);
+    });
     if (!r.ok) return r.status === 401 ? expire() : setPostError(r.message);
     setEntries((prev) => [r.data, ...prev]);
     setDraft("");

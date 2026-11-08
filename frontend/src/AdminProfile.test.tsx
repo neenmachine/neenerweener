@@ -274,3 +274,64 @@ test("while saving, the button says saving and a second save is ignored", async 
   await flush();
   expect(statusText()).toBe("profile saved");
 });
+
+// Enter in a text field submits the form itself, past the save button's busy guard (jsdom has no implicit submission).
+async function enter(input: HTMLInputElement) {
+  input.focus();
+  await act(async () => {
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    input.form!.requestSubmit();
+  });
+  for (let i = 0; i < 3; i++) await flush();
+}
+
+test("enter in a field while a save is pending starts no second save", async () => {
+  let answer: (r: Reply) => void = () => {};
+  const s = await render();
+  const patches = () => s.fetch.mock.calls.filter(([url, init]) => url === "/api/admin/profile" && init?.method === "PATCH").length;
+  s.fetch.mockImplementationOnce(() => new Promise<Reply>((resolve) => (answer = resolve)));
+  await type(field("display-name"), "first name");
+  await enter(field("display-name"));
+  expect(patches()).toBe(1);
+  await type(field("display-name"), "second name");
+  await enter(field("display-name"));
+  await enter(field("handle"));
+  expect(patches()).toBe(1);
+  await act(async () => answer(ok({ ...fixture, display_name: "first name", avatar_initial: "F" })));
+  for (let i = 0; i < 3; i++) await flush();
+  expect(field("display-name").value).toBe("first name");
+  expect(document.querySelector(".admin-session .identity")!.textContent).toBe("Ffirst name");
+  expect(statusText()).toBe("profile saved");
+});
+
+test("enter in a field while a picture uploads does not save without it", async () => {
+  let answer: (r: Reply) => void = () => {};
+  const s = await render();
+  s.fetch.mockImplementationOnce(() => new Promise<Reply>((resolve) => (answer = resolve)));
+  await pickFile("choose picture");
+  await enter(field("handle"));
+  // the held upload skips the stub's call log, so count from the mock itself
+  expect(s.fetch.mock.calls.filter(([url]) => url.startsWith("/api/admin/profile")).map(([, init]) => init?.method)).toEqual(["POST"]);
+  await act(async () => answer(ok({ id: "staged-late" })));
+  for (let i = 0; i < 3; i++) await flush();
+  await enter(field("handle"));
+  expect((s.mutations().at(-1)!.body as { avatar_id: string }).avatar_id).toBe("staged-late");
+});
+
+test("the file input offers only the formats the server takes", async () => {
+  await render();
+  expect(page().querySelector('input[type="file"]')!.getAttribute("accept")).toBe("image/jpeg,image/png,image/webp");
+});
+
+test("an upload that answers after log out makes no preview URL", async () => {
+  let answer: (r: Reply) => void = () => {};
+  const s = await render();
+  const created = vi.spyOn(URL, "createObjectURL");
+  s.fetch.mockImplementationOnce(() => new Promise<Reply>((resolve) => (answer = resolve)));
+  await pickFile("choose picture");
+  await click([...document.querySelectorAll("button")].find((b) => b.textContent?.startsWith("log out"))!);
+  expect(document.querySelector("form.profile")).toBeNull();
+  await act(async () => answer(ok({ id: "staged-late" })));
+  for (let i = 0; i < 3; i++) await flush();
+  expect(created).not.toHaveBeenCalled();
+});

@@ -69,7 +69,15 @@ function ProfileForm({ initial, send, setProfile }: { initial: Profile; send: Se
     preview.current = next ? next.url : null;
     setStaged(next);
   };
-  useEffect(() => () => void (preview.current && URL.revokeObjectURL(preview.current)), []);
+  // Off once the form goes, so an upload that answers after sign-out makes no preview URL nobody revokes.
+  const mounted = useRef(true);
+  useEffect(
+    () => () => {
+      mounted.current = false;
+      if (preview.current) URL.revokeObjectURL(preview.current);
+    },
+    [],
+  );
 
   const edited = () => {
     setStatus("");
@@ -84,6 +92,7 @@ function ProfileForm({ initial, send, setProfile }: { initial: Profile; send: Se
     setError("");
     setStatus("");
     const r = await send<{ id: string }>("POST", "/api/admin/profile/avatar", picked);
+    if (!mounted.current) return;
     setUploading(false);
     if (r.ok) return stage({ id: r.data.id, url: URL.createObjectURL(picked) });
     if (r.status === 401) return; // the shell asks to log in again; the form stays as it is
@@ -97,8 +106,12 @@ function ProfileForm({ initial, send, setProfile }: { initial: Profile; send: Se
     pick.current?.focus(); // the remove button is gone
   };
 
+  // Enter in a field submits the form without the save button, so one save at a time is kept here, synchronously.
+  const inFlight = useRef(false);
   const submit = async (e: FormEvent) => {
-    e.preventDefault(); // a busy or off save button already stops its own submit
+    e.preventDefault();
+    if (inFlight.current || uploading) return;
+    inFlight.current = true;
     setSaving(true);
     setError("");
     setStatus("");
@@ -108,6 +121,7 @@ function ProfileForm({ initial, send, setProfile }: { initial: Profile; send: Se
       handle: handle || null,
       ...(staged !== undefined && { avatar_id: staged && staged.id }),
     });
+    inFlight.current = false;
     setSaving(false);
     if (!r.ok) {
       if (r.status === 401) return;
@@ -135,7 +149,7 @@ function ProfileForm({ initial, send, setProfile }: { initial: Profile; send: Se
         ) : (
           <Avatar profile={staged === null ? { ...saved, avatar_id: null } : saved} size={88} />
         )}
-        <input ref={file} type="file" accept="image/*" hidden onChange={upload} />
+        <input ref={file} type="file" accept="image/jpeg,image/png,image/webp" hidden onChange={upload} />
         <div className="picture-buttons">
           <Button
             ref={pick}

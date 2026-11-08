@@ -2,7 +2,7 @@
 // error text, and the empty-text check. Used by /admin and by the composer on /timeline; lazy loaded.
 
 import { fetchWithSignal } from "./request";
-import type { Entry } from "./timelineTypes";
+import type { Entry, Profile } from "./timelineTypes";
 
 export type AdminEntry = Entry & { body_markdown: string };
 export type Session = { authenticated: false } | { authenticated: true; csrf_token: string };
@@ -16,6 +16,29 @@ export const length = (s: string) => [...s].length;
 const PYTHON_SPACE = /^[\t-\r\x1c-\x20\x85\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]*$/;
 // The only client gate on the submit buttons. Every other rule (NUL, length, links) is the server's: its 422 shows inline.
 export const hasText = (s: string) => !PYTHON_SPACE.test(s);
+
+// Tabs of this browser tell each other a saved profile, so open admin views (the shell, the profile form, the /timeline
+// composer) show it without a reload. A channel never receives its own posts; close it on unmount. A message that is
+// not a profile is ignored; without BroadcastChannel the channel does nothing.
+export type ProfileChannel = Pick<BroadcastChannel, "postMessage" | "close">;
+export function profileChannel(apply: (profile: Profile) => void): ProfileChannel {
+  if (typeof BroadcastChannel === "undefined") return { postMessage() {}, close() {} };
+  const c = new BroadcastChannel("profile");
+  c.onmessage = (e: MessageEvent<unknown>) => isProfile(e.data) && apply(e.data);
+  return c;
+}
+const isProfile = (d: unknown): d is Profile => {
+  const p = d as Record<string, unknown> | null;
+  const text = (v: unknown) => typeof v === "string";
+  return (
+    typeof p === "object" &&
+    p !== null &&
+    text(p.display_name) &&
+    (p.handle === null || text(p.handle)) &&
+    (p.avatar_id === null || text(p.avatar_id)) &&
+    text(p.avatar_initial)
+  );
+};
 
 // In memory only: never in storage, the URL, or the DOM.
 let csrf: string | null = null;

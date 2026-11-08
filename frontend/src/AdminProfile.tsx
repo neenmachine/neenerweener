@@ -34,7 +34,7 @@ export default function AdminProfile({ send, profile, loadProfile, setProfile }:
           <Button onClick={load} label="retry" />
         </div>
       )}
-      {state === "ok" && profile && <ProfileForm initial={profile} send={send} setProfile={setProfile} />}
+      {state === "ok" && profile && <ProfileForm profile={profile} send={send} setProfile={setProfile} />}
     </>
   );
 }
@@ -48,11 +48,22 @@ const firstInvalid = (name: string, handle: string) =>
 // only on save profile. undefined: keep the saved picture; null: remove it; otherwise the staged upload.
 type Staged = undefined | null | { id: string; url: string };
 
-function ProfileForm({ initial, send, setProfile }: { initial: Profile; send: Send; setProfile: (p: Profile) => void }) {
-  const [saved, setSaved] = useState(initial);
-  const [name, setName] = useState(initial.display_name);
-  const [handle, setHandle] = useState(initial.handle ?? "");
+function ProfileForm({ profile, send, setProfile }: { profile: Profile; send: Send; setProfile: (p: Profile) => void }) {
+  const [saved, setSaved] = useState(profile);
+  const [name, setName] = useState(profile.display_name);
+  const [handle, setHandle] = useState(profile.handle ?? "");
   const [staged, setStaged] = useState<Staged>(undefined);
+  // A field the user typed in since the last save, even back to the saved text.
+  const [nameDirty, setNameDirty] = useState(false);
+  const [handleDirty, setHandleDirty] = useState(false);
+  // A profile saved in another tab: an untouched field takes the new value; typed text stays, and so does a staged
+  // picture.
+  useEffect(() => {
+    if (profile === saved) return;
+    if (!nameDirty) setName(profile.display_name);
+    if (!handleDirty) setHandle(profile.handle ?? "");
+    setSaved(profile);
+  }, [profile]);
   // A new pick supersedes an upload still running; one save at a time (Enter in a field submits without the button).
   const { run: uploadRun, busy: uploading } = useRequest("load");
   const { run: saveRun, busy: saving } = useRequest("submit");
@@ -150,6 +161,8 @@ function ProfileForm({ initial, send, setProfile }: { initial: Profile; send: Se
     setSaved(r.data);
     setName(r.data.display_name);
     setHandle(r.data.handle ?? "");
+    setNameDirty(false);
+    setHandleDirty(false);
     setProfile(r.data);
     setStatus("profile saved");
   };
@@ -186,7 +199,7 @@ function ProfileForm({ initial, send, setProfile }: { initial: Profile; send: Se
             autoComplete="off"
             aria-invalid={invalid === "name" || undefined}
             aria-describedby="profile-error"
-            onChange={(e) => (setName(e.target.value), edited())}
+            onChange={(e) => (setName(e.target.value), setNameDirty(true), edited())}
           />
         </div>
         <div>
@@ -206,7 +219,7 @@ function ProfileForm({ initial, send, setProfile }: { initial: Profile; send: Se
               spellCheck={false}
               aria-invalid={invalid === "handle" || undefined}
               aria-describedby="profile-error"
-              onChange={(e) => (setHandle(e.target.value), edited())}
+              onChange={(e) => (setHandle(e.target.value), setHandleDirty(true), edited())}
             />
           </div>
         </div>

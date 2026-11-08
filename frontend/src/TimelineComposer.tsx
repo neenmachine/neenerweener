@@ -1,6 +1,6 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Avatar } from "./App";
-import { createTimeline, hasText, LIMIT, length } from "./adminApi";
+import { createTimeline, hasText, LIMIT, length, profileChannel } from "./adminApi";
 import { Attachments, useAttachments } from "./attachments";
 import type { Entry, Profile } from "./timelineTypes";
 import { useRequest } from "./useRequest";
@@ -16,6 +16,12 @@ export default function TimelineComposer({
   onCreated: (entry: Entry) => void;
   onExpired: () => void;
 }) {
+  // The page's profile until another tab saves a new one; the entries below keep the server's until a reload.
+  const [poster, setPoster] = useState(profile);
+  useEffect(() => {
+    const c = profileChannel(setPoster);
+    return () => c.close();
+  }, []);
   const [text, setText] = useState("");
   const { run, busy } = useRequest("submit");
   const [error, setError] = useState("");
@@ -49,7 +55,7 @@ export default function TimelineComposer({
         post();
       }}
     >
-      <Avatar profile={profile} />
+      <Avatar profile={poster} />
       <div>
         <textarea
           ref={textarea}

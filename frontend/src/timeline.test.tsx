@@ -248,6 +248,39 @@ test("the composer shows the poster's avatar beside the box, only after the sess
   expect(form.children[1].contains(textarea())).toBe(true);
 });
 
+test("a profile saved in another tab changes the composer's avatar; the server's entries keep theirs; unmount closes", { timeout: 5000 }, async () => {
+  const other = new BroadcastChannel("profile"); // the profile page in another tab
+  const open = new Set<BroadcastChannel>();
+  vi.stubGlobal(
+    "BroadcastChannel",
+    class extends BroadcastChannel {
+      constructor(name: string) {
+        super(name);
+        open.add(this);
+      }
+      close() {
+        open.delete(this);
+        super.close();
+      }
+    },
+  );
+  try {
+    await openAdmin(true, signedIn, page([4], null));
+    await showsComposer();
+    const avatar = "00000000-0000-4000-8000-00000000000a";
+    other.postMessage({ display_name: "new name", handle: "new_handle", avatar_id: avatar, avatar_initial: "N" });
+    await until(() => !!textarea()!.form!.querySelector("img.avatar"), "composer picture");
+    expect(textarea()!.form!.querySelector("img.avatar")!.getAttribute("src")).toBe(`/media/${avatar}/sm.webp`);
+    expect(document.querySelector("#entry-4 .avatar")!.outerHTML).toBe('<div class="avatar" aria-hidden="true">F</div>');
+    expect(open.size).toBe(1);
+    act(() => root!.unmount());
+    root = undefined;
+    expect(open.size).toBe(0);
+  } finally {
+    other.close();
+  }
+});
+
 test("entries share the first page's now: a new entry says now, an older page keeps the first page's clock", { timeout: 5000 }, async () => {
   const older = { ...page([3], null), now: "2027-06-01T00:00:00+00:00" };
   await openAdmin(true, (url) => (url === "/api/timeline?before=4" ? reply(200, older) : signedIn(url)), page([4], 4));

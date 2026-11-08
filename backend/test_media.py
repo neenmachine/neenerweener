@@ -487,6 +487,16 @@ def test_bearer_upload_stores_a_row_and_needs_timeline_create(media_db):
     assert (denied.status_code, denied.json()) == (403, {"detail": "insufficient scope"})
 
 
+def test_profile_patch_needs_browser_csrf_and_rejects_bearer(media_db, monkeypatch):
+    _machine, _store = media_db
+    monkeypatch.setenv("ADMIN_PASSWORD_HASH", hash_password("fixture-password"))
+    client = TestClient(app.app, base_url="http://127.0.0.1")
+    login = client.post("/api/admin/login", headers={"Origin": "http://127.0.0.1"}, json={"password": "fixture-password"})
+    assert login.status_code == 204
+    missing = client.patch("/api/admin/profile", headers={"Origin": "http://127.0.0.1"}, json={"display_name": "neenerweener", "handle": None})
+    assert (missing.status_code, missing.json()) == (403, {"detail": "csrf validation failed"})
+
+
 def test_browser_upload_needs_origin_and_csrf(media_db, monkeypatch):
     _machine, store = media_db
     monkeypatch.setenv("ADMIN_PASSWORD_HASH", hash_password("fixture-password"))

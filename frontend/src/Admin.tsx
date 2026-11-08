@@ -184,7 +184,7 @@ export default function Admin() {
             .map(({ path: at, Page }) => (
               <div key={at} className="admin-page" hidden={at !== path}>
                 <Suspense>
-                  <Page send={send} expire={expire} profile={profile} loadProfile={loadProfile} active={signedIn && at === path} />
+                  <Page send={send} expire={expire} profile={profile} loadProfile={loadProfile} setProfile={setProfile} active={signedIn && at === path} />
                   <Loaded onLoad={focusHeading} />
                 </Suspense>
               </div>

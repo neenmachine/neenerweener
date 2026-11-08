@@ -819,6 +819,126 @@ main.admin-shell {
   }
 }
 
+/* Profile: the picture and its buttons on the left, the fields on the right; stacked on phones. */
+.profile {
+  display: flex;
+  align-items: start;
+  gap: 1.6rem;
+}
+
+.profile .picture {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  gap: 10px;
+  width: 9.6rem;
+}
+
+.avatar.preview {
+  width: 88px;
+  height: 88px;
+  font-size: 2.2667rem;
+}
+
+.picture-buttons {
+  display: flex;
+  flex-direction: column;
+  align-items: start;
+  gap: 0.4rem;
+}
+
+.picture-buttons .button {
+  font-size: 0.9rem;
+}
+
+.profile .fields {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+
+.profile #display-name {
+  width: min(100%, 24rem);
+}
+
+/* The handle's border is on this wrapper, so the @ sits inside it; the input inside has none. */
+.handle-field {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  width: min(100%, 18rem);
+  padding: 0 0.65rem;
+  border: 1px solid color-mix(in srgb, var(--fg) 14%, transparent);
+  border-radius: 6px;
+  color: var(--muted);
+  cursor: text;
+  transition: border-color 0.15s;
+}
+
+.handle-field:hover {
+  border-color: color-mix(in srgb, var(--fg) 24%, transparent);
+}
+
+.handle-field:focus-within {
+  border-color: color-mix(in srgb, var(--fg) 40%, transparent);
+}
+
+.handle-field:has([aria-invalid="true"]) {
+  border-color: var(--error);
+}
+
+.handle-field input {
+  flex: 1;
+  min-width: 0;
+  padding-inline: 0;
+  border: none;
+  color: var(--fg);
+}
+
+/* The save button and its status, then the error under them; the empty error takes no space. */
+.save-row {
+  padding-top: 4px;
+}
+
+.save-row .admin-row {
+  gap: 0.5rem 14px;
+}
+
+.save-row p {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.save-row .error:not(:empty) {
+  margin-top: 0.5rem;
+}
+
+@media (max-width: 760px) {
+  .profile {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .profile .picture {
+    width: auto;
+  }
+
+  .avatar.preview {
+    width: 72px;
+    height: 72px;
+    font-size: 1.8667rem;
+  }
+}
+
+@media (max-width: 760px), (pointer: coarse) {
+  .handle-field {
+    font-size: 16px;
+  }
+}
+
 .editor {
   margin-bottom: 1rem;
 }

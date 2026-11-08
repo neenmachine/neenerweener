@@ -517,6 +517,7 @@ def test_bearer_create_and_authorization_precedence(machine_app, monkeypatch):
     entry_id = created.json()["id"]
     for method, path, body in (
         ("get", f"/api/admin/timeline/{entry_id}", None),
+        ("get", "/api/admin/overview", None),
         ("patch", f"/api/admin/timeline/{entry_id}", {"body_markdown": "changed"}),
         ("delete", f"/api/admin/timeline/{entry_id}", None),
     ):

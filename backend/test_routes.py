@@ -189,6 +189,29 @@ def test_route_table(site, case):
         assert {key: preload[key] for key in case["data"]} == case["data"]
 
 
+ADMIN_PAGES = json.loads((Path(__file__).parents[1] / "frontend/src/route_cases.json").read_text())["admin_pages"]
+
+
+def test_server_admin_pages_equal_the_shared_admin_page_rows():
+    # The client registry (adminPages.tsx) is held to the same rows by admin_shell.test.tsx.
+    served = [{"path": "/admin" + (f"/{section}" if section else ""), "label": label} for section, label in routes.ADMIN_PAGES.items()]
+    assert served == ADMIN_PAGES
+    for row in ADMIN_PAGES:
+        assert routes.match(row["path"])[0] == "admin"
+    for path in ("/admin/settings", "/admin/timelines", "/admin/timeline/1", "/admin/x/profile", "/admin/overview"):
+        assert routes.match(path) is None
+
+
+@pytest.mark.parametrize("row", ADMIN_PAGES, ids=[row["path"] for row in ADMIN_PAGES])
+def test_admin_page_title_is_its_label_then_admin(site, row):
+    response = site.get(row["path"])
+    assert response.status_code == 200
+    assert response.headers["X-Robots-Tag"] == "noindex"
+    assert response.headers["cache-control"] == "no-store"
+    assert re.search(r"<title>(.*?)</title>", response.text)[1] == f"{row['label']} · admin"
+    assert '<meta name="robots" content="noindex">' in response.text
+
+
 def test_every_page_kind_has_a_renderer():
     assert set(app.RENDERERS) == {kind for kind, _ in routes.ROUTES}
 

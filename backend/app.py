@@ -759,6 +759,17 @@ def update_profile(
         raise HTTPException(503, "admin unavailable") from exc
 
 
+@app.get("/api/admin/overview")
+def admin_overview(_access: Access = Depends(require_browser_read)):
+    try:
+        return {"entry_count": _timeline_storage().count()}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("timeline storage unavailable: %s", type(exc).__name__)
+        raise HTTPException(503, "admin unavailable") from exc
+
+
 @app.get("/api/admin/timeline/{entry_id}")
 def get_admin_timeline(
     entry_id: int,
@@ -1179,8 +1190,8 @@ def timeline_before(request: Request) -> int | None:
     return int(values[0])
 
 
-def admin_page(request: Request) -> tuple[dict, dict, str, int]:
-    return {}, {"title": "admin", "robots": "noindex"}, ADMIN_SHELL, 200
+def admin_page(request: Request, section: str = "") -> tuple[dict, dict, str, int]:
+    return {}, {"title": f"{routes.ADMIN_PAGES[section]} · admin", "robots": "noindex"}, ADMIN_SHELL, 200
 
 
 # Mirrors the admin Suspense fallback in App.tsx, so the first paint is already the shell React renders.

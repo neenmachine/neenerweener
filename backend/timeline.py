@@ -119,6 +119,7 @@ def database_engine(database_url: str, **kwargs) -> Engine:
 class TimelineStoreProtocol(Protocol):
     def list(self, before: int | None, limit: int) -> list[dict]: ...
     def get(self, entry_id: int) -> dict | None: ...
+    def count(self) -> int: ...
     def create(self, body_markdown: str, attachments: Sequence[tuple[uuid.UUID, str]] = ()) -> dict: ...
     def update(
         self, entry_id: int, body_markdown: str, attachments: Sequence[tuple[uuid.UUID, str]] | None = None
@@ -192,6 +193,10 @@ class TimelineStore:
             rows = [dict(row) for row in connection.execute(query).mappings()]
             media = media_for(connection, [row["id"] for row in rows])
         return [{**row, "media": media.get(row["id"], [])} for row in rows]
+
+    def count(self) -> int:
+        with self.engine.connect() as connection:
+            return connection.execute(select(func.count()).select_from(timeline_entries)).scalar_one()
 
     def get(self, entry_id: int) -> dict | None:
         with self.engine.connect() as connection:

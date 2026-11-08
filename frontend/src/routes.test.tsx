@@ -50,13 +50,13 @@ test.each(pages.map((row) => [row.path, row] as const))("%s renders the server's
   if (row.markup) expect(document.getElementById("root")!.innerHTML).toBe(row.markup);
 });
 
-test.each(pages.map((row) => [row.path, row] as const))("%s has one footer feed link", async (_, row) => {
+test.each(pages.map((row) => [row.path, row] as const))("%s has one footer rss link", async (_, row) => {
   await render(row.path, { page: row.page, ...row.data }, row.fetched);
   const footer = document.querySelector("main > footer")!;
   // A project page is a repo browser and has no site footer.
   if ((row.page as { kind: string }).kind === "code") return expect(footer).toBeNull();
   expect(footer.querySelectorAll('a[href="/feed.xml"]')).toHaveLength(1);
-  expect(footer.querySelector('a[href="/feed.xml"]')!.outerHTML).toBe('<a href="/feed.xml">feed</a>');
+  expect(footer.querySelector('a[href="/feed.xml"]')!.outerHTML).toBe('<a href="/feed.xml">rss</a>');
   const current = [...footer.querySelectorAll('a[aria-current="page"]')].map((a) => a.getAttribute("href"));
   expect(current).toEqual(({ "/": ["/"], "/timeline": ["/timeline"] } as Record<string, string[]>)[row.path] ?? []);
 });

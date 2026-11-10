@@ -37,6 +37,7 @@ export default function App() {
       return (
         <main className="wide">
           <ProjectPage name={page.project} path={page.path ?? ""} />
+          <Footer />
         </main>
       );
     case "admin":
@@ -753,7 +754,6 @@ function ProjectPage({ name, path }: { name: string; path: string }) {
       <>
         {crumbs}
         <p className="muted">project not found</p>
-        <Footer />
       </>
     );
   if (!data) return crumbs;
@@ -774,7 +774,7 @@ function ProjectPage({ name, path }: { name: string; path: string }) {
 
 function Folder({ project, path }: { project: Project; path: string }) {
   const { dirs, files } = children(project.files, path);
-  if (!dirs.length && !files.length) return <><p className="muted">file not found</p><Footer /></>;
+  if (!dirs.length && !files.length) return <p className="muted">file not found</p>;
   const prefix = path && path + "/";
   return (
     <>
@@ -832,7 +832,7 @@ function FileView({ project, path }: { project: string; path: string }) {
     if (lines) document.getElementById(location.hash.slice(1))?.scrollIntoView();
   }, [data]);
   if (error)
-    return <><p className="muted">file not found</p><Footer /></>;
+    return <p className="muted">file not found</p>;
   if (!data) return null;
   const raw = `/code-raw/${project}/${encoded}`;
   const copy = () => {

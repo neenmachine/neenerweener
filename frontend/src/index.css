@@ -120,13 +120,19 @@ main > footer,
   font-size: 0.9em;
 }
 
-/* A 44px tap target; the negative margin keeps the footer looking the same. */
+/* A 44px tap target with room for the inset focus ring; the negative margin keeps the footer looking the same. */
 main > footer a,
 .admin-content > footer a {
-  padding-block: 0.8rem;
-  margin-block: -0.8rem;
+  padding: 0.8rem 0.35rem;
+  margin: -0.8rem -0.35rem;
   color: var(--muted);
   text-decoration: none;
+}
+
+/* Inset, so the ring stays inside the window: the footer ends at the window edge. */
+main > footer a:focus-visible,
+.admin-content > footer a:focus-visible {
+  outline-offset: -2px;
 }
 
 :is(main, .admin-content) > footer a:first-child {
@@ -1434,7 +1440,8 @@ main.wide {
 .tree {
   position: sticky;
   top: 1.5rem;
-  max-height: calc(100vh - 3rem);
+  /* Ends 1rem above the sticky footer (3.5rem tall plus the safe area). */
+  max-height: calc(100dvh - 6rem - env(safe-area-inset-bottom));
   overflow-y: auto;
   font-size: 0.9em;
 }

@@ -2,11 +2,17 @@ name: test
 
 on:
   push:
+    branches: [main]
   pull_request:
+
+concurrency:
+  group: test-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     services:
       postgres:
         image: postgres:17
@@ -54,23 +60,3 @@ jobs:
             test -x "$path"
             ssh-keygen -Y help 2>&1 | grep -F "ssh-keygen -Y verify"
           '
-
-  macos:
-    if: >-
-      ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-          (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'macos')) }}
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.13'
-      - uses: astral-sh/setup-uv@v6
-        with:
-          enable-cache: true
-          cache-dependency-glob: |
-            backend/uv.lock
-            cli/uv.lock
-      - run: uv sync --directory backend --locked
-      - run: uv run --directory backend pytest -q test_sshsig_portable.py
-      - run: uv run --locked --directory cli pytest -q

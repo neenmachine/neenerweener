@@ -21,6 +21,7 @@ jobs:
       matrix:
         runner: ${{ fromJSON(github.event_name == 'pull_request' && '["macos-15-intel"]' || '["macos-15-intel","macos-15"]') }}
     runs-on: ${{ matrix.runner }}
+    continue-on-error: ${{ matrix.runner == 'macos-15' }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4

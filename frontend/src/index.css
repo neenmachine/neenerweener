@@ -84,20 +84,39 @@ main {
   padding: 3rem 1.25rem 6rem;
 }
 
-/* Pages with a footer fill the window, so a short page still has its footer at the bottom. */
+/* The footer is always in view, so focus and anchor scrolling stop above it. */
+html {
+  scroll-padding-bottom: calc(4rem + env(safe-area-inset-bottom));
+}
+
+/* Pages with a footer fill the window, so a short page still has its footer at the bottom.
+   No bottom padding: the footer carries it, so it can stick to the very bottom. */
 main:has(> footer) {
   display: flex;
   flex-direction: column;
   min-height: 100dvh;
-  padding-bottom: 2.5rem;
+  padding-bottom: 0;
 }
 
+/* The space above the footer: it fills a short page and is 3rem on a long one. order puts it after the page. */
+main:has(> footer)::before,
+.admin-content:not([hidden])::before {
+  content: "";
+  flex: 1 0 3rem;
+  order: 1;
+}
+
+/* Sticky, not fixed, so the footer keeps the page column and takes its own space at the end of the page. */
 main > footer,
 .admin-content > footer {
+  position: sticky;
+  bottom: 0;
+  order: 2;
   display: flex;
   gap: 1.5rem;
-  margin-top: auto;
-  padding-top: 5rem;
+  padding-block: 1.1rem calc(1.1rem + env(safe-area-inset-bottom));
+  border-top: 1px solid color-mix(in srgb, var(--fg) 8%, transparent);
+  background: var(--bg);
   font-size: 0.9em;
 }
 
@@ -548,7 +567,8 @@ main.admin-shell {
   grid-template-columns: 179px minmax(0, 1fr);
   align-items: start;
   max-width: 1000px;
-  padding-bottom: 2.5rem;
+  min-height: 100dvh;
+  padding-bottom: 0;
 }
 
 .admin-nav:not([hidden]) {
@@ -631,6 +651,7 @@ main.admin-shell {
 .admin-content:not([hidden]) {
   display: flex;
   flex-direction: column;
+  align-self: stretch;
   min-width: 0;
   padding-left: 39px;
   border-left: 1px solid color-mix(in srgb, var(--fg) 8%, transparent);
@@ -696,8 +717,9 @@ main.admin-shell {
 /* Under 760px the rail is a top bar (avatar, admin, log out) over a row of tabs, across the whole width. */
 @media (max-width: 760px) {
   main.admin-shell {
-    display: block;
-    padding: 0 0 2.5rem;
+    display: flex;
+    flex-direction: column;
+    padding: 0;
   }
 
   .admin-nav:not([hidden]) {
@@ -747,6 +769,7 @@ main.admin-shell {
   }
 
   .admin-content:not([hidden]) {
+    flex: 1;
     padding: 2rem 1.25rem 0;
     border-left: 0;
   }

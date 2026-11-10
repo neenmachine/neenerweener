@@ -16,7 +16,11 @@ jobs:
     if: >-
       ${{ github.event_name != 'pull_request' ||
           contains(github.event.pull_request.labels.*.name, 'macos') }}
-    runs-on: macos-15-intel
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: ${{ fromJSON(github.event_name == 'pull_request' && '["macos-15-intel"]' || '["macos-15-intel","macos-15"]') }}
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4

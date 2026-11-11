@@ -129,6 +129,7 @@ function start(s: FrameStart) {
     handle.addEventListener("pointerdown", (e) => {
       if (e.button !== 0) return;
       e.preventDefault();
+      handle.focus({ preventScroll: true }); // keys (Escape) now reach this frame
       handle.setPointerCapture(e.pointerId);
       const [x, from] = [e.clientX, shown()];
       let width = from;
@@ -156,6 +157,7 @@ function start(s: FrameStart) {
     img.addEventListener("pointerdown", (e) => {
       if (e.button !== 0) return;
       e.preventDefault();
+      box.focus({ preventScroll: true }); // keys (Escape) now reach this frame
       img.setPointerCapture(e.pointerId);
       const [x, y] = [e.clientX, e.clientY];
       let target: number | null = null;

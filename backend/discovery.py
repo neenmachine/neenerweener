@@ -47,7 +47,7 @@ def feed_html(body: str, post_url: str) -> str:
 @router.api_route("/feed.xml", methods=["GET", "HEAD"])
 def feed(request: Request) -> Response:
     try:
-        posts = app.post_catalog.list_public()
+        posts = [post for post in app.post_catalog.list_public() if not post["draft"]]
     except app.CatalogUnavailable as exc:
         raise app._catalog_unavailable(exc) from exc
     root = Element("feed", {"xmlns": ATOM})
@@ -94,7 +94,7 @@ def sitemap(request: Request) -> Response:
     add("/")
     add("/timeline")
     try:
-        posts = app.post_catalog.list_public()
+        posts = [post for post in app.post_catalog.list_public() if not post["draft"]]
     except app.CatalogUnavailable as exc:
         raise app._catalog_unavailable(exc) from exc
     for post in posts:

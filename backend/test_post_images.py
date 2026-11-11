@@ -131,6 +131,8 @@ def test_inline_image_moves_out_of_its_line_to_stand_alone():
     assert edit(post_images.move, body, A, 0) == f"{IMAGE}\n\none  two\n\nthree\n"
     assert edit(post_images.move, body, A, 1) == f"one  two\n\n{IMAGE}\n\nthree\n"
     assert edit(post_images.move, body, A, 2) == f"one  two\n\nthree\n\n{IMAGE}\n"
+    # The body keeps its own ending: no final line break is added where there was none.
+    assert edit(post_images.move, body.rstrip("\n"), A, 2) == f"one  two\n\nthree\n\n{IMAGE}"
 
 
 def test_move_adds_a_blank_line_where_the_block_before_has_none():
@@ -198,3 +200,20 @@ def test_resize_rejects_widths_outside_the_large_variant(width):
 def test_move_rejects_positions_outside_the_body(target):
     with pytest.raises(ValueError):
         edit(post_images.move, IMAGE + "\n", A, target)
+
+
+@pytest.mark.parametrize(
+    ("body", "tag"),
+    [
+        (f'one <img src="/media/{A}/lg.webp"> two -> three\n\npara\n', f'<img src="/media/{A}/lg.webp">'),
+        (f'<div>\n<img src="/media/{A}/lg.webp">\n</div>\n\npara\n', f'<img src="/media/{A}/lg.webp">'),
+        (f'<img src="/media/{A}/lg.webp">\n\npara\n', f'<img src="/media/{A}/lg.webp">'),
+    ],
+    ids=["inline", "in-div", "alone"],
+)
+def test_raw_img_span_ends_at_its_own_tag_when_src_is_the_last_attribute(body, tag):
+    assert A in images(body), "the image is editable"
+    span = images(body)[A]
+    assert body[span.start : span.end] == tag
+    for target in (0, blocks(body)):
+        assert_outside_unchanged(body, edit(post_images.move, body, A, target), tag)

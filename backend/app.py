@@ -913,6 +913,10 @@ POST_VALIDATION_DETAILS = {
     "invalid status",
     "live post needs title and body",
     "slug already used",
+    "invalid edit",
+    "unknown image",
+    "invalid position",
+    "invalid width",
 }
 
 

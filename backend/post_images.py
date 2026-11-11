@@ -14,6 +14,7 @@ from markdown_it import MarkdownIt
 from markdown_it.token import Token
 
 from media import LG_EDGE
+from posts import InvalidPost
 
 MANAGED_SRC = re.compile(r"/media/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/lg\.webp\Z")
 LINE_BREAK = re.compile(r"\r\n|\r|\n")
@@ -48,7 +49,7 @@ def _markdown_span(media_id: str) -> re.Pattern:
 
 def _raw_span(media_id: str) -> re.Pattern:
     # A raw <img>, or the captioned <figure> that resize writes for a captioned image.
-    img = r"<img\b[^>]*?\ssrc=([\"']?)/media/" + media_id + r"/lg\.webp\{n}[\s/>][^>]*>"
+    img = r"<img\b[^>]*?\ssrc=([\"']?)/media/" + media_id + r"/lg\.webp\{n}(?=[\s/>])[^>]*>"
     return re.compile(
         "<figure>" + img.format(n=1) + "<figcaption>[^<]*</figcaption></figure>|" + img.format(n=2), re.IGNORECASE
     )
@@ -147,7 +148,7 @@ def preview(md: MarkdownIt, body: str, finish: Callable[[str], str]) -> dict:
 def _image(source: Source, media_id: str) -> Image:
     image = source.images.get(media_id)
     if image is None:
-        raise ValueError("unknown image")
+        raise InvalidPost("unknown image")
     return image
 
 
@@ -162,7 +163,7 @@ def move(md: MarkdownIt, body: str, media_id: str, before: int) -> str:
     image = _image(source, media_id)
     starts = source.block_starts
     if not 0 <= before <= len(starts):
-        raise ValueError("invalid position")
+        raise InvalidPost("invalid position")
     if image.standalone and before in (image.block, image.block + 1):
         return body
     token = body[image.start : image.end]
@@ -176,9 +177,9 @@ def move(md: MarkdownIt, body: str, media_id: str, before: int) -> str:
         remove_start, remove_end = image.start, image.end
     if before == len(starts):
         rest = body[:remove_start] + body[remove_end:]
-        if rest == "" or rest.endswith(("\n\n", "\r\n\r\n")):
-            return rest + token + "\n"
-        return rest + ("\n" if rest.endswith(("\n", "\r")) else "\n\n") + token + "\n"
+        # The body keeps its own ending: a final line break only if it had one.
+        end = "\n" if rest.endswith(("\n", "\r")) else ""
+        return rest + ("" if _ends_blank(rest) else end or "\n\n") + token + end
     at = starts[before]
     if at <= remove_start:
         prefix = body[:at]
@@ -198,7 +199,7 @@ def _end_of_text_before(body: str, offset: int) -> int:
 def resize(md: MarkdownIt, body: str, media_id: str, width: int) -> str:
     """Give one image a width: a Markdown image becomes a raw <img>; a raw <img> changes only its width."""
     if not 1 <= width <= LG_EDGE:
-        raise ValueError("invalid width")
+        raise InvalidPost("invalid width")
     _, source = parse(md, body)
     image = _image(source, media_id)
     token = body[image.start : image.end]

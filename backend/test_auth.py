@@ -612,16 +612,16 @@ def test_admin_post_preview_moves_and_resizes_one_image_and_returns_its_source(c
     assert resized["body_markdown"] == f'one\n\n<img src="/media/{image_id}/lg.webp" alt="" width="640">\n\ntwo\n'
     assert resized["images"][0]["width"] == 640
 
-    for edit in (
-        {"media_id": image_id},
-        {"move_to": 0},
-        {"media_id": image_id, "move_to": 0, "width": 10},
-        {"media_id": image_id, "move_to": 9},
-        {"media_id": image_id, "width": 0},
-        {"media_id": "87654321-1234-1234-1234-123456789abc", "width": 10},
+    for detail, edit in (
+        ("invalid edit", {"media_id": image_id}),
+        ("invalid edit", {"move_to": 0}),
+        ("invalid edit", {"media_id": image_id, "move_to": 0, "width": 10}),
+        ("invalid position", {"media_id": image_id, "move_to": 9}),
+        ("invalid width", {"media_id": image_id, "width": 0}),
+        ("unknown image", {"media_id": "87654321-1234-1234-1234-123456789abc", "width": 10}),
     ):
         refused = client.post("/api/admin/posts/preview", headers=headers, json={"body_markdown": body, **edit})
-        assert (refused.status_code, refused.json()) == (422, {"detail": "invalid post"}), edit
+        assert (refused.status_code, refused.json()) == (422, {"detail": detail}), edit
 
 
 @pytest.mark.parametrize(

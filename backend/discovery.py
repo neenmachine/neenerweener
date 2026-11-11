@@ -2,10 +2,11 @@ from os import environ
 from urllib.parse import urljoin
 from xml.etree.ElementTree import Element, SubElement, tostring
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import Response, PlainTextResponse
 
 import app
+from cache import etag_response
 
 router = APIRouter()
 ATOM = "http://www.w3.org/2005/Atom"
@@ -21,11 +22,12 @@ def atom_date(value: str) -> str:
     return f"{value}T00:00:00Z"
 
 
-def xml_response(root: Element, media_type: str) -> Response:
-    return Response(
-        content=tostring(root, encoding="utf-8", xml_declaration=True),
-        media_type=media_type,
-        headers={"Cache-Control": CACHE_CONTROL},
+def xml_response(request: Request, root: Element, media_type: str) -> Response:
+    return etag_response(
+        request,
+        tostring(root, encoding="utf-8", xml_declaration=True),
+        media_type,
+        {"Cache-Control": CACHE_CONTROL},
     )
 
 
@@ -43,8 +45,11 @@ def feed_html(body: str, post_url: str) -> str:
 
 
 @router.api_route("/feed.xml", methods=["GET", "HEAD"])
-def feed() -> Response:
-    posts = [post for post in app.all_posts() if not post["draft"]]
+def feed(request: Request) -> Response:
+    try:
+        posts = [post for post in app.post_catalog.list_public() if not post["draft"]]
+    except app.CatalogUnavailable as exc:
+        raise app._catalog_unavailable(exc) from exc
     root = Element("feed", {"xmlns": ATOM})
     SubElement(root, "title").text = "neenerweener"
     SubElement(root, "id").text = f"{origin()}/feed.xml"
@@ -65,7 +70,7 @@ def feed() -> Response:
             SubElement(entry, "content", {"type": "text"}).text = post["excerpt"]
         else:
             SubElement(entry, "content", {"type": "html"}).text = feed_html(post["body"], url)
-    return xml_response(root, "application/atom+xml; charset=utf-8")
+    return xml_response(request, root, "application/atom+xml; charset=utf-8")
 
 
 @router.api_route("/robots.txt", methods=["GET", "HEAD"])
@@ -77,7 +82,7 @@ def robots() -> PlainTextResponse:
 
 
 @router.api_route("/sitemap.xml", methods=["GET", "HEAD"])
-def sitemap() -> Response:
+def sitemap(request: Request) -> Response:
     root = Element("urlset", {"xmlns": SITEMAP})
 
     def add(path: str, lastmod: str | None = None) -> None:
@@ -88,8 +93,12 @@ def sitemap() -> Response:
 
     add("/")
     add("/timeline")
-    for post in (post for post in app.all_posts() if not post["draft"]):
+    try:
+        posts = [post for post in app.post_catalog.list_public() if not post["draft"]]
+    except app.CatalogUnavailable as exc:
+        raise app._catalog_unavailable(exc) from exc
+    for post in posts:
         add(f"/posts/{post['slug']}", post["date"])
     for project in sorted(path.name for path in app.CODE_DIR.iterdir() if path.is_dir() and app.PROJECT.fullmatch(path.name)):
         add(f"/code/{project}")
-    return xml_response(root, "application/xml; charset=utf-8")
+    return xml_response(request, root, "application/xml; charset=utf-8")

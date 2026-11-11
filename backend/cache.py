@@ -1,7 +1,28 @@
+import hashlib
 from collections.abc import Mapping
+
+from fastapi import Request, Response
 
 
 NO_STORE_PREFIXES = ("/api/admin/", "/api/cli/auth/")
+
+
+def etag_response(
+    request: Request,
+    content: bytes,
+    media_type: str,
+    headers: dict[str, str] | None = None,
+    status_code: int = 200,
+) -> Response:
+    etag = f'"{hashlib.sha256(content).hexdigest()}"'
+    response_headers = {**(headers or {}), "ETag": etag}
+    candidates = {
+        value.strip().removeprefix("W/").strip()
+        for value in request.headers.get("if-none-match", "").split(",")
+    }
+    if etag in candidates or "*" in candidates:
+        return Response(status_code=304, headers=response_headers)
+    return Response(content=content, media_type=media_type, headers=response_headers, status_code=status_code)
 
 
 def cache_control(path: str, status: int, response_headers: Mapping[str, str]) -> str | None:

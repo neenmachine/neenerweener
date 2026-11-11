@@ -263,7 +263,12 @@ def test_draft_frontmatter_optional(tmp_path, monkeypatch):
         {"slug": "idea", "date": None, "title": "idea", "excerpt": None, "tags": [], "draft": True},
         {"slug": "planned", "date": "2026-04-01", "title": "Planned", "excerpt": None, "tags": [], "draft": True},
     ]
-    assert TestClient(app.app).get("/api/posts").json() == []
+    client = TestClient(app.app)
+    assert client.get("/api/posts").json() == [
+        {"slug": "idea", "date": None, "title": "idea", "excerpt": None, "tags": [], "draft": True},
+        {"slug": "planned", "date": "2026-04-01", "title": "Planned", "excerpt": None, "tags": [], "draft": True},
+    ]
+    assert client.get("/api/posts/idea").json()["draft"] is True
 
 
 def test_math():

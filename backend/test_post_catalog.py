@@ -83,7 +83,7 @@ def _site(tmp_path, monkeypatch, records, redirects=None, file_slug="file-post")
     monkeypatch.setattr(app, "DRAFTS_DIR", drafts)
     monkeypatch.setattr(app, "CODE_DIR", code)
     monkeypatch.setattr(app, "FRONTEND_DIST", dist)
-    monkeypatch.setenv("SHOW_DRAFTS", "1")
+    monkeypatch.delenv("SHOW_DRAFTS", raising=False)
     store = PublicStore(records, redirects)
     monkeypatch.setattr(app, "post_catalog", PostCatalog(lambda: app.all_posts(), store))
     return TestClient(app.app), store

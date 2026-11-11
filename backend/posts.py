@@ -6,6 +6,7 @@ import re
 import uuid
 from collections.abc import Callable, Collection, Sequence
 from datetime import date, datetime
+from html.parser import HTMLParser
 
 from sqlalchemy import (
     BigInteger,
@@ -51,8 +52,7 @@ MAX_BODY_CHARS = 1_000_000
 MAX_TAGS = 20
 MAX_TAG_CHARS = 50
 SLUG = re.compile(r"[a-z0-9-]{1,100}\Z")
-MEDIA_REFERENCE = re.compile(r"/media/([^\s)\"'<>]+)")
-MANAGED_MEDIA_REFERENCE = re.compile(r"([0-9a-fA-F-]{36})/(?:sm|lg)\.webp\Z")
+MANAGED_MEDIA_REFERENCE = re.compile(r"/media/([0-9a-fA-F-]{36})/(?:sm|lg)\.webp\Z")
 ACTIONS = ("save", "publish", "unpublish", "rename", "delete", "restore")
 
 web_posts = Table(
@@ -191,18 +191,35 @@ def _published_on(value: str | date | None) -> date | None:
     return parsed
 
 
-def _media_ids(body_markdown: str) -> list[uuid.UUID]:
+class _MediaImages(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.sources: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag.lower() != "img":
+            return
+        source = next((value for name, value in attrs if name.lower() == "src"), None)
+        if source is not None:
+            self.sources.append(source)
+
+
+def _media_ids(rendered_html: str) -> list[uuid.UUID]:
+    images = _MediaImages()
+    images.feed(rendered_html)
     ids: list[uuid.UUID] = []
-    for match in MEDIA_REFERENCE.finditer(body_markdown):
-        managed = MANAGED_MEDIA_REFERENCE.fullmatch(match.group(1))
+    for source in images.sources:
+        if not source.startswith("/media/"):
+            continue
+        managed = MANAGED_MEDIA_REFERENCE.fullmatch(source)
         if managed is None:
-            raise InvalidAttachment
+            raise InvalidAttachment("invalid local media image")
         try:
             asset_id = uuid.UUID(managed.group(1))
         except ValueError as exc:
-            raise InvalidAttachment from exc
+            raise InvalidAttachment("invalid local media image") from exc
         if str(asset_id) != managed.group(1).lower() or asset_id in ids:
-            raise InvalidAttachment
+            raise InvalidAttachment("invalid local media image")
         ids.append(asset_id)
     return ids
 
@@ -412,14 +429,14 @@ class PostStore:
         parsed_date = _published_on(published_on)
         if status == "live" and (not title.strip() or not body_markdown.strip()):
             raise InvalidPost("live posts need a title and body")
-        self.renderer(body_markdown)
+        rendered_html = self.renderer(body_markdown)
         return {
             "title": title,
             "body_markdown": body_markdown,
             "excerpt": excerpt,
             "status": status,
             "published_on": parsed_date,
-        }, normalized_tags, _media_ids(body_markdown)
+        }, normalized_tags, _media_ids(rendered_html)
 
 
 def _ownership_lock(connection: Connection) -> None:
@@ -463,8 +480,8 @@ def _document(connection: Connection, row: dict) -> dict:
 
 
 def _same_document(current: dict, candidate: dict) -> bool:
-    fields = ("title", "body_markdown", "excerpt", "status", "published_on", "published_at", "slug", "tags", "media")
-    return all(current[field] == candidate[field] for field in fields)
+    fields = ("title", "body_markdown", "excerpt", "status", "published_on", "published_at", "slug", "tags")
+    return all(current[field] == candidate[field] for field in fields) and set(current["media"]) == set(candidate["media"])
 
 
 def _action(current: dict, candidate: dict) -> str:
@@ -548,7 +565,7 @@ def _replace_media(
             .where(media_assets.c.id.in_(new), condition, age, _unused)
         ).scalar_one()
         if attachable != len(new):
-            raise InvalidAttachment
+            raise InvalidAttachment("media asset is unavailable or being swept")
     removed = current - requested_set
     if removed:
         connection.execute(update(media_assets).where(media_assets.c.id.in_(removed)).values(detached_at=func.now()))

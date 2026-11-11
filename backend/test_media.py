@@ -21,7 +21,15 @@ from auth import hash_password
 from machine_auth import Principal, machine_auth_tokens
 from media import MAX_UPLOAD_BYTES, MediaConfig, MemoryMediaStore, S3MediaStore, process_avatar
 from test_machine_auth import challenge_and_token, key_pair, machine_app  # noqa: F401 -- shared fixtures
-from timeline import InvalidAttachment, TimelineStore, media_assets, site_profile, timeline_entries, timeline_entry_media
+from timeline import (
+    InvalidAttachment,
+    TimelineStore,
+    media_assets,
+    media_sweep_claims,
+    site_profile,
+    timeline_entries,
+    timeline_entry_media,
+)
 
 MEDIA_ENV = {
     "MEDIA_BUCKET": "fake-bucket",
@@ -479,6 +487,7 @@ def media_db(machine_app, monkeypatch):  # noqa: F811
         connection.execute(update(site_profile).where(site_profile.c.id == 1).values(
             display_name="neenerweener", handle=None, avatar_asset_id=None
         ))
+        connection.execute(delete(media_sweep_claims))
         connection.execute(delete(media_assets))
     yield machine_app, store
     with app.timeline_store.engine.begin() as connection:
@@ -486,6 +495,7 @@ def media_db(machine_app, monkeypatch):  # noqa: F811
         connection.execute(update(site_profile).where(site_profile.c.id == 1).values(
             display_name="neenerweener", handle=None, avatar_asset_id=None
         ))
+        connection.execute(delete(media_sweep_claims))
         connection.execute(delete(media_assets))
 
 

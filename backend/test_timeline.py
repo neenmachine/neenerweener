@@ -204,13 +204,14 @@ def test_alembic_has_one_head():
 
     config = Config(str(Path(__file__).with_name('alembic.ini')))
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == ['006_web_posts']
+    assert script.get_heads() == ['007_media_sweep_claims']
     assert script.get_revision('001_timeline').down_revision is None
     assert script.get_revision('002_admin_auth').down_revision == '001_timeline'
     assert script.get_revision('003_machine_auth').down_revision == '002_admin_auth'
     assert script.get_revision('004_media').down_revision == '003_machine_auth'
     assert script.get_revision('005_profile').down_revision == '004_media'
     assert script.get_revision('006_web_posts').down_revision == '005_profile'
+    assert script.get_revision('007_media_sweep_claims').down_revision == '006_web_posts'
 
 
 @pytest.mark.skipif(not os.environ.get('DATABASE_URL'), reason='DATABASE_URL not configured')
@@ -260,7 +261,7 @@ def test_alembic_upgrade_down_up_is_repeatable():
     engine = create_engine(os.environ['DATABASE_URL'])
     try:
         with engine.connect() as connection:
-            assert connection.execute(text('select version_num from alembic_version')).scalar() == '006_web_posts'
+            assert connection.execute(text('select version_num from alembic_version')).scalar() == '007_media_sweep_claims'
     finally:
         engine.dispose()
         app.configure_logging()

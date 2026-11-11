@@ -1,12 +1,16 @@
 import concurrent.futures
 import os
+import threading
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from markdown_it import MarkdownIt
 from sqlalchemy import delete, insert, select, update
 from sqlalchemy.exc import IntegrityError
 
+import posts
 from posts import (
     InvalidPost,
     PostConflict,
@@ -17,7 +21,7 @@ from posts import (
     web_post_tags,
     web_posts,
 )
-from timeline import InvalidAttachment, TimelineStore, media_assets
+from timeline import InvalidAttachment, TimelineStore, media_assets, media_sweep_claims
 
 UTC = timezone.utc
 
@@ -27,7 +31,7 @@ def post_store():
     database_url = os.environ.get("DATABASE_URL")
     if not database_url:
         pytest.skip("DATABASE_URL not configured")
-    store = PostStore(database_url, renderer=lambda _body: "")
+    store = PostStore(database_url, renderer=MarkdownIt("commonmark").render)
     with store.engine.begin() as connection:
         _clear(connection)
     yield store
@@ -37,6 +41,7 @@ def post_store():
 
 
 def _clear(connection):
+    connection.execute(delete(media_sweep_claims))
     connection.execute(delete(web_post_media))
     connection.execute(delete(web_post_tags))
     connection.execute(delete(web_post_revisions))
@@ -234,6 +239,45 @@ def test_media_attach_replace_delete_restore_and_liveness(post_store):
     assert second not in timeline.expired_media_assets(20)
 
 
+def test_media_ownership_uses_rendered_local_images_only(post_store):
+    markdown_asset = _asset(post_store)
+    html_asset = _asset(post_store)
+    ignored_asset = _asset(post_store)
+    body = f"""
+`{_image(ignored_asset)}`
+
+```
+{_image(ignored_asset)}
+```
+
+![external](https://example.com/media/{ignored_asset}/lg.webp)
+
+<img src="https://example.com/media/not-an-id/lg.webp">
+
+{_image(markdown_asset)}
+
+<img src="/media/{html_asset}/sm.webp">
+"""
+
+    post = post_store.create(title="fixture", slug="media-references", body_markdown=body)
+
+    assert set(post["media"]) == {str(markdown_asset), str(html_asset)}
+
+
+def test_external_media_path_does_not_reject_a_post(post_store):
+    try:
+        post = post_store.create(
+            title="fixture",
+            slug="external-media",
+            body_markdown="![external](https://example.com/media/photo.jpg)",
+        )
+    except InvalidAttachment:
+        post = None
+
+    assert post is not None, "an external /media/ path must not be validated as a local asset"
+    assert post["media"] == []
+
+
 def test_duplicate_or_foreign_media_references_are_rejected(post_store):
     asset_id = _asset(post_store)
     duplicate = f"{_image(asset_id)}\n{_image(asset_id)}"
@@ -245,6 +289,76 @@ def test_duplicate_or_foreign_media_references_are_rejected(post_store):
     post_store.create(title="fixture", slug="owner", body_markdown=_image(asset_id))
     with pytest.raises(InvalidAttachment):
         post_store.create(title="fixture", slug="other", body_markdown=_image(asset_id))
+
+
+def test_identical_save_with_reordered_media_is_a_no_op(post_store):
+    first, second = sorted((_asset(post_store), _asset(post_store)), reverse=True)
+    body = f"{_image(first)}\n{_image(second)}"
+    post = post_store.create(title="fixture", slug="no-op", body_markdown=body)
+
+    unchanged = _update(post_store, post)
+
+    assert unchanged["version"] == 1
+    assert post_store.revisions(post["id"]) == []
+
+
+def test_restore_and_sweep_serialize_on_the_asset(post_store, monkeypatch):
+    asset_id = _asset(post_store)
+    post = post_store.create(title="fixture", slug="race", body_markdown=_image(asset_id))
+    deleted = post_store.delete(post["id"], post["version"])
+    revision = post_store.revisions(post["id"])[0]
+    lock_attempted = threading.Event()
+    original_lock_assets = posts._lock_assets
+
+    def signaled_lock_assets(connection, asset_ids):
+        lock_attempted.set()
+        return original_lock_assets(connection, asset_ids)
+
+    monkeypatch.setattr(posts, "_lock_assets", signaled_lock_assets)
+    timeline = TimelineStore("unused", engine=post_store.engine)
+    with post_store.engine.begin() as connection:
+        connection.execute(
+            update(media_assets)
+            .where(media_assets.c.id == asset_id)
+            .values(detached_at=datetime.now(UTC) - timedelta(days=7) + timedelta(seconds=0.5))
+        )
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    try:
+        with post_store.engine.begin() as connection:
+            connection.execute(select(media_assets.c.id).where(media_assets.c.id == asset_id).with_for_update()).one()
+            restoring = pool.submit(post_store.restore, post["id"], revision["id"], deleted["version"])
+            assert lock_attempted.wait(2), "restore did not reach the asset lock"
+            time.sleep(0.6)
+            selected = timeline.expired_media_assets(20)
+        restored = restoring.result(timeout=2)
+    finally:
+        pool.shutdown(wait=True)
+
+    assert not (
+        asset_id in selected and str(asset_id) in restored["media"]
+    ), "the sweep must not select an asset while restore owns its row lock"
+
+
+def test_restore_refuses_an_asset_claimed_by_the_sweep(post_store):
+    asset_id = _asset(post_store)
+    post = post_store.create(title="fixture", slug="claimed", body_markdown=_image(asset_id))
+    deleted = post_store.delete(post["id"], post["version"])
+    revision = post_store.revisions(post["id"])[0]
+    timeline = TimelineStore("unused", engine=post_store.engine)
+    with post_store.engine.begin() as connection:
+        connection.execute(
+            update(media_assets)
+            .where(media_assets.c.id == asset_id)
+            .values(detached_at=datetime.now(UTC) - timedelta(days=8))
+        )
+    assert asset_id in timeline.expired_media_assets(20)
+    with post_store.engine.begin() as connection:
+        connection.execute(
+            update(media_assets).where(media_assets.c.id == asset_id).values(detached_at=datetime.now(UTC))
+        )
+
+    with pytest.raises(InvalidAttachment, match="being swept"):
+        post_store.restore(post["id"], revision["id"], deleted["version"])
 
 
 def test_concurrent_slug_and_media_ownership_have_one_winner(post_store):

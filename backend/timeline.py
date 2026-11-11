@@ -76,6 +76,12 @@ site_profile = Table(
     CheckConstraint("handle IS NULL OR handle ~ '^[A-Za-z0-9_]{1,30}$'", name="ck_site_profile_handle"),
     UniqueConstraint("avatar_asset_id"),
 )
+media_sweep_claims = Table(
+    "media_sweep_claims",
+    metadata,
+    Column("asset_id", UUID(as_uuid=True), ForeignKey("media_assets.id", ondelete="CASCADE"), primary_key=True),
+    Column("claimed_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+)
 timeline_entry_media = Table(
     "timeline_entry_media",
     metadata,
@@ -90,11 +96,12 @@ timeline_entry_media = Table(
 # refuses never-attached assets older than ATTACH_WINDOW, an hour before the sweep may touch them, and delete
 # sets detached_at so the sweep waits DETACHED_GRACE.
 _web_post_media = table("web_post_media", column("asset_id"))
-_unused = (
+_unowned = (
     ~exists().where(timeline_entry_media.c.asset_id == media_assets.c.id)
     & ~exists().where(site_profile.c.avatar_asset_id == media_assets.c.id)
     & ~exists().where(_web_post_media.c.asset_id == media_assets.c.id)
 )
+_unused = _unowned & ~exists().where(media_sweep_claims.c.asset_id == media_assets.c.id)
 NEVER_ATTACHED_GRACE = timedelta(hours=24)
 ATTACH_WINDOW = timedelta(hours=23)
 DETACHED_GRACE = timedelta(days=7)
@@ -302,26 +309,57 @@ class TimelineStore:
             )
 
     def expired_media_assets(self, limit: int) -> list[uuid.UUID]:
-        """Assets detached for 7 days, or never attached for 24 hours."""
+        """Claim expired assets so they cannot be attached while their objects are deleted."""
         now = func.now()
-        query = (
-            select(media_assets.c.id)
-            .where(
-                _unused,
-                or_(
-                    media_assets.c.detached_at < now - DETACHED_GRACE,
-                    and_(media_assets.c.detached_at.is_(None), media_assets.c.created_at < now - NEVER_ATTACHED_GRACE),
-                ),
+        with self.engine.begin() as connection:
+            claimed = list(
+                connection.execute(
+                    select(media_sweep_claims.c.asset_id)
+                    .join(media_assets, media_assets.c.id == media_sweep_claims.c.asset_id)
+                    .order_by(media_sweep_claims.c.claimed_at)
+                    .limit(limit)
+                ).scalars()
             )
-            .order_by(media_assets.c.created_at)
-            .limit(limit)
-        )
-        with self.engine.connect() as connection:
-            return list(connection.execute(query).scalars())
+            candidates = list(
+                connection.execute(
+                    select(media_assets.c.id)
+                    .where(
+                        _unused,
+                        or_(
+                            media_assets.c.detached_at < now - DETACHED_GRACE,
+                            and_(
+                                media_assets.c.detached_at.is_(None),
+                                media_assets.c.created_at < now - NEVER_ATTACHED_GRACE,
+                            ),
+                        ),
+                    )
+                    .order_by(media_assets.c.created_at)
+                    .limit(limit - len(claimed))
+                    .with_for_update(skip_locked=True)
+                ).scalars()
+            )
+            if candidates:
+                connection.execute(insert(media_sweep_claims), [{"asset_id": asset_id} for asset_id in candidates])
+            return claimed + candidates
 
     def delete_media_asset(self, asset_id: uuid.UUID) -> None:
         with self.engine.begin() as connection:
-            connection.execute(delete(media_assets).where(media_assets.c.id == asset_id, _unused))
+            asset = connection.execute(
+                select(media_assets.c.id).where(media_assets.c.id == asset_id).with_for_update()
+            ).scalar_one_or_none()
+            if asset is None:
+                return
+            deletable = connection.execute(
+                select(
+                    exists().where(
+                        media_assets.c.id == asset_id,
+                        _unowned,
+                        exists().where(media_sweep_claims.c.asset_id == asset_id),
+                    )
+                )
+            ).scalar_one()
+            if deletable:
+                connection.execute(delete(media_assets).where(media_assets.c.id == asset_id))
 
     def is_in_use(self, asset_id: uuid.UUID) -> bool:
         in_use = (

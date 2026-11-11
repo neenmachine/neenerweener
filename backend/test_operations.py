@@ -122,7 +122,7 @@ def test_readyz_accepts_current_schema_without_reloading_migration_files(monkeyp
     monkeypatch.setattr(app, "load_schema_heads", unexpected_reload)
     first = client.get("/readyz")
     second = client.get("/readyz")
-    assert app.EXPECTED_SCHEMA_REVISIONS == frozenset({"005_profile"})
+    assert app.EXPECTED_SCHEMA_REVISIONS == frozenset({"006_web_posts"})
     assert first.status_code == second.status_code == 200
     assert first.json() == second.json() == {"status": "ok"}
 

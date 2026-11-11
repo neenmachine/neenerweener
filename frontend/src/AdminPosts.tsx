@@ -23,8 +23,6 @@ type Post = {
 };
 type Revision = { id: number; version: number; title: string; status: "draft" | "live"; recorded_at: string };
 
-// The server's slug rule (backend/posts.py SLUG); it also rejects reserved slugs.
-const SLUG = /^[a-z0-9-]{1,100}$/;
 const DISCARD = "discard unsaved changes?";
 
 export default function AdminPosts({ send, active }: AdminPageProps) {
@@ -196,10 +194,13 @@ function PostEditor({ start, send, onSaved, onClose }: { start: Post | null; sen
       (signal) => send<Post>("POST", `/api/admin/posts/${post!.id}/revisions/${revision.id}/restore`, { version: post!.version }, signal),
       "restored",
     );
-  const reload = () => call((signal) => send<Post>("GET", `/api/admin/posts/${post!.id}`, undefined, signal), "");
+  const reload = () =>
+    (!dirty || confirm(DISCARD)) &&
+    call((signal) => send<Post>("GET", `/api/admin/posts/${post!.id}`, undefined, signal), "");
   const back = () => (!dirty || confirm(DISCARD)) && onClose();
 
-  const canSave = !deleted && hasText(fields.title) && SLUG.test(fields.slug);
+  // The server checks the slug and answers "invalid slug" or "slug reserved by file post".
+  const canSave = !deleted && hasText(fields.title);
   const live = post?.status === "live";
   const field = (key: keyof Fields, label: string, type = "text") => (
     <div className={`field-${key}`}>

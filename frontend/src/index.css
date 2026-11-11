@@ -1035,8 +1035,19 @@ form.admin-section {
   color: var(--fg);
 }
 
-.admin textarea.markdown[hidden] {
-  display: none;
+/* The markdown and the preview share one grid cell: the preview covers the textarea, which stays rendered (Firefox
+   drops a textarea's undo history when its box is rebuilt: display:none or a position change). */
+.markdown-stack {
+  display: grid;
+}
+
+.markdown-stack > * {
+  grid-area: 1 / 1;
+  min-width: 0;
+}
+
+.admin textarea.markdown.covered {
+  visibility: hidden;
 }
 
 .admin textarea.markdown {

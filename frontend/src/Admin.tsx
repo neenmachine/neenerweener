@@ -96,7 +96,10 @@ export default function Admin() {
 
   const send = sendOrExpire(() => expire());
 
+  // The control that had focus when the session ran out; logging in again puts focus back on it.
+  const focusBefore = useRef<Element | null>(null);
   const expire = () => {
+    focusBefore.current ??= document.activeElement; // the first 401's: later ones see the hidden pages
     setNotice("session expired, log in again");
     setAuth("out");
   };
@@ -131,11 +134,19 @@ export default function Admin() {
     // A deliberate logout drops unsaved text with the pages; the URL stays.
     setMounted(false);
     setVisited([path]);
+    focusBefore.current = null;
     setNotice("");
     setAuth("out");
   };
 
   const signedIn = auth === "in";
+  useEffect(() => {
+    const before = focusBefore.current;
+    if (!signedIn || !before) return;
+    focusBefore.current = null;
+    if (before instanceof HTMLElement && before !== document.body && before.isConnected) before.focus();
+    else (focusPending.current = true), focusHeading();
+  }, [signedIn]);
   // The server titles by the admin_hint cookie (sign in, or the path); the session check corrects a stale hint.
   useEffect(() => {
     if (auth === "out") document.title = "sign in · admin";

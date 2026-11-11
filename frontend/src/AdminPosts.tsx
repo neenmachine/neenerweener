@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { compact } from "./App";
-import { hasText, type Result } from "./adminApi";
+import type { Result } from "./adminApi";
 import type { AdminPageProps } from "./adminPages";
 import { Button, type Send } from "./EntryEditor";
 import { previewDocument } from "./postPreview";
@@ -141,12 +141,20 @@ function PostEditor({ start, send, onSaved, onClose }: { start: Post | null; sen
   useEffect(() => {
     if (confirming) confirmButton.current?.focus();
   }, [confirming]);
+  // A new or opened post: the list button that had focus is gone.
+  useEffect(() => title.current?.focus(), []);
+  const cancelDelete = () => {
+    setConfirming(false);
+    setTimeout(() => deleteButton.current?.focus()); // after the delete button is back
+  };
 
   const set = (key: keyof Fields) => (e: { target: { value: string } }) => {
     setFields((f) => ({ ...f, [key]: e.target.value }));
     setStatus("");
+    if (!conflict) setError(""); // a conflict's message stays beside its reload button
   };
 
+  // The server owns every field rule ("invalid slug", "live post needs title and body", ...); its message shows inline.
   // Every request here answers with the post; a 409 (changed in another tab) keeps the fields as typed and offers reload.
   const call = async (request: (signal: AbortSignal) => Promise<Result<Post>>, message: string) => {
     const r = await run((signal) => {
@@ -199,8 +207,6 @@ function PostEditor({ start, send, onSaved, onClose }: { start: Post | null; sen
     call((signal) => send<Post>("GET", `/api/admin/posts/${post!.id}`, undefined, signal), "");
   const back = () => (!dirty || confirm(DISCARD)) && onClose();
 
-  // The server checks the slug and answers "invalid slug" or "slug reserved by file post".
-  const canSave = !deleted && hasText(fields.title);
   const live = post?.status === "live";
   const field = (key: keyof Fields, label: string, type = "text") => (
     <div className={`field-${key}`}>
@@ -216,7 +222,7 @@ function PostEditor({ start, send, onSaved, onClose }: { start: Post | null; sen
         className="admin-section post-editor"
         onSubmit={(e) => {
           e.preventDefault();
-          if (canSave && (!live || hasText(fields.body))) save(live ? "live" : "draft", "saved");
+          if (!deleted) save(live ? "live" : "draft", "saved");
         }}
       >
         <div className="admin-row">
@@ -250,16 +256,18 @@ function PostEditor({ start, send, onSaved, onClose }: { start: Post | null; sen
               </button>
             </span>
           </div>
-          {/* Kept mounted while previewing, so its text, selection and undo history stay. */}
-          <textarea
-            className="markdown"
-            aria-labelledby="post-markdown-label"
-            hidden={mode !== "raw"}
-            value={fields.body}
-            onChange={set("body")}
-            readOnly={busy || deleted}
-          />
-          <Preview body={fields.body} shown={mode === "preview"} send={send} />
+          {/* The textarea stays rendered under the preview, so its text, selection and undo history stay. */}
+          <div className="markdown-stack">
+            <textarea
+              className={mode === "raw" ? "markdown" : "markdown covered"}
+              aria-labelledby="post-markdown-label"
+              inert={mode !== "raw"}
+              value={fields.body}
+              onChange={set("body")}
+              readOnly={busy || deleted}
+            />
+            <Preview body={fields.body} shown={mode === "preview"} send={send} />
+          </div>
         </div>
         <div className="save-row">
           <div className="admin-row">
@@ -267,13 +275,13 @@ function PostEditor({ start, send, onSaved, onClose }: { start: Post | null; sen
               <span className="admin-actions">
                 {live ? (
                   <>
-                    <Button type="submit" busy={busy} off={!canSave || !hasText(fields.body)} label="save" busyLabel="saving" />
-                    <Button onClick={() => save("draft", "unpublished")} busy={busy} off={!canSave} label="unpublish" busyLabel="saving" />
+                    <Button type="submit" busy={busy} label="save" busyLabel="saving" />
+                    <Button onClick={() => save("draft", "unpublished")} busy={busy} label="unpublish" busyLabel="saving" />
                   </>
                 ) : (
                   <>
-                    <Button type="submit" busy={busy} off={!canSave} label="save draft" busyLabel="saving" />
-                    <Button onClick={() => save("live", "published")} busy={busy} off={!canSave || !hasText(fields.body)} label="publish" busyLabel="saving" />
+                    <Button type="submit" busy={busy} label="save draft" busyLabel="saving" />
+                    <Button onClick={() => save("live", "published")} busy={busy} label="publish" busyLabel="saving" />
                   </>
                 )}
                 {post && <Button ref={deleteButton} onClick={() => setConfirming(true)} off={busy} label="delete" />}
@@ -284,10 +292,10 @@ function PostEditor({ start, send, onSaved, onClose }: { start: Post | null; sen
                 className="admin-actions"
                 role="group"
                 aria-label="delete post?"
-                onKeyDown={(e) => e.key === "Escape" && !busy && (setConfirming(false), setTimeout(() => deleteButton.current?.focus()))}
+                onKeyDown={(e) => e.key === "Escape" && !busy && cancelDelete()}
               >
                 <Button ref={confirmButton} onClick={remove} busy={busy} label="confirm delete" busyLabel="deleting" danger />
-                <Button onClick={() => setConfirming(false)} off={busy} label="cancel" />
+                <Button onClick={cancelDelete} off={busy} label="cancel" />
               </span>
             )}
             {conflict && <Button onClick={reload} busy={busy} label="reload" busyLabel="loading" />}

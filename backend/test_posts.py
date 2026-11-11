@@ -242,17 +242,17 @@ def test_media_attach_replace_delete_restore_and_liveness(post_store):
 def test_media_ownership_uses_rendered_local_images_only(post_store):
     markdown_asset = _asset(post_store)
     html_asset = _asset(post_store)
-    ignored_asset = _asset(post_store)
+    inline_code_asset = _asset(post_store)
+    fenced_code_asset = _asset(post_store)
+    external_asset = _asset(post_store)
     body = f"""
-`{_image(ignored_asset)}`
+`{_image(inline_code_asset)}`
 
 ```
-{_image(ignored_asset)}
+{_image(fenced_code_asset)}
 ```
 
-![external](https://example.com/media/{ignored_asset}/lg.webp)
-
-<img src="https://example.com/media/not-an-id/lg.webp">
+![external](https://example.com/media/{external_asset}/lg.webp)
 
 {_image(markdown_asset)}
 

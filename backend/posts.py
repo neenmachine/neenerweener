@@ -34,6 +34,9 @@ from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.exc import IntegrityError
 
 from timeline import (
+    CONNECT_TIMEOUT_SECONDS,
+    POOL_TIMEOUT_SECONDS,
+    STATEMENT_TIMEOUT_MS,
     TORONTO,
     InvalidAttachment,
     _lock_assets,
@@ -239,7 +242,15 @@ class PostStore:
         reserved_slugs: Callable[[], Collection[str]] = lambda: (),
         renderer: Callable[[str], str] = _default_renderer,
     ):
-        self.engine = engine or database_engine(database_url, pool_pre_ping=True)
+        self.engine = engine or database_engine(
+            database_url,
+            pool_pre_ping=True,
+            pool_timeout=POOL_TIMEOUT_SECONDS,
+            connect_args={
+                "connect_timeout": CONNECT_TIMEOUT_SECONDS,
+                "options": f"-c statement_timeout={STATEMENT_TIMEOUT_MS}",
+            },
+        )
         self.reserved_slugs = reserved_slugs
         self.renderer = renderer
 
@@ -282,8 +293,64 @@ class PostStore:
 
     def list(self) -> list[dict]:
         with self.engine.connect() as connection:
-            rows = connection.execute(select(web_posts).order_by(web_posts.c.updated_at.desc())).mappings()
-            return [_document(connection, dict(row)) for row in rows]
+            rows = [
+                dict(row)
+                for row in connection.execute(select(web_posts).order_by(web_posts.c.updated_at.desc())).mappings()
+            ]
+            post_ids = [row["id"] for row in rows]
+            slugs = _slugs_by_post(connection, post_ids)
+            tags = _tags_by_post(connection, post_ids)
+            media = _media_by_post(connection, post_ids)
+            return [
+                {**row, "slug": slugs[row["id"]], "tags": tags[row["id"]], "media": media[row["id"]]}
+                for row in rows
+            ]
+
+    def list_public(self) -> list[dict]:
+        with self.engine.connect() as connection:
+            rows = [
+                dict(row)
+                for row in connection.execute(
+                    select(web_posts, web_post_slugs.c.slug)
+                    .join(
+                        web_post_slugs,
+                        (web_post_slugs.c.post_id == web_posts.c.id) & web_post_slugs.c.canonical.is_(True),
+                    )
+                    .where(
+                        web_posts.c.status == "live",
+                        web_posts.c.deleted_at.is_(None),
+                    )
+                ).mappings()
+            ]
+            tags = _tags_by_post(connection, [row["id"] for row in rows])
+            return [_public_document(row, tags.get(row["id"], [])) for row in rows]
+
+    def get_public(self, slug: str) -> tuple[dict, str] | None:
+        requested_slug = web_post_slugs.alias("requested_slug")
+        canonical_slug = web_post_slugs.alias("canonical_slug")
+        with self.engine.connect() as connection:
+            row = connection.execute(
+                select(web_posts, canonical_slug.c.slug)
+                .join(requested_slug, requested_slug.c.post_id == web_posts.c.id)
+                .join(
+                    canonical_slug,
+                    (canonical_slug.c.post_id == web_posts.c.id) & canonical_slug.c.canonical.is_(True),
+                )
+                .where(
+                    requested_slug.c.slug == slug,
+                    web_posts.c.status == "live",
+                    web_posts.c.deleted_at.is_(None),
+                )
+            ).mappings().one_or_none()
+            if row is None:
+                return None
+            document = dict(row)
+            tags = _tags_by_post(connection, [document["id"]]).get(document["id"], [])
+            return _public_document(document, tags), document["slug"]
+
+    def slugs(self) -> list[str]:
+        with self.engine.connect() as connection:
+            return list(connection.execute(select(web_post_slugs.c.slug)).scalars())
 
     def revisions(self, post_id: int) -> list[dict]:
         with self.engine.connect() as connection:
@@ -484,6 +551,60 @@ def _document(connection: Connection, row: dict) -> dict:
         ).scalars()
     ]
     return row
+
+
+def _slugs_by_post(connection: Connection, post_ids: Sequence[int]) -> dict[int, str]:
+    if not post_ids:
+        return {}
+    return {
+        post_id: slug
+        for post_id, slug in connection.execute(
+            select(web_post_slugs.c.post_id, web_post_slugs.c.slug).where(
+                web_post_slugs.c.post_id.in_(post_ids), web_post_slugs.c.canonical.is_(True)
+            )
+        )
+    }
+
+
+def _tags_by_post(connection: Connection, post_ids: Sequence[int]) -> dict[int, list[str]]:
+    tags = {post_id: [] for post_id in post_ids}
+    if not post_ids:
+        return tags
+    rows = connection.execute(
+        select(web_post_tags.c.post_id, web_post_tags.c.tag)
+        .where(web_post_tags.c.post_id.in_(post_ids))
+        .order_by(web_post_tags.c.post_id, web_post_tags.c.position)
+    )
+    for post_id, tag in rows:
+        tags[post_id].append(tag)
+    return tags
+
+
+def _media_by_post(connection: Connection, post_ids: Sequence[int]) -> dict[int, list[str]]:
+    media = {post_id: [] for post_id in post_ids}
+    if not post_ids:
+        return media
+    rows = connection.execute(
+        select(web_post_media.c.post_id, web_post_media.c.asset_id)
+        .where(web_post_media.c.post_id.in_(post_ids))
+        .order_by(web_post_media.c.post_id, web_post_media.c.asset_id)
+    )
+    for post_id, asset_id in rows:
+        media[post_id].append(str(asset_id))
+    return media
+
+
+def _public_document(document: dict, tags: list[str]) -> dict:
+    return {
+        "slug": document["slug"],
+        "date": document["published_on"].isoformat(),
+        "title": document["title"],
+        "excerpt": document["excerpt"],
+        "tags": tags,
+        "body": document["body_markdown"],
+        "draft": False,
+        "_catalog_id": document["id"],
+    }
 
 
 def _same_document(current: dict, candidate: dict) -> bool:

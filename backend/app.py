@@ -17,7 +17,7 @@ import yaml
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from markdown_it import MarkdownIt
 from mdit_py_plugins.dollarmath import dollarmath_plugin
@@ -30,6 +30,7 @@ from pygments.util import ClassNotFound
 from anchors import add_heading_anchors
 from operations import check_readiness, configure_logging, load_schema_heads
 from page_markup import home_markup, site_footer
+from post_catalog import CatalogUnavailable, PostCatalog, PostRedirect
 import posts
 import routes
 
@@ -50,7 +51,7 @@ from auth import (
     verify_password,
 )
 from client_identity import railway_client_ip
-from cache import cache_control
+from cache import cache_control, etag_response
 from machine_auth import (
     MAX_REQUEST_BYTES,
     NAMESPACE,
@@ -134,12 +135,12 @@ async def lifespan(_app):
     yield
     if timeline_store is not None:
         await asyncio.to_thread(timeline_store.close)
-    if post_store is not None:
-        await asyncio.to_thread(post_store.close)
     if auth_store is not None:
         await asyncio.to_thread(auth_store.close)
     if machine_auth_store is not None:
         await asyncio.to_thread(machine_auth_store.close)
+    if post_store is not None:
+        await asyncio.to_thread(post_store.close)
 
 
 app = FastAPI(lifespan=lifespan)
@@ -151,10 +152,7 @@ timeline_store: TimelineStoreProtocol | None = (
     TimelineStore(os.environ["DATABASE_URL"]) if os.environ.get("DATABASE_URL") else None
 )
 post_store: posts.PostStore | None = (
-    posts.PostStore(
-        os.environ["DATABASE_URL"],
-        reserved_slugs=lambda: {path.stem for path in POSTS_DIR.glob("*.md") if FILENAME.fullmatch(path.name)},
-    )
+    posts.PostStore(os.environ["DATABASE_URL"], reserved_slugs=lambda: _published_file_slugs())
     if os.environ.get("DATABASE_URL")
     else None
 )
@@ -162,7 +160,19 @@ auth_store: AuthStore | None = AuthStore(os.environ["DATABASE_URL"]) if os.envir
 machine_auth_store: MachineAuthStore | None = (
     MachineAuthStore(os.environ["DATABASE_URL"]) if os.environ.get("DATABASE_URL") else None
 )
+post_catalog = PostCatalog(lambda: all_posts(), post_store)
 media_store: MediaStore | None = None  # set at startup when all MEDIA_* variables are present
+
+
+def require_post_catalog_ready() -> None:
+    try:
+        conflicts = post_catalog.conflicts()
+    except CatalogUnavailable as exc:
+        raise RuntimeError("post catalog preflight failed: database unavailable") from exc
+    if conflicts:
+        raise RuntimeError(f"post catalog preflight failed: conflicting slug {conflicts[0]}")
+
+
 _decode = asyncio.Semaphore(1)  # one decode per process, so two large uploads cannot double peak RAM
 MEDIA_SWEEP_INTERVAL_SECONDS = 600
 _media_sweep_due = 0.0  # time.monotonic() after which the next upload may schedule a sweep
@@ -1023,6 +1033,12 @@ async def readyz(request: Request):
         return JSONResponse({"status": "not_ready", "reason": "authentication configuration invalid"}, status_code=503)
     if request.app.state.media_config.partial:
         return JSONResponse({"status": "not_ready", "reason": "media configuration invalid"}, status_code=503)
+    try:
+        conflicts = await asyncio.to_thread(post_catalog.conflicts)
+    except CatalogUnavailable:
+        return JSONResponse({"status": "not_ready", "reason": "post catalog unavailable"}, status_code=503)
+    if conflicts:
+        return JSONResponse({"status": "not_ready", "reason": f"post catalog conflict: {conflicts[0]}"}, status_code=503)
     return {"status": "ok"}
 
 def split_frontmatter(text: str) -> tuple[dict | None, str]:
@@ -1121,6 +1137,10 @@ def load(path: Path, draft: bool = False) -> dict | None:
     }
 
 
+def _published_file_slugs() -> set[str]:
+    return {post["slug"] for path in POSTS_DIR.glob("*.md") if (post := load(path))}
+
+
 def all_posts() -> list[dict]:
     posts = [p for f in POSTS_DIR.glob("*.md") if (p := load(f))]
     if os.environ.get("SHOW_DRAFTS") == "1":
@@ -1142,18 +1162,51 @@ def render_post(body: str) -> str:
     return CAPTIONED.sub(r"<figure>\1<figcaption>\2</figcaption></figure>", html)
 
 
+def _catalog_unavailable(exc: CatalogUnavailable) -> HTTPException:
+    logger.warning("post catalog unavailable: %s", type(exc.__cause__).__name__)
+    return HTTPException(503, "posts unavailable")
+
+
+def _list_posts_data(tag: str | None = None) -> list[dict]:
+    try:
+        posts = post_catalog.list_public(tag)
+    except CatalogUnavailable as exc:
+        raise _catalog_unavailable(exc) from exc
+    return [{k: post[k] for k in ("slug", "date", "title", "excerpt", "tags", "draft")} for post in posts]
+
+
+def _get_post_data(slug: str) -> dict | PostRedirect | None:
+    try:
+        post = post_catalog.get_public(slug)
+    except CatalogUnavailable as exc:
+        raise _catalog_unavailable(exc) from exc
+    if not isinstance(post, dict):
+        return post
+    body = post.pop("body")
+    return {**post, "html": render_post(body)}
+
+
+def _json_etag_response(request: Request, content) -> Response:
+    return etag_response(
+        request,
+        json.dumps(content, ensure_ascii=False, separators=(",", ":")).encode(),
+        "application/json",
+    )
+
+
 @app.api_route("/api/posts", methods=["GET", "HEAD"])
-def list_posts():
-    return [{k: p[k] for k in ("slug", "date", "title", "excerpt", "tags", "draft")} for p in all_posts()]
+def list_posts(request: Request):
+    return _json_etag_response(request, _list_posts_data())
 
 
 @app.api_route("/api/posts/{slug}", methods=["GET", "HEAD"])
-def get_post(slug: str):
-    for p in all_posts():
-        if p["slug"] == slug:
-            body = p.pop("body")
-            return {**p, "html": render_post(body)}
-    raise HTTPException(404, "post not found")
+def get_post(request: Request, slug: str):
+    post = _get_post_data(slug)
+    if isinstance(post, PostRedirect):
+        return RedirectResponse(f"/api/posts/{post.slug}", status_code=301)
+    if post is None:
+        raise HTTPException(404, "post not found")
+    return _json_etag_response(request, post)
 
 
 @app.api_route("/now", methods=["GET", "HEAD"])
@@ -1331,10 +1384,16 @@ def frontend(path: str, request: Request):
         return RedirectResponse(quote("/" if file == index else target, safe="/") + query, status_code=301, headers=headers)
     if file:
         return FileResponse(file, headers=headers)
-    preload, head, markup, status_code = render_page(routes.match(target), request)
+    match = routes.match(target)
+    if match and match[0] == "post":
+        request.state.resolved_post = _get_post_data(match[1]["slug"])
+        if isinstance(request.state.resolved_post, PostRedirect):
+            return RedirectResponse(f"/posts/{request.state.resolved_post.slug}", status_code=301)
+    preload, head, markup, status_code = render_page(match, request)
     if status_code == 404:
         headers = {"X-Robots-Tag": "noindex"}
-    return HTMLResponse(fill_index(index.read_text(encoding="utf-8"), preload, head, markup, target), status_code=status_code, headers=headers)
+    content = fill_index(index.read_text(encoding="utf-8"), preload, head, markup, target).encode()
+    return etag_response(request, content, "text/html", headers, status_code)
 
 
 def render_page(match: tuple[str, dict[str, str]] | None, request: Request) -> tuple[dict, dict, str, int]:
@@ -1348,7 +1407,7 @@ def render_page(match: tuple[str, dict[str, str]] | None, request: Request) -> t
 
 
 def home_page(request: Request) -> tuple[dict, dict, str, int]:
-    posts = list_posts()
+    posts = _list_posts_data()
     return {"/api/posts": posts}, {"title": "neenerweener"}, home_markup(posts, request.query_params.get("tag")), 200
 
 
@@ -1386,9 +1445,8 @@ ADMIN_SHELL = (
 
 
 def post_page_data(request: Request, slug: str) -> tuple[dict, dict, str, int]:
-    try:
-        post = get_post(slug)
-    except HTTPException:
+    post = getattr(request.state, "resolved_post", None)
+    if post is None:
         return not_found_page("post not found", back=True)
     return {f"/api/posts/{slug}": post}, {"title": post["title"], "description": post["excerpt"] or summary(post["html"]), "published": post["date"]}, post_markup(post), 200
 

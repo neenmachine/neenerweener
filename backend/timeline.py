@@ -25,6 +25,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     and_,
+    column,
     create_engine,
     delete,
     desc,
@@ -33,6 +34,7 @@ from sqlalchemy import (
     insert,
     or_,
     select,
+    table,
     text,
     update,
 )
@@ -87,7 +89,12 @@ timeline_entry_media = Table(
 # The sweep never deletes the row of an attached asset, but it deletes objects before the row. Attach therefore
 # refuses never-attached assets older than ATTACH_WINDOW, an hour before the sweep may touch them, and delete
 # sets detached_at so the sweep waits DETACHED_GRACE.
-_unused = ~exists().where(timeline_entry_media.c.asset_id == media_assets.c.id) & ~exists().where(site_profile.c.avatar_asset_id == media_assets.c.id)
+_web_post_media = table("web_post_media", column("asset_id"))
+_unused = (
+    ~exists().where(timeline_entry_media.c.asset_id == media_assets.c.id)
+    & ~exists().where(site_profile.c.avatar_asset_id == media_assets.c.id)
+    & ~exists().where(_web_post_media.c.asset_id == media_assets.c.id)
+)
 NEVER_ATTACHED_GRACE = timedelta(hours=24)
 ATTACH_WINDOW = timedelta(hours=23)
 DETACHED_GRACE = timedelta(days=7)
@@ -317,8 +324,13 @@ class TimelineStore:
             connection.execute(delete(media_assets).where(media_assets.c.id == asset_id, _unused))
 
     def is_in_use(self, asset_id: uuid.UUID) -> bool:
+        in_use = (
+            exists().where(timeline_entry_media.c.asset_id == asset_id)
+            | exists().where(site_profile.c.avatar_asset_id == asset_id)
+            | exists().where(_web_post_media.c.asset_id == asset_id)
+        )
         with self.engine.connect() as connection:
-            return connection.execute(select(exists().where(timeline_entry_media.c.asset_id == asset_id) | exists().where(site_profile.c.avatar_asset_id == asset_id))).scalar_one()
+            return connection.execute(select(in_use)).scalar_one()
 
     def get_profile(self) -> dict:
         with self.engine.connect() as connection:

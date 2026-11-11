@@ -585,7 +585,6 @@ def test_admin_post_preview_uses_real_renderer_and_bounds_input(configured_posts
     [
         {"title": "fixture", "slug": "fixture", "unknown": True},
         {"title": "fixture", "slug": "fixture", "tags": "not-a-list"},
-        {"title": "fixture", "slug": "fixture", "published_on": "01/02/2026"},
     ],
 )
 def test_admin_post_rejects_outside_input(configured_posts, make_client, body):
@@ -596,6 +595,39 @@ def test_admin_post_rejects_outside_input(configured_posts, make_client, body):
     assert response.json()["detail"] in {"invalid request", "invalid post"}
     assert response.headers["Cache-Control"] == "no-store"
     assert store.list() == []
+
+
+@pytest.mark.parametrize(
+    ("detail", "changes", "setup"),
+    [
+        ("invalid slug", {"slug": "INVALID"}, None),
+        ("slug reserved by file post", {}, "reserved"),
+        ("slug already used", {}, "duplicate"),
+        ("title too long", {"title": "x" * 201}, None),
+        ("body too long", {"body_markdown": "x" * 1_000_001}, None),
+        ("invalid date", {"published_on": "01/02/2026"}, None),
+        ("invalid tags", {"tags": [f"tag-{index}" for index in range(21)]}, None),
+        (
+            "image unavailable",
+            {"body_markdown": "![](/media/00000000-0000-4000-8000-000000000000/lg.webp)"},
+            None,
+        ),
+    ],
+)
+def test_admin_post_returns_editor_validation_details(configured_posts, make_client, detail, changes, setup):
+    password, store = configured_posts
+    if setup == "reserved":
+        store.reserved_slugs = lambda: {"fixture"}
+    elif setup == "duplicate":
+        store.create(title="fixture", slug="fixture")
+
+    client, csrf = authenticated_client(password, make_client)
+    body = {"title": "fixture", "slug": "fixture", **changes}
+    response = client.post("/api/admin/posts", headers=mutation_headers(csrf), json=body)
+
+    assert response.status_code == 422
+    assert response.json() == {"detail": detail}
+    assert response.headers["Cache-Control"] == "no-store"
 
 
 def test_create_read_edit_same_body_and_hard_delete(configured_app, make_client):

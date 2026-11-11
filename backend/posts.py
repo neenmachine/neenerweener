@@ -6,6 +6,7 @@ import re
 import uuid
 from collections.abc import Callable, Collection, Sequence
 from datetime import date, datetime
+from html.parser import HTMLParser
 
 from sqlalchemy import (
     BigInteger,
@@ -33,12 +34,10 @@ from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.exc import IntegrityError
 
 from timeline import (
-    ATTACH_WINDOW,
-    DETACHED_GRACE,
     TORONTO,
     InvalidAttachment,
     _lock_assets,
-    _unused,
+    _replace_media_ownership,
     database_engine,
     media_assets,
     metadata,
@@ -51,8 +50,7 @@ MAX_BODY_CHARS = 1_000_000
 MAX_TAGS = 20
 MAX_TAG_CHARS = 50
 SLUG = re.compile(r"[a-z0-9-]{1,100}\Z")
-MEDIA_REFERENCE = re.compile(r"/media/([^\s)\"'<>]+)")
-MANAGED_MEDIA_REFERENCE = re.compile(r"([0-9a-fA-F-]{36})/(?:sm|lg)\.webp\Z")
+MANAGED_MEDIA_REFERENCE = re.compile(r"/media/([0-9a-fA-F-]{36})/(?:sm|lg)\.webp\Z")
 ACTIONS = ("save", "publish", "unpublish", "rename", "delete", "restore")
 
 web_posts = Table(
@@ -169,7 +167,9 @@ def normalize_tags(tags: Sequence[str]) -> list[str]:
 
 
 def _valid_text(value: str, maximum: int, field: str, *, allow_empty: bool = True) -> None:
-    if not isinstance(value, str) or "\x00" in value or len(value) > maximum or (not allow_empty and not value):
+    if isinstance(value, str) and len(value) > maximum:
+        raise InvalidPost(f"{field} too long")
+    if not isinstance(value, str) or "\x00" in value or (not allow_empty and not value):
         raise InvalidPost(f"invalid {field}")
     try:
         value.encode("utf-8")
@@ -191,18 +191,35 @@ def _published_on(value: str | date | None) -> date | None:
     return parsed
 
 
-def _media_ids(body_markdown: str) -> list[uuid.UUID]:
+class _MediaImages(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.sources: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag.lower() != "img":
+            return
+        source = next((value for name, value in attrs if name.lower() == "src"), None)
+        if source is not None:
+            self.sources.append(source)
+
+
+def _media_ids(rendered_html: str) -> list[uuid.UUID]:
+    images = _MediaImages()
+    images.feed(rendered_html)
     ids: list[uuid.UUID] = []
-    for match in MEDIA_REFERENCE.finditer(body_markdown):
-        managed = MANAGED_MEDIA_REFERENCE.fullmatch(match.group(1))
+    for source in images.sources:
+        if not source.startswith("/media/"):
+            continue
+        managed = MANAGED_MEDIA_REFERENCE.fullmatch(source)
         if managed is None:
-            raise InvalidAttachment
+            raise InvalidAttachment("invalid local media image")
         try:
             asset_id = uuid.UUID(managed.group(1))
         except ValueError as exc:
-            raise InvalidAttachment from exc
+            raise InvalidAttachment("invalid local media image") from exc
         if str(asset_id) != managed.group(1).lower() or asset_id in ids:
-            raise InvalidAttachment
+            raise InvalidAttachment("invalid local media image")
         ids.append(asset_id)
     return ids
 
@@ -354,29 +371,30 @@ class PostStore:
             return _document(connection, row)
 
     def restore(self, post_id: int, revision_id: int, version: int) -> dict:
+        with self.engine.connect() as connection:
+            revision = connection.execute(
+                select(web_post_revisions).where(
+                    web_post_revisions.c.id == revision_id,
+                    web_post_revisions.c.post_id == post_id,
+                )
+            ).mappings().one_or_none()
+        if revision is None:
+            raise PostNotFound(revision_id)
+        revision = dict(revision)
+        values, tags, asset_ids = self._validate(
+            revision["title"],
+            revision["slug"],
+            revision["body_markdown"],
+            revision["excerpt"],
+            revision["tags"],
+            revision["published_on"],
+            "draft",
+        )
+        values["published_at"] = revision["published_at"]
         try:
             with self.engine.begin() as connection:
                 _ownership_lock(connection)
                 current = _locked_document(connection, post_id, version)
-                revision = connection.execute(
-                    select(web_post_revisions).where(
-                        web_post_revisions.c.id == revision_id,
-                        web_post_revisions.c.post_id == post_id,
-                    )
-                ).mappings().one_or_none()
-                if revision is None:
-                    raise PostNotFound(revision_id)
-                revision = dict(revision)
-                values, tags, asset_ids = self._validate(
-                    revision["title"],
-                    revision["slug"],
-                    revision["body_markdown"],
-                    revision["excerpt"],
-                    revision["tags"],
-                    revision["published_on"],
-                    "draft",
-                )
-                values["published_at"] = revision["published_at"]
                 _record_revision(connection, current, "restore")
                 _set_slug(connection, post_id, current["slug"], revision["slug"])
                 _replace_tags(connection, post_id, tags)
@@ -408,22 +426,24 @@ class PostStore:
         _valid_text(body_markdown, MAX_BODY_CHARS, "body")
         if excerpt is not None:
             _valid_text(excerpt, MAX_EXCERPT_CHARS, "excerpt")
-        if not isinstance(slug, str) or not SLUG.fullmatch(slug) or slug in self.reserved_slugs():
-            raise InvalidPost("invalid or reserved slug")
+        if not isinstance(slug, str) or not SLUG.fullmatch(slug):
+            raise InvalidPost("invalid slug")
+        if slug in self.reserved_slugs():
+            raise InvalidPost("slug reserved by file post")
         if status not in {"draft", "live"}:
             raise InvalidPost("invalid status")
         normalized_tags = normalize_tags(tags)
         parsed_date = _published_on(published_on)
         if status == "live" and (not title.strip() or not body_markdown.strip()):
-            raise InvalidPost("live posts need a title and body")
-        self.renderer(body_markdown)
+            raise InvalidPost("live post needs title and body")
+        rendered_html = self.renderer(body_markdown)
         return {
             "title": title,
             "body_markdown": body_markdown,
             "excerpt": excerpt,
             "status": status,
             "published_on": parsed_date,
-        }, normalized_tags, _media_ids(body_markdown)
+        }, normalized_tags, _media_ids(rendered_html)
 
 
 def _ownership_lock(connection: Connection) -> None:
@@ -467,8 +487,8 @@ def _document(connection: Connection, row: dict) -> dict:
 
 
 def _same_document(current: dict, candidate: dict) -> bool:
-    fields = ("title", "body_markdown", "excerpt", "status", "published_on", "published_at", "slug", "tags", "media")
-    return all(current[field] == candidate[field] for field in fields)
+    fields = ("title", "body_markdown", "excerpt", "status", "published_on", "published_at", "slug", "tags")
+    return all(current[field] == candidate[field] for field in fields) and set(current["media"]) == set(candidate["media"])
 
 
 def _action(current: dict, candidate: dict) -> str:
@@ -507,7 +527,7 @@ def _set_slug(connection: Connection, post_id: int, old_slug: str, new_slug: str
         .with_for_update()
     ).one_or_none()
     if existing is not None and existing.post_id != post_id:
-        raise InvalidPost("slug unavailable")
+        raise InvalidPost("slug already used")
     connection.execute(
         update(web_post_slugs)
         .where(web_post_slugs.c.post_id == post_id, web_post_slugs.c.canonical.is_(True))
@@ -536,40 +556,26 @@ def _replace_media(
     *,
     allow_recently_detached: bool = False,
 ) -> None:
-    requested_set = set(requested)
-    _lock_assets(connection, current | requested_set)
-    new = requested_set - current
-    if new:
-        condition = media_assets.c.detached_at.is_(None)
-        age = media_assets.c.created_at > func.now() - ATTACH_WINDOW
-        if allow_recently_detached:
-            recently_detached = media_assets.c.detached_at > func.now() - DETACHED_GRACE
-            condition = condition | recently_detached
-            age = age | recently_detached
-        attachable = connection.execute(
-            select(func.count())
-            .select_from(media_assets)
-            .where(media_assets.c.id.in_(new), condition, age, _unused)
-        ).scalar_one()
-        if attachable != len(new):
-            raise InvalidAttachment
-    removed = current - requested_set
-    if removed:
-        connection.execute(update(media_assets).where(media_assets.c.id.in_(removed)).values(detached_at=func.now()))
-    connection.execute(delete(web_post_media).where(web_post_media.c.post_id == post_id))
-    if requested:
-        connection.execute(
-            update(media_assets).where(media_assets.c.id.in_(requested_set)).values(detached_at=None)
-        )
-        connection.execute(
-            insert(web_post_media),
-            [{"post_id": post_id, "asset_id": asset_id} for asset_id in requested],
-        )
+    def replace() -> None:
+        connection.execute(delete(web_post_media).where(web_post_media.c.post_id == post_id))
+        if requested:
+            connection.execute(
+                insert(web_post_media),
+                [{"post_id": post_id, "asset_id": asset_id} for asset_id in requested],
+            )
+
+    _replace_media_ownership(
+        connection,
+        requested,
+        current,
+        replace,
+        allow_recently_detached=allow_recently_detached,
+    )
 
 
 def _raise_conflict(exc: IntegrityError) -> None:
     constraint = getattr(getattr(exc.orig, "diag", None), "constraint_name", None)
     if constraint in {"web_post_slugs_pkey", "uq_web_post_slugs_canonical_post"}:
-        raise InvalidPost("slug unavailable") from exc
+        raise InvalidPost("slug already used") from exc
     if constraint in {"web_post_media_asset_id_key", "web_post_media_pkey"}:
         raise InvalidAttachment from exc

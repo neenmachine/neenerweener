@@ -525,6 +525,10 @@
    "label": "timeline"
   },
   {
+   "path": "/admin/posts",
+   "label": "posts"
+  },
+  {
    "path": "/admin/profile",
    "label": "profile"
   }

@@ -53,7 +53,7 @@ function failure(status: number, detail: unknown, retryAfter?: number): string {
   if (status === 403) return "request refused, reload the page";
   if (status === 404) return "entry not found";
   // The server's validation message is a short functional one; schema errors come as a list.
-  if ((status === 413 || status === 422) && typeof detail === "string") return detail;
+  if ((status === 409 || status === 413 || status === 422) && typeof detail === "string") return detail;
   if (status === 422) return "invalid text";
   if (status === 429)
     return retryAfter

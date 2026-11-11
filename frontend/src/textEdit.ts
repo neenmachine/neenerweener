@@ -25,18 +25,37 @@ export function replaceText(el: HTMLTextAreaElement, next: string): void {
   const { start, end, insert } = changedRange(el.value, next);
   const focused = document.activeElement;
   const { inert, readOnly } = el;
+  const { scrollX, scrollY } = window;
+  const { scrollTop } = el;
   // A covered (inert, hidden) or read-only textarea takes no focus or typing; let it, for this one edit (no paint
   // happens in between).
-  el.inert = false;
-  el.readOnly = false;
-  el.style.visibility = "visible";
-  el.focus({ preventScroll: true });
-  el.setSelectionRange(start, end);
-  const typed = document.execCommand(insert ? "insertText" : "delete", false, insert);
-  el.inert = inert;
-  el.readOnly = readOnly;
-  el.style.visibility = "";
-  // Where the browser has no undoable insert, the text still changes (without an undo step).
-  if (!typed || el.value !== next) el.value = next;
-  if (focused instanceof HTMLElement && focused !== el) focused.focus({ preventScroll: true });
+  try {
+    el.inert = false;
+    el.readOnly = false;
+    el.style.visibility = "visible";
+    el.focus({ preventScroll: true });
+    el.setSelectionRange(start, end);
+    // Where the browser has no undoable insert, the text still changes (without an undo step).
+    if (!document.execCommand(insert ? "insertText" : "delete", false, insert) || el.value !== next) el.value = next;
+  } finally {
+    el.inert = inert;
+    el.readOnly = readOnly;
+    el.style.visibility = "";
+  }
+  if (focused instanceof HTMLElement && focused !== el && focused !== document.body && focused.isConnected) {
+    focused.focus({ preventScroll: true });
+  } else if (inert) {
+    // WebKit keeps sending keys to a focused hidden textarea even after body.focus(): drop its focus.
+    el.blur();
+  }
+  if (inert) {
+    // The edit scrolls to the hidden caret (Firefox does it after the call returns); the reader does not see it, so
+    // keep the page and the textarea where they were.
+    const keep = () => {
+      window.scrollTo(scrollX, scrollY);
+      el.scrollTop = scrollTop;
+    };
+    keep();
+    requestAnimationFrame(keep);
+  }
 }

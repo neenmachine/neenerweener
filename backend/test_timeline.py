@@ -224,6 +224,7 @@ def test_alembic_upgrade_from_empty():
     engine = create_engine(os.environ['DATABASE_URL'])
     try:
         with engine.begin() as connection:
+            connection.exec_driver_sql('DROP TABLE IF EXISTS media_sweep_claims CASCADE')
             connection.exec_driver_sql('DROP TABLE IF EXISTS web_post_revisions CASCADE')
             connection.exec_driver_sql('DROP TABLE IF EXISTS web_post_media CASCADE')
             connection.exec_driver_sql('DROP TABLE IF EXISTS web_post_tags CASCADE')

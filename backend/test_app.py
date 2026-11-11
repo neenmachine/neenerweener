@@ -38,6 +38,10 @@ def test_spa_fallback(tmp_path, monkeypatch):
     assert c.get("/nope").text == "<html>app</html>"
     assert "<html>app" in c.get("/").text
     assert c.get("/assets/x.js").text == "console.log('x')"
+    # Built files load by CORS in the admin preview's opaque-origin sandbox; nothing else is shared cross-origin.
+    assert c.get("/assets/x.js").headers["Access-Control-Allow-Origin"] == "*"
+    for path in ("/", "/nope", "/assets/missing.js", "/api/posts", "/api/admin/session", "/admin"):
+        assert "Access-Control-Allow-Origin" not in c.get(path).headers, path
     assert c.get("/api/nope").status_code == 404
     assert c.get("/api/nope").json() == {"detail": "not found"}
     assert c.get("/api/posts").status_code == 200

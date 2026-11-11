@@ -1,3 +1,4 @@
+import re
 from os import environ
 from urllib.parse import urljoin
 from xml.etree.ElementTree import Element, SubElement, tostring
@@ -12,6 +13,8 @@ router = APIRouter()
 ATOM = "http://www.w3.org/2005/Atom"
 SITEMAP = "http://www.sitemaps.org/schemas/sitemap/0.9"
 CACHE_CONTROL = "public, max-age=300"
+# The src of a raw <img> that the editor writes for a resized image; other raw HTML stays as Henry wrote it.
+RAW_MEDIA_SRC = re.compile(r"""(<img\b[^>]*?\ssrc=["']?)(?=/media/)""", re.IGNORECASE)
 
 
 def origin() -> str:
@@ -35,6 +38,8 @@ def feed_html(body: str, post_url: str) -> str:
     tokens = app.md.parse(body, {})
     for token in tokens:
         for item in [token, *(token.children or [])]:
+            if item.type in ("html_block", "html_inline"):
+                item.content = RAW_MEDIA_SRC.sub(lambda found: found.group(1) + origin(), item.content)
             for attribute in ("href", "src"):
                 value = item.attrGet(attribute)
                 if value is None:

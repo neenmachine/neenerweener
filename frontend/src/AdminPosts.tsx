@@ -1,9 +1,12 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { compact } from "./App";
-import type { Result } from "./adminApi";
+import type { Result, Uploaded } from "./adminApi";
 import type { AdminPageProps } from "./adminPages";
 import { Button, type Send } from "./EntryEditor";
-import { previewDocument } from "./postPreview";
+import { imageFiles, imageMarkdown, insertAt, type Spot } from "./postPaste";
+import { type Preview as Rendered, previewHtml, previewShell } from "./postPreview";
+import { replaceText } from "./textEdit";
+import type { Control, FrameEdit, FrameImage, FrameReady, FrameRender } from "./previewFrame";
 import { useRequest } from "./useRequest";
 
 // Web posts (in the database, beside the read-only posts/ files): the list, then one post's editor with raw/preview,
@@ -95,6 +98,14 @@ export default function AdminPosts({ send, active }: AdminPageProps) {
   );
 }
 
+const dataUrl = (file: File) =>
+  new Promise<string>((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => resolve("");
+    reader.readAsDataURL(file);
+  });
+
 const stateOf = (p: Post) => (p.deleted_at ? "deleted" : p.status);
 
 type Fields = { title: string; slug: string; published_on: string; excerpt: string; tags: string; body: string };
@@ -128,6 +139,28 @@ function PostEditor({ start, send, onSaved, onClose }: { start: Post | null; sen
   const confirmButton = useRef<HTMLButtonElement>(null);
   const deleteButton = useRef<HTMLButtonElement>(null);
   const title = useRef<HTMLHeadingElement>(null);
+  const markdown = useRef<HTMLTextAreaElement>(null);
+  const [uploading, setUploading] = useState(0);
+  const [uploadError, setUploadError] = useState("");
+  // Uploads end with the editor: an image that answers after it closed never inserts anything.
+  const life = useRef<AbortController>(null!);
+  useEffect(() => {
+    life.current = new AbortController();
+    return () => life.current.abort();
+  }, []);
+  const caret = useRef<number | null>(null);
+  // Pasted images by media id, as data: URLs for the preview until a saved post makes /media serve them.
+  const local = useRef(new Map<string, string>());
+  useLayoutEffect(() => {
+    const el = markdown.current;
+    if (caret.current === null || !el) return;
+    // Back to the textarea after the images, unless Henry has moved on to another field meanwhile.
+    if (!el.inert && (document.activeElement === el || document.activeElement === document.body)) {
+      el.focus();
+      el.setSelectionRange(caret.current, caret.current);
+    }
+    caret.current = null;
+  }, [fields.body]);
 
   const dirty = JSON.stringify(fields) !== JSON.stringify(fieldsOf(post));
   const deleted = !!post?.deleted_at;
@@ -207,6 +240,45 @@ function PostEditor({ start, send, onSaved, onClose }: { start: Post | null; sen
     call((signal) => send<Post>("GET", `/api/admin/posts/${post!.id}`, undefined, signal), "");
   const back = () => (!dirty || confirm(DISCARD)) && onClose();
 
+  // Pasted or dropped images: each uploads through the media pipeline, then all that succeeded go in, in order, where
+  // the text was when they came. A failed one shows its error and the text stays as it is.
+  const addImages = async (files: File[], el: HTMLTextAreaElement) => {
+    const spot: Spot = { text: el.value, start: el.selectionStart, end: el.selectionEnd };
+    const { signal } = life.current;
+    setUploading((n) => n + 1);
+    setUploadError("");
+    const results = await Promise.all(files.map((file) => send<Uploaded>("POST", "/api/admin/media", file, signal)));
+    if (signal.aborted) return;
+    setUploading((n) => n - 1);
+    const failed = results.find((r) => !r.ok);
+    if (failed && !failed.ok && failed.status !== 401) setUploadError(failed.message);
+    const ids = results.flatMap((r) => (r.ok ? [r.data.id] : []));
+    const urls = await Promise.all(files.map((file, i) => (results[i].ok ? dataUrl(file) : "")));
+    if (signal.aborted) return;
+    results.forEach((r, i) => r.ok && local.current.set(r.data.id, urls[i]));
+    if (!ids.length || !markdown.current) return;
+    const done = insertAt(markdown.current.value, spot, ids.map(imageMarkdown).join("\n\n"));
+    caret.current = done.caret;
+    writeBody(done.text);
+  };
+  // Every text change the editor makes itself goes through here, so Cmd+Z undoes it like typing.
+  const writeBody = (next: string) => {
+    const el = markdown.current;
+    if (!el) return;
+    replaceText(el, next);
+    setFields((f) => ({ ...f, body: el.value }));
+    setStatus("");
+  };
+  const takeImages = (e: React.ClipboardEvent<HTMLTextAreaElement> | React.DragEvent<HTMLTextAreaElement>) => {
+    const data = "clipboardData" in e ? e.clipboardData : e.dataTransfer;
+    const files = imageFiles(data);
+    // A dropped file that is not an image is refused too, so the browser does not open it in place of the editor.
+    if (files.length || (e.type === "drop" && data?.types.includes("Files"))) e.preventDefault();
+    if (files.length && !busy && !deleted) addImages(files, e.currentTarget);
+  };
+
+  // Not while an image uploads: the saved post would replace the text before its markdown goes in.
+  const canSave = uploading === 0 && !deleted;
   const live = post?.status === "live";
   const field = (key: keyof Fields, label: string, type = "text") => (
     <div className={`field-${key}`}>
@@ -222,7 +294,7 @@ function PostEditor({ start, send, onSaved, onClose }: { start: Post | null; sen
         className="admin-section post-editor"
         onSubmit={(e) => {
           e.preventDefault();
-          if (!deleted) save(live ? "live" : "draft", "saved");
+          if (canSave) save(live ? "live" : "draft", "saved");
         }}
       >
         <div className="admin-row">
@@ -255,6 +327,15 @@ function PostEditor({ start, send, onSaved, onClose }: { start: Post | null; sen
                 preview
               </button>
             </span>
+            <span className="muted" role="status">
+              {uploading > 0 ? "uploading" : ""}
+            </span>
+            {/* Beside the buttons, not below the tall textarea where it would be out of view. */}
+            {uploadError && (
+              <span className="error" role="alert">
+                {uploadError}
+              </span>
+            )}
           </div>
           {/* The textarea stays rendered under the preview, so its text, selection and undo history stay. */}
           <div className="markdown-stack">
@@ -262,11 +343,15 @@ function PostEditor({ start, send, onSaved, onClose }: { start: Post | null; sen
               className={mode === "raw" ? "markdown" : "markdown covered"}
               aria-labelledby="post-markdown-label"
               inert={mode !== "raw"}
+              ref={markdown}
               value={fields.body}
               onChange={set("body")}
+              onPaste={takeImages}
+              onDragOver={(e) => e.dataTransfer.types.includes("Files") && e.preventDefault()}
+              onDrop={takeImages}
               readOnly={busy || deleted}
             />
-            <Preview body={fields.body} shown={mode === "preview"} send={send} />
+            <Preview body={fields.body} shown={mode === "preview"} locked={busy || deleted} send={send} onEdit={writeBody} local={local.current} />
           </div>
         </div>
         <div className="save-row">
@@ -275,13 +360,13 @@ function PostEditor({ start, send, onSaved, onClose }: { start: Post | null; sen
               <span className="admin-actions">
                 {live ? (
                   <>
-                    <Button type="submit" busy={busy} label="save" busyLabel="saving" />
-                    <Button onClick={() => save("draft", "unpublished")} busy={busy} label="unpublish" busyLabel="saving" />
+                    <Button type="submit" busy={busy} off={!canSave} label="save" busyLabel="saving" />
+                    <Button onClick={() => save("draft", "unpublished")} busy={busy} off={!canSave} label="unpublish" busyLabel="saving" />
                   </>
                 ) : (
                   <>
-                    <Button type="submit" busy={busy} label="save draft" busyLabel="saving" />
-                    <Button onClick={() => save("live", "published")} busy={busy} label="publish" busyLabel="saving" />
+                    <Button type="submit" busy={busy} off={!canSave} label="save draft" busyLabel="saving" />
+                    <Button onClick={() => save("live", "published")} busy={busy} off={!canSave} label="publish" busyLabel="saving" />
                   </>
                 )}
                 {post && <Button ref={deleteButton} onClick={() => setConfirming(true)} off={busy} label="delete" />}
@@ -313,25 +398,82 @@ function PostEditor({ start, send, onSaved, onClose }: { start: Post | null; sen
   );
 }
 
-// The rendered post, from the server's renderer, only in the sandboxed frame (see postPreview.ts). Switching to
-// preview renders at once; while it stays shown, a changed text renders after a pause, and a newer render cancels an
-// older one.
-function Preview({ body, shown, send }: { body: string; shown: boolean; send: Send }) {
+// The rendered post, from the server's renderer, only in the sandboxed frame (see postPreview.ts). The frame loads
+// once, when the editor opens: a frame load drops WebKit's undo history, the markdown textarea's too, so each
+// rendering reaches the loaded frame by postMessage. Switching to preview renders at once; while it stays shown, a
+// changed text renders after a pause, and a newer render cancels an older one. The frame may ask to move or resize one
+// managed image; the server rewrites that image's source and answers with the new markdown and its rendering, which
+// onEdit gives back to the editor.
+function Preview({
+  body,
+  shown,
+  locked,
+  send,
+  onEdit,
+  local,
+}: {
+  body: string;
+  shown: boolean;
+  locked: boolean; // a save is in flight (its answer replaces the text) or the post is deleted: no edits
+  send: Send;
+  onEdit: (body: string) => void;
+  local: ReadonlyMap<string, string>;
+}) {
   const { run, busy } = useRequest("load");
-  const [doc, setDoc] = useState<string | null>(null);
+  const [shell, setShell] = useState<{ doc: string; token: string } | null>(null);
+  const [drawn, setDrawn] = useState(false);
   const [error, setError] = useState("");
+  const [status, setStatus] = useState("");
+  const frame = useRef<HTMLIFrameElement>(null);
+  // The frame takes renderings once its controller says it is ready, and only in the document it first loaded: after
+  // a navigation away (which the frame tries to prevent) nothing more goes to it.
+  const ready = useRef(false);
+  const loads = useRef(0);
+  const latest = useRef<Omit<FrameRender, "token"> | null>(null);
+  const seq = useRef(0);
   const rendered = useRef<string | null>(null);
+  // The rendering the frame shows: an edit must name it and one of its images. null once it has had its one edit.
+  const current = useRef<{ seq: number; images: FrameImage[]; blocks: number } | null>(null);
+  const text = useRef(body);
+  text.current = body;
+  const frozen = useRef(locked);
+  frozen.current = locked;
   const wasShown = useRef(false);
 
-  const render = async (text: string) => {
+  useEffect(() => {
+    let live = true;
+    previewShell().then((s) => live && setShell(s));
+    return () => {
+      live = false;
+    };
+  }, []);
+  // An opaque origin has no name to address, so "*": the frame is checked by its window and load count instead.
+  const deliver = () => ready.current && latest.current && frame.current?.contentWindow?.postMessage({ ...latest.current, token: shell!.token }, "*");
+
+  type Edit = { media_id: string; move_to?: number; width?: number };
+  const render = async (body: string, edit?: Edit, focus: FrameRender["focus"] = null) => {
     const r = await run(async (signal) => {
       setError("");
-      const p = await send<{ html: string }>("POST", "/api/admin/posts/preview", { body_markdown: text }, signal);
-      return p.ok ? { ok: true as const, doc: await previewDocument(p.data.html) } : p;
+      setStatus("");
+      const p = await send<Rendered & { body_markdown?: string }>("POST", "/api/admin/posts/preview", { body_markdown: body, ...edit }, signal);
+      return p.ok ? { ok: true as const, p: p.data, shown: await previewHtml(p.data, local) } : p;
     });
     if (!r.ok) return r.status !== 401 && setError(r.message);
-    rendered.current = text;
-    setDoc(r.doc);
+    // The text changed while the edit was on its way (typing, a pasted image), or a save started: drop the edit and
+    // show the text as it is now.
+    if (edit && (text.current !== body || frozen.current)) return render(text.current);
+    const next = r.p.body_markdown ?? body;
+    rendered.current = next;
+    seq.current += 1;
+    current.current = { seq: seq.current, images: r.p.images, blocks: r.p.blocks };
+    latest.current = { seq: seq.current, ...r.shown, focus };
+    deliver();
+    setDrawn(true);
+    if (edit) {
+      onEdit(next);
+      const moved = r.p.images.find((i) => i.id === edit.media_id);
+      if (moved) setStatus(edit.width !== undefined ? `width ${edit.width} px` : `position ${moved.block + 1} of ${r.p.blocks}`);
+    }
   };
   useEffect(() => {
     const opening = !wasShown.current;
@@ -341,9 +483,34 @@ function Preview({ body, shown, send }: { body: string; shown: boolean; send: Se
     return () => clearTimeout(t);
   }, [shown, body]);
 
+  // A frame message is a request, never trusted: only from this frame's window and opaque origin, with this frame's
+  // token; an edit only for the shown rendering, one of its images, one valid action, and only while the text is
+  // still the one rendered.
+  useEffect(() => {
+    if (!shell) return;
+    const listen = (e: MessageEvent) => {
+      const m = e.data as Partial<FrameEdit & FrameReady> | null;
+      if (e.source !== frame.current?.contentWindow || e.origin !== "null" || typeof m !== "object" || m === null || m.token !== shell.token) return;
+      if (m.ready === true) {
+        ready.current = loads.current <= 1;
+        return deliver();
+      }
+      const c = current.current;
+      if (frozen.current || !c || m.seq !== c.seq || !c.images.some((i) => i.id === m.id) || rendered.current !== text.current) return;
+      const move = Number.isInteger(m.move_to) && m.move_to! >= 0 && m.move_to! <= c.blocks;
+      const width = Number.isInteger(m.width) && m.width! >= 1;
+      if (move === width) return;
+      const control = CONTROLS.includes(m.control as Control) ? (m.control as Control) : null;
+      current.current = null; // one edit per rendering
+      render(text.current, move ? { media_id: m.id!, move_to: m.move_to } : { media_id: m.id!, width: m.width }, control && { id: m.id!, control });
+    };
+    addEventListener("message", listen);
+    return () => removeEventListener("message", listen);
+  }, [shell]);
+
   return (
     <div className="preview" hidden={!shown}>
-      {busy && doc === null && <p className="admin-state muted">loading</p>}
+      {busy && !drawn && <p className="admin-state muted">loading</p>}
       {error && (
         <div className="admin-state admin-row">
           <p className="error" role="alert">
@@ -352,11 +519,27 @@ function Preview({ body, shown, send }: { body: string; shown: boolean; send: Se
           <Button onClick={() => render(body)} label="retry" />
         </div>
       )}
-      {/* allow-scripts without allow-same-origin: an opaque origin; the document's own CSP blocks every script. */}
-      {doc !== null && <iframe className="post-preview" sandbox="allow-scripts" srcDoc={doc} title="preview" />}
+      {/* allow-scripts without allow-same-origin: an opaque origin; the document's own CSP lets only the controller run. */}
+      {shell && (
+        <iframe
+          ref={frame}
+          className="post-preview"
+          sandbox="allow-scripts"
+          srcDoc={shell.doc}
+          title="preview"
+          onLoad={() => {
+            if (++loads.current > 1) ready.current = false;
+          }}
+        />
+      )}
+      <span className="sr-only" role="status">
+        {status}
+      </span>
     </div>
   );
 }
+
+const CONTROLS: Control[] = ["earlier", "later", "smaller", "larger", "width"];
 
 // Each recorded version of the post, newest first, reloaded after every change; restore makes it the current draft.
 function History({ post, send, busy, onRestore }: { post: Post; send: Send; busy: boolean; onRestore: (r: Revision) => void }) {

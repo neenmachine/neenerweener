@@ -1060,7 +1060,8 @@ form.admin-section {
   display: block;
   box-sizing: border-box;
   width: 100%;
-  height: 28rem;
+  /* Near the window's height, so a large image's tools and its resize corner fit in view together. */
+  height: max(28rem, calc(100vh - 8rem));
   border: 1px solid color-mix(in srgb, var(--fg) 14%, transparent);
   border-radius: 6px;
 }
@@ -1370,6 +1371,7 @@ article .meta {
 
 article img {
   max-width: 100%;
+  height: auto;
   border: 1px solid color-mix(in srgb, var(--fg) 10%, transparent);
   border-radius: 6px;
 }

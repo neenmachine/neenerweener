@@ -144,7 +144,7 @@ export default function Admin() {
     const before = focusBefore.current;
     if (!signedIn || !before) return;
     focusBefore.current = null;
-    if (before instanceof HTMLElement && before !== document.body && before.isConnected) before.focus();
+    if (before instanceof HTMLElement && before !== document.body && before.isConnected && !before.closest("[hidden]")) before.focus();
     else (focusPending.current = true), focusHeading();
   }, [signedIn]);
   // The server titles by the admin_hint cookie (sign in, or the path); the session check corrects a stale hint.

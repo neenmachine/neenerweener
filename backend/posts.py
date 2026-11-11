@@ -180,6 +180,10 @@ def _valid_text(value: str, maximum: int, field: str, *, allow_empty: bool = Tru
         raise InvalidPost(f"invalid {field}") from exc
 
 
+def check_body(body_markdown: str) -> None:
+    _valid_text(body_markdown, MAX_BODY_CHARS, "body")
+
+
 def _published_on(value: str | date | None) -> date | None:
     if value is None or isinstance(value, date) and not isinstance(value, datetime):
         return value
@@ -253,10 +257,6 @@ class PostStore:
         )
         self.reserved_slugs = reserved_slugs
         self.renderer = renderer
-
-    def preview(self, body_markdown: str) -> str:
-        _valid_text(body_markdown, MAX_BODY_CHARS, "body")
-        return self.renderer(body_markdown)
 
     def create(
         self,

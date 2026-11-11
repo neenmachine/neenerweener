@@ -19,9 +19,17 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 import app
 from auth import hash_password
 from machine_auth import Principal, machine_auth_tokens
-from media import MAX_UPLOAD_BYTES, MediaConfig, MemoryMediaStore, S3MediaStore, process_avatar
+from media import MAX_UPLOAD_BYTES, MediaConfig, MemoryMediaStore, S3MediaStore, process_avatar, sweep
 from test_machine_auth import challenge_and_token, key_pair, machine_app  # noqa: F401 -- shared fixtures
-from timeline import InvalidAttachment, TimelineStore, media_assets, site_profile, timeline_entries, timeline_entry_media
+from timeline import (
+    InvalidAttachment,
+    TimelineStore,
+    media_assets,
+    media_sweep_claims,
+    site_profile,
+    timeline_entries,
+    timeline_entry_media,
+)
 
 MEDIA_ENV = {
     "MEDIA_BUCKET": "fake-bucket",
@@ -479,6 +487,7 @@ def media_db(machine_app, monkeypatch):  # noqa: F811
         connection.execute(update(site_profile).where(site_profile.c.id == 1).values(
             display_name="neenerweener", handle=None, avatar_asset_id=None
         ))
+        connection.execute(delete(media_sweep_claims))
         connection.execute(delete(media_assets))
     yield machine_app, store
     with app.timeline_store.engine.begin() as connection:
@@ -486,6 +495,7 @@ def media_db(machine_app, monkeypatch):  # noqa: F811
         connection.execute(update(site_profile).where(site_profile.c.id == 1).values(
             display_name="neenerweener", handle=None, avatar_asset_id=None
         ))
+        connection.execute(delete(media_sweep_claims))
         connection.execute(delete(media_assets))
 
 
@@ -646,7 +656,7 @@ def test_sweep_removes_expired_unattached_assets_objects_then_row(media_db, monk
     original_delete = store.delete
 
     def failing_delete(key):
-        if str(ids["delete-fails"]) in key:
+        if str(ids["delete-fails"]) in key and key.endswith("/sm.webp"):
             raise RuntimeError("bucket down")
         original_delete(key)
 
@@ -665,6 +675,23 @@ def test_sweep_removes_expired_unattached_assets_objects_then_row(media_db, monk
     assert remaining == {ids[name] for name in kept} | {uuid.UUID(upload.json()["id"])}
     object_ids = {uuid.UUID(KEY.fullmatch(key)[1]) for key in store.objects}
     assert object_ids == remaining
+    assert f"media/{ids['delete-fails']}/lg.webp" not in store.objects
+    with timeline.engine.connect() as connection:
+        assert connection.execute(
+            select(media_sweep_claims.c.asset_id).where(media_sweep_claims.c.asset_id == ids["delete-fails"])
+        ).scalar_one() == ids["delete-fails"]
+
+    store.delete = original_delete
+    sweep(timeline, store)
+
+    with timeline.engine.connect() as connection:
+        assert connection.execute(
+            select(media_assets.c.id).where(media_assets.c.id == ids["delete-fails"])
+        ).scalar_one_or_none() is None
+        assert connection.execute(
+            select(media_sweep_claims.c.asset_id).where(media_sweep_claims.c.asset_id == ids["delete-fails"])
+        ).scalar_one_or_none() is None
+    assert all(str(ids["delete-fails"]) not in key for key in store.objects)
 
 
 # Attachments (M2): create with images, public read, the /media route, and delete.

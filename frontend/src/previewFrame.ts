@@ -1,22 +1,30 @@
 // The one script of the admin post preview. It runs only inside the sandboxed preview frame (opaque origin, see
-// postPreview.ts), loaded by the frame's one nonce script; nothing else there may run. It draws mermaid diagrams and
-// gives each managed web-post image move and resize controls. It never edits the post itself: it tells the parent
-// "move image X before block N" or "make image X N px wide"; the server rewrites only that image's source.
+// postPreview.ts), loaded by the frame's one nonce script; nothing else there may run. The frame loads once per
+// editor; each rendering then arrives by postMessage and replaces the article. It draws mermaid diagrams and gives
+// each managed web-post image move and resize controls. It never edits the post itself: it tells the parent "move
+// image X before block N" or "make image X N px wide"; the server rewrites only that image's source.
 // The parent imports this module only for its URL; importing it does nothing.
 
 export type FrameImage = { id: string; block: number; standalone: boolean; width: number | null };
 export type FrameStart = {
-  token: string; // this preview's channel: the parent drops a message without it
-  origin: string;
+  token: string; // this frame's channel: each side drops a message without it
+  origin: string; // the admin page's: the only window this frame takes renderings from and sends edits to
+};
+// parent -> frame: one rendering. seq numbers it; an edit names the rendering it was made on.
+export type FrameRender = {
+  token: string;
+  seq: number;
+  html: string;
   blocks: number;
   images: FrameImage[];
-  scroll: number;
-  focus: { id: string; control: Control } | null; // the control to focus again after the edit that made this preview
   // Images pasted since the last save, as data: URLs: /media serves an image only once a saved post uses it.
   local: Record<string, string>;
+  focus: { id: string; control: Control } | null; // the control to focus again after the edit that made this rendering
 };
 export type Control = "earlier" | "later" | "smaller" | "larger" | "width";
-export type FrameEdit = { token: string; id: string; move_to?: number; width?: number; scroll: number; control: Control | null };
+// frame -> parent: ready (send me the rendering), or one edit.
+export type FrameEdit = { token: string; seq: number; id: string; move_to?: number; width?: number; control: Control | null };
+export type FrameReady = { token: string; ready: true };
 
 const LABELS: [Control, string][] = [
   ["earlier", "move earlier"],
@@ -26,7 +34,38 @@ const LABELS: [Control, string][] = [
 ];
 const MIN_WIDTH = 16;
 
+let channel: FrameStart;
+// Escape cancels whatever drag or resize is running; a new rendering cancels it too.
+let cancel: (() => void) | null = null;
+
 function start(s: FrameStart) {
+  channel = s;
+  addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && cancel) {
+      e.preventDefault();
+      cancel();
+    }
+  });
+  // A link in the preview never navigates: the frame would lose its controller (and WebKit the page's undo history).
+  addEventListener("click", (e) => e.target instanceof Element && e.target.closest("a[href]") && e.preventDefault());
+  addEventListener("message", (e: MessageEvent) => {
+    const m = e.data as Partial<FrameRender> | null;
+    if (e.source !== parent || e.origin !== s.origin || typeof m !== "object" || m === null || m.token !== s.token) return;
+    draw(m as FrameRender);
+  });
+  parent.postMessage({ token: s.token, ready: true } satisfies FrameReady, s.origin);
+}
+
+function draw(s: FrameRender) {
+  cancel?.();
+  const article = document.querySelector("article")!;
+  // Parsed inert first, then put in: a <meta http-equiv> in the post would act on insertion (a refresh navigates
+  // the frame and drops WebKit's undo history again).
+  const parsed = document.createElement("template");
+  parsed.innerHTML = s.html;
+  parsed.content.querySelectorAll("meta[http-equiv]").forEach((m) => m.remove());
+  article.replaceChildren(parsed.content);
+
   const diagrams = document.querySelectorAll<HTMLElement>("pre.mermaid");
   if (diagrams.length) {
     // The same mermaid set-up as the post page (App.tsx).
@@ -39,9 +78,7 @@ function start(s: FrameStart) {
       mermaid.run({ nodes: diagrams });
     });
   }
-  const article = document.querySelector("article");
-  if (!article) return;
-  const post = (edit: Omit<FrameEdit, "token" | "scroll">) => parent.postMessage({ ...edit, token: s.token, scroll: scrollY }, s.origin);
+  const post = (edit: Omit<FrameEdit, "token" | "seq">) => parent.postMessage({ ...edit, token: channel.token, seq: s.seq } satisfies FrameEdit, channel.origin);
 
   // Where an image can land: before each top-level block, marked by the server with <!--ween-block:N-->.
   const markers: { block: number; y: () => number }[] = [];
@@ -50,15 +87,6 @@ function start(s: FrameStart) {
     const found = /^ween-block:(\d+)$/.exec(node.nodeValue ?? "");
     if (found) markers.push({ block: Number(found[1]), y: edgeOf(node) });
   }
-
-  // Escape cancels whatever drag or resize is running.
-  let cancel: (() => void) | null = null;
-  addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && cancel) {
-      e.preventDefault();
-      cancel();
-    }
-  });
 
   for (const meta of s.images) {
     const img = [...article.querySelectorAll("img")].find((i) => i.getAttribute("src") === `/media/${meta.id}/lg.webp`);
@@ -203,7 +231,6 @@ function start(s: FrameStart) {
       (again && !(again as HTMLButtonElement).disabled ? again : box).focus();
     }
   }
-  scrollTo(0, s.scroll);
 }
 
 // The page y of the gap a block marker stands for: the top of the next element, or the bottom of the one before.

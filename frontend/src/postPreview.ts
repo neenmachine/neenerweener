@@ -1,9 +1,9 @@
-// The admin post preview document: the server's rendered html inside a page that may only show it. It is shown only
-// as the srcDoc of <iframe sandbox="allow-scripts"> (no allow-same-origin): an opaque origin, so nothing in the
-// html can reach the admin document, its cookies or its API. The meta CSP is enforced: the one script that may run
-// is the frame controller (previewFrame.ts), started by a script carrying this preview's random nonce, and the
-// modules it imports. Authored scripts and event handlers in the post have no nonce, so they never run. Only this
-// site's styles, fonts and images load.
+// The admin post preview document: a page that may only show the server's rendered html. It is shown only as the
+// srcDoc of <iframe sandbox="allow-scripts"> (no allow-same-origin): an opaque origin, so nothing in the html can
+// reach the admin document, its cookies or its API. The meta CSP is enforced: the one script that may run is the
+// frame controller (previewFrame.ts), started by a script carrying this frame's random nonce, and the modules it
+// imports. Authored scripts and event handlers in the post have no nonce, so they never run. Only this site's
+// styles, fonts and images load.
 
 import type { FrameImage, FrameStart } from "./previewFrame";
 
@@ -26,42 +26,37 @@ const CONTROLLER_CSS = `
 
 export type Preview = { html: string; blocks: number; images: FrameImage[] };
 
-// The document and its channel token, which the frame's messages must carry. restore: scroll and focus to keep
-// across an edit. local: data: URLs of images pasted since the last save, by media id.
-export async function previewDocument(
-  p: Preview,
-  restore: Pick<FrameStart, "scroll" | "focus">,
-  local: ReadonlyMap<string, string>,
-): Promise<{ doc: string; token: string }> {
+// The preview frame's document, made once per editor: WebKit drops the page's undo history (the markdown textarea's
+// too) whenever a frame navigates, so the frame loads once and every rendering then reaches it by postMessage
+// (previewFrame.ts). token: the channel's secret, which every message in either direction must carry.
+export async function previewShell(): Promise<{ doc: string; token: string }> {
   const token = random();
+  const nonce = random();
   const origin = location.origin;
-  let html = p.html;
+  const [{ frame }, { default: katexCss }] = await Promise.all([import("./previewFrame"), import("katex/dist/katex.min.css?url")]);
   const styles = [...document.querySelectorAll<HTMLLinkElement>('link[rel="stylesheet"]')].map((l) => l.href);
-  // Math is drawn in the browser on the public page; draw it here, in an inert parsed document (no script runs and
-  // nothing loads in it), only when the post has math.
+  styles.push(new URL(katexCss, origin).href);
+  // JSON in a script: < escaped, so no text in it can close the script element.
+  const data = (v: unknown) => JSON.stringify(v).replace(/</g, "\\u003c");
+  const start: FrameStart = { token, origin };
+  const csp = `default-src 'none'; script-src 'nonce-${nonce}' 'strict-dynamic'; img-src ${origin} data: blob:; style-src ${origin} 'unsafe-inline'; font-src ${origin} data:; base-uri ${origin}; form-action 'none'`;
+  // target=_blank without allow-popups: a link click does nothing, so the preview never navigates away.
+  const doc = `<!doctype html><html lang="en"><head><meta http-equiv="Content-Security-Policy" content="${csp}"><meta charset="utf-8"><meta property="csp-nonce" nonce="${nonce}"><meta name="color-scheme" content="light dark"><base href="${origin}/" target="_blank">${styles.map((h) => `<link rel="stylesheet" href="${escapeAttr(h)}">`).join("")}<style>main{padding:1.25rem}${CONTROLLER_CSS}</style><script type="module" nonce="${nonce}">import(${data(frame.url)}).then((m) => m.frame.start(${data(start)}))</script></head><body><main><article></article></main></body></html>`;
+  return { doc, token };
+}
+
+// The server's rendering as the frame draws it: math drawn here, in an inert parsed document (no script runs and
+// nothing loads in it), as on the public page. local: data: URLs of images pasted since the last save, by media id.
+export async function previewHtml(p: Preview, local: ReadonlyMap<string, string>) {
+  let html = p.html;
   if (html.includes('class="math')) {
-    const [{ default: katex }, { default: katexCss }] = await Promise.all([import("katex"), import("katex/dist/katex.min.css?url")]);
+    const { default: katex } = await import("katex");
     const doc = new DOMParser().parseFromString(html, "text/html");
     doc.querySelectorAll(".math").forEach((el) => {
       el.innerHTML = katex.renderToString(el.textContent ?? "", { displayMode: el.classList.contains("block"), throwOnError: false });
     });
     html = doc.body.innerHTML;
-    styles.push(new URL(katexCss, origin).href);
   }
-  // The controller runs only when there is something for it to do: a diagram to draw or an image to move.
-  let script = "";
-  const nonce = random();
-  if (p.images.length || html.includes('class="mermaid"')) {
-    const { url } = (await import("./previewFrame")).frame;
-    const pasted = Object.fromEntries(p.images.flatMap((i) => (local.has(i.id) ? [[i.id, local.get(i.id)!]] : [])));
-    const start: FrameStart = { token, origin, blocks: p.blocks, images: p.images, ...restore, local: pasted };
-    // JSON in a script: < escaped, so no text in it can close the script element.
-    const data = (v: unknown) => JSON.stringify(v).replace(/</g, "\\u003c");
-    // In the head, before the post's html, so no unclosed element in the post can swallow it; a module runs after parsing.
-    script = `<script type="module" nonce="${nonce}">import(${data(url)}).then((m) => m.frame.start(${data(start)}))</script>`;
-  }
-  const csp = `default-src 'none'; script-src 'nonce-${nonce}' 'strict-dynamic'; img-src ${origin} data: blob:; style-src ${origin} 'unsafe-inline'; font-src ${origin} data:; base-uri ${origin}; form-action 'none'`;
-  // target=_blank without allow-popups: a link click does nothing, so the preview never navigates away.
-  const doc = `<!doctype html><html lang="en"><head><meta http-equiv="Content-Security-Policy" content="${csp}"><meta charset="utf-8"><meta property="csp-nonce" nonce="${nonce}"><meta name="color-scheme" content="light dark"><base href="${origin}/" target="_blank">${styles.map((h) => `<link rel="stylesheet" href="${escapeAttr(h)}">`).join("")}<style>main{padding:1.25rem}${CONTROLLER_CSS}</style>${script}</head><body><main><article>${html}</article></main></body></html>`;
-  return { doc, token };
+  const pasted = Object.fromEntries(p.images.flatMap((i) => (local.has(i.id) ? [[i.id, local.get(i.id)!]] : [])));
+  return { html, blocks: p.blocks, images: p.images, local: pasted };
 }

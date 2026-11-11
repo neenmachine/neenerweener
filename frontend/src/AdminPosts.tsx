@@ -4,8 +4,8 @@ import type { Result, Uploaded } from "./adminApi";
 import type { AdminPageProps } from "./adminPages";
 import { Button, type Send } from "./EntryEditor";
 import { imageFiles, imageMarkdown, insertAt, type Spot } from "./postPaste";
-import { type Preview as Rendered, previewDocument } from "./postPreview";
-import type { Control, FrameEdit, FrameImage, FrameStart } from "./previewFrame";
+import { type Preview as Rendered, previewHtml, previewShell } from "./postPreview";
+import type { Control, FrameEdit, FrameImage, FrameReady, FrameRender } from "./previewFrame";
 import { useRequest } from "./useRequest";
 
 // Web posts (in the database, beside the read-only posts/ files): the list, then one post's editor with raw/preview,
@@ -389,10 +389,12 @@ function PostEditor({ start, send, onSaved, onClose }: { start: Post | null; sen
   );
 }
 
-// The rendered post, from the server's renderer, only in the sandboxed frame (see postPreview.ts). Switching to
-// preview renders at once; while it stays shown, a changed text renders after a pause, and a newer render cancels an
-// older one. The frame may ask to move or resize one managed image; the server rewrites that image's source and
-// answers with the new markdown and its rendering, which onEdit gives back to the editor.
+// The rendered post, from the server's renderer, only in the sandboxed frame (see postPreview.ts). The frame loads
+// once, when the editor opens: a frame load drops WebKit's undo history, the markdown textarea's too, so each
+// rendering reaches the loaded frame by postMessage. Switching to preview renders at once; while it stays shown, a
+// changed text renders after a pause, and a newer render cancels an older one. The frame may ask to move or resize one
+// managed image; the server rewrites that image's source and answers with the new markdown and its rendering, which
+// onEdit gives back to the editor.
 function Preview({
   body,
   shown,
@@ -407,28 +409,50 @@ function Preview({
   local: ReadonlyMap<string, string>;
 }) {
   const { run, busy } = useRequest("load");
-  const [doc, setDoc] = useState<string | null>(null);
+  const [shell, setShell] = useState<{ doc: string; token: string } | null>(null);
+  const [drawn, setDrawn] = useState(false);
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
-  const rendered = useRef<string | null>(null);
-  // The shown document's channel token and images: a frame message must name both.
-  const current = useRef<{ token: string; images: FrameImage[]; blocks: number } | null>(null);
   const frame = useRef<HTMLIFrameElement>(null);
+  // The frame takes renderings once its controller says it is ready, and only in the document it first loaded: after
+  // a navigation away (which the frame tries to prevent) nothing more goes to it.
+  const ready = useRef(false);
+  const loads = useRef(0);
+  const latest = useRef<Omit<FrameRender, "token"> | null>(null);
+  const seq = useRef(0);
+  const rendered = useRef<string | null>(null);
+  // The rendering the frame shows: an edit must name it and one of its images. null once it has had its one edit.
+  const current = useRef<{ seq: number; images: FrameImage[]; blocks: number } | null>(null);
+  const text = useRef(body);
+  text.current = body;
   const wasShown = useRef(false);
 
+  useEffect(() => {
+    let live = true;
+    previewShell().then((s) => live && setShell(s));
+    return () => {
+      live = false;
+    };
+  }, []);
+  // An opaque origin has no name to address, so "*": the frame is checked by its window and load count instead.
+  const deliver = () => ready.current && latest.current && frame.current?.contentWindow?.postMessage({ ...latest.current, token: shell!.token }, "*");
+
   type Edit = { media_id: string; move_to?: number; width?: number };
-  const render = async (text: string, edit?: Edit, restore: Pick<FrameStart, "scroll" | "focus"> = { scroll: 0, focus: null }) => {
+  const render = async (body: string, edit?: Edit, focus: FrameRender["focus"] = null) => {
     const r = await run(async (signal) => {
       setError("");
       setStatus("");
-      const p = await send<Rendered & { body_markdown?: string }>("POST", "/api/admin/posts/preview", { body_markdown: text, ...edit }, signal);
-      return p.ok ? { ok: true as const, p: p.data, ...(await previewDocument(p.data, restore, local)) } : p;
+      const p = await send<Rendered & { body_markdown?: string }>("POST", "/api/admin/posts/preview", { body_markdown: body, ...edit }, signal);
+      return p.ok ? { ok: true as const, p: p.data, shown: await previewHtml(p.data, local) } : p;
     });
     if (!r.ok) return r.status !== 401 && setError(r.message);
-    const next = r.p.body_markdown ?? text;
+    const next = r.p.body_markdown ?? body;
     rendered.current = next;
-    current.current = { token: r.token, images: r.p.images, blocks: r.p.blocks };
-    setDoc(r.doc);
+    seq.current += 1;
+    current.current = { seq: seq.current, images: r.p.images, blocks: r.p.blocks };
+    latest.current = { seq: seq.current, ...r.shown, focus };
+    deliver();
+    setDrawn(true);
     if (edit) {
       onEdit(next);
       const moved = r.p.images.find((i) => i.id === edit.media_id);
@@ -443,32 +467,34 @@ function Preview({
     return () => clearTimeout(t);
   }, [shown, body]);
 
-  // A frame message is a request, never trusted: only from this frame's window, with this rendering's token, for one
-  // of its images, one valid action, and only while the text is still the one rendered.
+  // A frame message is a request, never trusted: only from this frame's window and opaque origin, with this frame's
+  // token; an edit only for the shown rendering, one of its images, one valid action, and only while the text is
+  // still the one rendered.
   useEffect(() => {
+    if (!shell) return;
     const listen = (e: MessageEvent) => {
+      const m = e.data as Partial<FrameEdit & FrameReady> | null;
+      if (e.source !== frame.current?.contentWindow || e.origin !== "null" || typeof m !== "object" || m === null || m.token !== shell.token) return;
+      if (m.ready === true) {
+        ready.current = loads.current <= 1;
+        return deliver();
+      }
       const c = current.current;
-      const m = e.data as Partial<FrameEdit> | null;
-      if (!c || e.source !== frame.current?.contentWindow || typeof m !== "object" || m === null || m.token !== c.token) return;
-      if (!c.images.some((i) => i.id === m.id) || rendered.current !== body) return;
+      if (!c || m.seq !== c.seq || !c.images.some((i) => i.id === m.id) || rendered.current !== text.current) return;
       const move = Number.isInteger(m.move_to) && m.move_to! >= 0 && m.move_to! <= c.blocks;
       const width = Number.isInteger(m.width) && m.width! >= 1;
       if (move === width) return;
       const control = CONTROLS.includes(m.control as Control) ? (m.control as Control) : null;
-      const scroll = typeof m.scroll === "number" && Number.isFinite(m.scroll) ? m.scroll : 0;
       current.current = null; // one edit per rendering
-      render(body, move ? { media_id: m.id!, move_to: m.move_to } : { media_id: m.id!, width: m.width }, {
-        scroll,
-        focus: control && { id: m.id!, control },
-      });
+      render(text.current, move ? { media_id: m.id!, move_to: m.move_to } : { media_id: m.id!, width: m.width }, control && { id: m.id!, control });
     };
     addEventListener("message", listen);
     return () => removeEventListener("message", listen);
-  }, [body]);
+  }, [shell]);
 
   return (
     <div className="preview" hidden={!shown}>
-      {busy && doc === null && <p className="admin-state muted">loading</p>}
+      {busy && !drawn && <p className="admin-state muted">loading</p>}
       {error && (
         <div className="admin-state admin-row">
           <p className="error" role="alert">
@@ -478,7 +504,18 @@ function Preview({
         </div>
       )}
       {/* allow-scripts without allow-same-origin: an opaque origin; the document's own CSP lets only the controller run. */}
-      {doc !== null && <iframe ref={frame} className="post-preview" sandbox="allow-scripts" srcDoc={doc} title="preview" />}
+      {shell && (
+        <iframe
+          ref={frame}
+          className="post-preview"
+          sandbox="allow-scripts"
+          srcDoc={shell.doc}
+          title="preview"
+          onLoad={() => {
+            if (++loads.current > 1) ready.current = false;
+          }}
+        />
+      )}
       <span className="sr-only" role="status">
         {status}
       </span>

@@ -999,7 +999,7 @@ form.admin-section {
   gap: 14px 1.25rem;
 }
 
-.post-fields :is(.title, .excerpt) {
+.post-fields :is(.field-title, .field-excerpt) {
   grid-column: 1 / -1;
 }
 
@@ -1033,6 +1033,10 @@ form.admin-section {
   border-color: var(--line-strong);
   background: var(--tint-current);
   color: var(--fg);
+}
+
+.admin textarea.markdown[hidden] {
+  display: none;
 }
 
 .admin textarea.markdown {

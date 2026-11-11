@@ -19,7 +19,7 @@ export async function previewDocument(html: string): Promise<string> {
     html = doc.body.innerHTML;
     styles.push(new URL(katexCss, origin).href);
   }
-  const csp = `default-src 'none'; img-src ${origin} data: blob:; style-src ${origin} 'unsafe-inline'; font-src ${origin}; base-uri ${origin}; form-action 'none'`;
+  const csp = `default-src 'none'; img-src ${origin} data: blob:; style-src ${origin} 'unsafe-inline'; font-src ${origin} data:; base-uri ${origin}; form-action 'none'`;
   // target=_blank without allow-popups: a link click does nothing, so the preview never navigates away.
   return `<!doctype html><html lang="en"><head><meta http-equiv="Content-Security-Policy" content="${csp}"><meta charset="utf-8"><meta name="color-scheme" content="light dark"><base href="${origin}/" target="_blank">${styles.map((h) => `<link rel="stylesheet" href="${escapeAttr(h)}">`).join("")}<style>main{padding:1.25rem}</style></head><body><main><article>${html}</article></main></body></html>`;
 }

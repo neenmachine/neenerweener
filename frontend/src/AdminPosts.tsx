@@ -21,7 +21,7 @@ type Post = {
   deleted_at: string | null;
   tags: string[];
 };
-type Revision = { id: number; version: number; title: string; action: string; recorded_at: string };
+type Revision = { id: number; version: number; title: string; status: "draft" | "live"; recorded_at: string };
 
 // The server's slug rule (backend/posts.py SLUG); it also rejects reserved slugs.
 const SLUG = /^[a-z0-9-]{1,100}$/;
@@ -202,7 +202,7 @@ function PostEditor({ start, send, onSaved, onClose }: { start: Post | null; sen
   const canSave = !deleted && hasText(fields.title) && SLUG.test(fields.slug);
   const live = post?.status === "live";
   const field = (key: keyof Fields, label: string, type = "text") => (
-    <div className={`field ${key}`}>
+    <div className={`field-${key}`}>
       <label htmlFor={`post-${key}`}>{label}</label>
       <input id={`post-${key}`} type={type} value={fields[key]} onChange={set(key)} readOnly={busy || deleted} />
     </div>
@@ -230,7 +230,7 @@ function PostEditor({ start, send, onSaved, onClose }: { start: Post | null; sen
           {field("slug", "slug")}
           {field("published_on", "date", "date")}
           {field("tags", "tags")}
-          <div className="field excerpt">
+          <div className="field-excerpt">
             <label htmlFor="post-excerpt">excerpt</label>
             <textarea id="post-excerpt" rows={2} value={fields.excerpt} onChange={set("excerpt")} readOnly={busy || deleted} />
           </div>
@@ -240,7 +240,7 @@ function PostEditor({ start, send, onSaved, onClose }: { start: Post | null; sen
             <span className="label" id="post-markdown-label">
               markdown
             </span>
-            <span className="mode-switch" role="group" aria-labelledby="post-markdown-label">
+            <span className="mode-switch">
               <button type="button" className="button" aria-pressed={mode === "raw"} onClick={() => setMode("raw")}>
                 raw
               </button>
@@ -384,7 +384,7 @@ function History({ post, send, busy, onRestore }: { post: Post; send: Send; busy
           {revisions.map((r) => (
             <li key={r.id} className="admin-row">
               <span className="muted">
-                {compact(r.recorded_at, now)} · v{r.version}
+                {compact(r.recorded_at, now)} · v{r.version} · {r.status}
               </span>
               <span className="title">{r.title}</span>
               <Button onClick={() => onRestore(r)} off={busy} label="restore" name={`restore revision ${r.id}`} />

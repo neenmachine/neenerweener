@@ -22,4 +22,4 @@ COPY --from=frontend /app/frontend/dist/ /app/frontend/dist/
 RUN useradd --create-home app && chown -R app:app /app
 USER app
 # shortcut: startup migrations assume one replica; add a PostgreSQL advisory lock before scaling out.
-CMD ["sh", "-c", "cd /app/backend && /app/backend/.venv/bin/alembic upgrade head && exec /app/backend/.venv/bin/uvicorn app:app --host 0.0.0.0 --port ${PORT:-8000} --no-access-log --no-proxy-headers"]
+CMD ["sh", "-c", "cd /app/backend && /app/backend/.venv/bin/alembic upgrade head && /app/backend/.venv/bin/python -c 'import app; app.require_post_catalog_ready()' && exec /app/backend/.venv/bin/uvicorn app:app --host 0.0.0.0 --port ${PORT:-8000} --no-access-log --no-proxy-headers"]

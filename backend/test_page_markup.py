@@ -33,7 +33,8 @@ def test_home_server_renders_posts_and_escapes_content(tmp_path, monkeypatch):
     assert 'a &amp; &lt;title&gt;' in markup
     assert 'an &lt;excerpt&gt; &amp; more' in markup
     assert 'href="/?tag=a"' in markup and 'href="/?tag=b"' in markup
-    assert '<span class="draft muted">draft</span>' in markup
+    assert '<span class="draft muted">draft</span>' not in markup
+    assert 'href="/posts/draft"' not in markup
     assert '<footer>' in markup
     assert 'a & <title>' not in markup and 'an <excerpt> & more' not in markup
 

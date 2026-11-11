@@ -264,6 +264,41 @@ class PostStore:
             rows = connection.execute(select(web_posts).order_by(web_posts.c.updated_at.desc())).mappings()
             return [_document(connection, dict(row)) for row in rows]
 
+    def list_public(self) -> list[dict]:
+        with self.engine.connect() as connection:
+            rows = connection.execute(
+                select(web_posts).where(
+                    web_posts.c.status == "live",
+                    web_posts.c.deleted_at.is_(None),
+                )
+            ).mappings()
+            return [_public_document(connection, dict(row)) for row in rows]
+
+    def get_public(self, slug: str) -> tuple[dict, str] | None:
+        with self.engine.connect() as connection:
+            row = connection.execute(
+                select(web_posts, web_post_slugs.c.canonical)
+                .join(web_post_slugs, web_post_slugs.c.post_id == web_posts.c.id)
+                .where(
+                    web_post_slugs.c.slug == slug,
+                    web_posts.c.status == "live",
+                    web_posts.c.deleted_at.is_(None),
+                )
+            ).mappings().one_or_none()
+            if row is None:
+                return None
+            canonical = connection.execute(
+                select(web_post_slugs.c.slug).where(
+                    web_post_slugs.c.post_id == row["id"],
+                    web_post_slugs.c.canonical.is_(True),
+                )
+            ).scalar_one()
+            return _public_document(connection, dict(row)), canonical
+
+    def slugs(self) -> list[str]:
+        with self.engine.connect() as connection:
+            return list(connection.execute(select(web_post_slugs.c.slug)).scalars())
+
     def revisions(self, post_id: int) -> list[dict]:
         with self.engine.connect() as connection:
             return [
@@ -460,6 +495,20 @@ def _document(connection: Connection, row: dict) -> dict:
         ).scalars()
     ]
     return row
+
+
+def _public_document(connection: Connection, row: dict) -> dict:
+    document = _document(connection, row)
+    return {
+        "slug": document["slug"],
+        "date": document["published_on"].isoformat(),
+        "title": document["title"],
+        "excerpt": document["excerpt"],
+        "tags": document["tags"],
+        "body": document["body_markdown"],
+        "draft": False,
+        "_catalog_id": document["id"],
+    }
 
 
 def _same_document(current: dict, candidate: dict) -> bool:

@@ -12,6 +12,8 @@ export type FrameStart = {
   images: FrameImage[];
   scroll: number;
   focus: { id: string; control: Control } | null; // the control to focus again after the edit that made this preview
+  // Images pasted since the last save, as data: URLs: /media serves an image only once a saved post uses it.
+  local: Record<string, string>;
 };
 export type Control = "earlier" | "later" | "smaller" | "larger" | "width";
 export type FrameEdit = { token: string; id: string; move_to?: number; width?: number; scroll: number; control: Control | null };
@@ -61,6 +63,7 @@ function start(s: FrameStart) {
   for (const meta of s.images) {
     const img = [...article.querySelectorAll("img")].find((i) => i.getAttribute("src") === `/media/${meta.id}/lg.webp`);
     if (!img) continue;
+    if (s.local[meta.id]) img.src = s.local[meta.id];
     // Each move lands just before block `earlier` or `later`; for an image alone in its block, landing next to
     // itself is no move.
     const earlier = meta.standalone ? meta.block - 1 : meta.block;
@@ -77,8 +80,10 @@ function start(s: FrameStart) {
     img.draggable = false;
 
     const widest = () => Math.max(MIN_WIDTH, Math.min(img.naturalWidth || Infinity, article.clientWidth));
-    const shown = () => Math.round(img.getBoundingClientRect().width);
+    const shown = () => img.clientWidth; // the CSS width, without the border
     const step = () => Math.max(1, Math.round(widest() / 10));
+    // A size step waits for the image: until it loads there is no width to start from.
+    const loaded = (then: () => void) => (img.complete && img.naturalWidth ? then() : img.addEventListener("load", then, { once: true }));
     const resize = (width: number, control: Control) => {
       const next = Math.round(Math.min(widest(), Math.max(MIN_WIDTH, width)));
       if (next !== (meta.width ?? shown())) post({ id: meta.id, width: next, control });
@@ -94,7 +99,7 @@ function start(s: FrameStart) {
       button.disabled = (control === "earlier" && !canLand(earlier)) || (control === "later" && !canLand(later));
       button.addEventListener("click", () => {
         if (control === "earlier" || control === "later") post({ id: meta.id, move_to: control === "earlier" ? earlier : later, control });
-        else resize(shown() + (control === "larger" ? step() : -step()), control);
+        else loaded(() => resize(shown() + (control === "larger" ? step() : -step()), control));
       });
       tools.append(button);
     }
@@ -116,7 +121,7 @@ function start(s: FrameStart) {
       const sign = { ArrowRight: 1, ArrowUp: 1, ArrowLeft: -1, ArrowDown: -1 }[e.key];
       if (!sign) return;
       e.preventDefault();
-      resize(shown() + sign * step(), "width");
+      loaded(() => resize(shown() + sign * step(), "width"));
     });
     box.append(tools, handle);
 
@@ -157,6 +162,9 @@ function start(s: FrameStart) {
       let line: HTMLElement | null = null;
       const move = (m: PointerEvent) => {
         if (!line && Math.hypot(m.clientX - x, m.clientY - y) < 4) return;
+        // Near the frame's top or bottom edge the preview scrolls, so the image can go anywhere in a long post.
+        if (m.clientY < 40) scrollBy(0, -24);
+        else if (m.clientY > innerHeight - 40) scrollBy(0, 24);
         if (!line) {
           line = document.body.appendChild(document.createElement("div"));
           line.className = "ween-drop";

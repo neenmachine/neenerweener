@@ -16,8 +16,8 @@ const CONTROLLER_CSS = `
 .ween-image img{display:block;cursor:grab;margin:0}
 .ween-image.ween-dragging img{cursor:grabbing;opacity:.6}
 .ween-image:focus-visible{outline:2px solid var(--accent,Highlight);outline-offset:2px}
-.ween-tools{position:absolute;top:6px;left:6px;display:none;flex-wrap:wrap;gap:4px}
-.ween-image:hover .ween-tools,.ween-image:focus-within .ween-tools{display:flex}
+.ween-tools{position:absolute;top:6px;left:6px;display:flex;flex-wrap:wrap;gap:4px;opacity:0;pointer-events:none}
+.ween-image:hover .ween-tools,.ween-image:focus-within .ween-tools{opacity:1;pointer-events:auto}
 .ween-tools button{font:12px/1.4 -apple-system,BlinkMacSystemFont,sans-serif;padding:2px 8px;border-radius:4px;border:1px solid color-mix(in srgb,CanvasText 25%,transparent);background:Canvas;color:CanvasText;cursor:pointer}
 .ween-tools button:disabled{opacity:.45;cursor:default}
 .ween-handle{position:absolute;right:-7px;bottom:-7px;width:14px;height:14px;border-radius:4px;background:var(--accent,Highlight);border:2px solid Canvas;cursor:nwse-resize;touch-action:none}
@@ -27,8 +27,12 @@ const CONTROLLER_CSS = `
 export type Preview = { html: string; blocks: number; images: FrameImage[] };
 
 // The document and its channel token, which the frame's messages must carry. restore: scroll and focus to keep
-// across an edit.
-export async function previewDocument(p: Preview, restore: Pick<FrameStart, "scroll" | "focus">): Promise<{ doc: string; token: string }> {
+// across an edit. local: data: URLs of images pasted since the last save, by media id.
+export async function previewDocument(
+  p: Preview,
+  restore: Pick<FrameStart, "scroll" | "focus">,
+  local: ReadonlyMap<string, string>,
+): Promise<{ doc: string; token: string }> {
   const token = random();
   const origin = location.origin;
   let html = p.html;
@@ -49,7 +53,8 @@ export async function previewDocument(p: Preview, restore: Pick<FrameStart, "scr
   const nonce = random();
   if (p.images.length || html.includes('class="mermaid"')) {
     const { url } = (await import("./previewFrame")).frame;
-    const start: FrameStart = { token, origin, blocks: p.blocks, images: p.images, ...restore };
+    const pasted = Object.fromEntries(p.images.flatMap((i) => (local.has(i.id) ? [[i.id, local.get(i.id)!]] : [])));
+    const start: FrameStart = { token, origin, blocks: p.blocks, images: p.images, ...restore, local: pasted };
     // JSON in a script: < escaped, so no text in it can close the script element.
     const data = (v: unknown) => JSON.stringify(v).replace(/</g, "\\u003c");
     // In the head, before the post's html, so no unclosed element in the post can swallow it; a module runs after parsing.

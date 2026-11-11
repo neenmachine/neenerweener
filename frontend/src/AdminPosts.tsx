@@ -99,6 +99,14 @@ export default function AdminPosts({ send, active }: AdminPageProps) {
   );
 }
 
+const dataUrl = (file: File) =>
+  new Promise<string>((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => resolve("");
+    reader.readAsDataURL(file);
+  });
+
 const stateOf = (p: Post) => (p.deleted_at ? "deleted" : p.status);
 
 type Fields = { title: string; slug: string; published_on: string; excerpt: string; tags: string; body: string };
@@ -142,6 +150,8 @@ function PostEditor({ start, send, onSaved, onClose }: { start: Post | null; sen
     return () => life.current.abort();
   }, []);
   const caret = useRef<number | null>(null);
+  // Pasted images by media id, as data: URLs for the preview until a saved post makes /media serve them.
+  const local = useRef(new Map<string, string>());
   useLayoutEffect(() => {
     const el = markdown.current;
     if (caret.current === null || !el) return;
@@ -234,6 +244,9 @@ function PostEditor({ start, send, onSaved, onClose }: { start: Post | null; sen
     const failed = results.find((r) => !r.ok);
     if (failed && !failed.ok && failed.status !== 401) setUploadError(failed.message);
     const ids = results.flatMap((r) => (r.ok ? [r.data.id] : []));
+    const urls = await Promise.all(files.map((file, i) => (results[i].ok ? dataUrl(file) : "")));
+    if (signal.aborted) return;
+    results.forEach((r, i) => r.ok && local.current.set(r.data.id, urls[i]));
     if (!ids.length || !markdown.current) return;
     const done = insertAt(markdown.current.value, spot, ids.map(imageMarkdown).join("\n\n"));
     caret.current = done.caret;
@@ -315,7 +328,7 @@ function PostEditor({ start, send, onSaved, onClose }: { start: Post | null; sen
             onDrop={takeImages}
             readOnly={busy || deleted}
           />
-          <Preview body={fields.body} shown={mode === "preview"} send={send} onEdit={(body) => setFields((f) => ({ ...f, body }))} />
+          <Preview body={fields.body} shown={mode === "preview"} send={send} onEdit={(body) => setFields((f) => ({ ...f, body }))} local={local.current} />
           {uploadError && (
             <p className="error" role="alert">
               {uploadError}
@@ -370,7 +383,19 @@ function PostEditor({ start, send, onSaved, onClose }: { start: Post | null; sen
 // preview renders at once; while it stays shown, a changed text renders after a pause, and a newer render cancels an
 // older one. The frame may ask to move or resize one managed image; the server rewrites that image's source and
 // answers with the new markdown and its rendering, which onEdit gives back to the editor.
-function Preview({ body, shown, send, onEdit }: { body: string; shown: boolean; send: Send; onEdit: (body: string) => void }) {
+function Preview({
+  body,
+  shown,
+  send,
+  onEdit,
+  local,
+}: {
+  body: string;
+  shown: boolean;
+  send: Send;
+  onEdit: (body: string) => void;
+  local: ReadonlyMap<string, string>;
+}) {
   const { run, busy } = useRequest("load");
   const [doc, setDoc] = useState<string | null>(null);
   const [error, setError] = useState("");
@@ -387,7 +412,7 @@ function Preview({ body, shown, send, onEdit }: { body: string; shown: boolean; 
       setError("");
       setStatus("");
       const p = await send<Rendered & { body_markdown?: string }>("POST", "/api/admin/posts/preview", { body_markdown: text, ...edit }, signal);
-      return p.ok ? { ok: true as const, p: p.data, ...(await previewDocument(p.data, restore)) } : p;
+      return p.ok ? { ok: true as const, p: p.data, ...(await previewDocument(p.data, restore, local)) } : p;
     });
     if (!r.ok) return r.status !== 401 && setError(r.message);
     const next = r.p.body_markdown ?? text;

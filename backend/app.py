@@ -884,9 +884,35 @@ def _post_storage() -> posts.PostStore:
     return post_store
 
 
+POST_VALIDATION_DETAILS = {
+    "invalid title",
+    "title too long",
+    "invalid body",
+    "body too long",
+    "invalid excerpt",
+    "excerpt too long",
+    "invalid tags",
+    "invalid date",
+    "invalid slug",
+    "slug reserved by file post",
+    "invalid status",
+    "live post needs title and body",
+    "slug already used",
+}
+
+
 def _post_operation(operation):
     try:
         return operation()
+    except posts.InvalidPost as exc:
+        detail = str(exc)
+        if detail == "invalid tag":
+            detail = "invalid tags"
+        if detail not in POST_VALIDATION_DETAILS:
+            detail = "invalid post"
+        raise HTTPException(422, detail) from exc
+    except posts.InvalidAttachment as exc:
+        raise HTTPException(422, "image unavailable") from exc
     except ValueError as exc:
         raise HTTPException(422, "invalid post") from exc
     except posts.PostConflict as exc:

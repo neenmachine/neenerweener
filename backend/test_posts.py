@@ -110,7 +110,7 @@ def test_create_normalizes_tags_and_rejects_reserved_file_slug(post_store):
         ["notes", "ml", "x" * 50],
         [],
     )
-    with pytest.raises(InvalidPost, match="reserved slug"):
+    with pytest.raises(InvalidPost, match="slug reserved by file post"):
         post_store.create(title="fixture", slug="file-post")
 
 

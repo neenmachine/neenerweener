@@ -167,7 +167,9 @@ def normalize_tags(tags: Sequence[str]) -> list[str]:
 
 
 def _valid_text(value: str, maximum: int, field: str, *, allow_empty: bool = True) -> None:
-    if not isinstance(value, str) or "\x00" in value or len(value) > maximum or (not allow_empty and not value):
+    if isinstance(value, str) and len(value) > maximum:
+        raise InvalidPost(f"{field} too long")
+    if not isinstance(value, str) or "\x00" in value or (not allow_empty and not value):
         raise InvalidPost(f"invalid {field}")
     try:
         value.encode("utf-8")
@@ -424,14 +426,16 @@ class PostStore:
         _valid_text(body_markdown, MAX_BODY_CHARS, "body")
         if excerpt is not None:
             _valid_text(excerpt, MAX_EXCERPT_CHARS, "excerpt")
-        if not isinstance(slug, str) or not SLUG.fullmatch(slug) or slug in self.reserved_slugs():
-            raise InvalidPost("invalid or reserved slug")
+        if not isinstance(slug, str) or not SLUG.fullmatch(slug):
+            raise InvalidPost("invalid slug")
+        if slug in self.reserved_slugs():
+            raise InvalidPost("slug reserved by file post")
         if status not in {"draft", "live"}:
             raise InvalidPost("invalid status")
         normalized_tags = normalize_tags(tags)
         parsed_date = _published_on(published_on)
         if status == "live" and (not title.strip() or not body_markdown.strip()):
-            raise InvalidPost("live posts need a title and body")
+            raise InvalidPost("live post needs title and body")
         rendered_html = self.renderer(body_markdown)
         return {
             "title": title,
@@ -523,7 +527,7 @@ def _set_slug(connection: Connection, post_id: int, old_slug: str, new_slug: str
         .with_for_update()
     ).one_or_none()
     if existing is not None and existing.post_id != post_id:
-        raise InvalidPost("slug unavailable")
+        raise InvalidPost("slug already used")
     connection.execute(
         update(web_post_slugs)
         .where(web_post_slugs.c.post_id == post_id, web_post_slugs.c.canonical.is_(True))
@@ -572,6 +576,6 @@ def _replace_media(
 def _raise_conflict(exc: IntegrityError) -> None:
     constraint = getattr(getattr(exc.orig, "diag", None), "constraint_name", None)
     if constraint in {"web_post_slugs_pkey", "uq_web_post_slugs_canonical_post"}:
-        raise InvalidPost("slug unavailable") from exc
+        raise InvalidPost("slug already used") from exc
     if constraint in {"web_post_media_asset_id_key", "web_post_media_pkey"}:
         raise InvalidAttachment from exc

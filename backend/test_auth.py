@@ -568,7 +568,11 @@ def test_admin_post_preview_uses_real_renderer_and_bounds_input(configured_posts
         json={"body_markdown": '<section data-fixture="yes">fixture</section>'},
     )
     assert preview.status_code == 200
-    assert preview.json() == {"html": '<section data-fixture="yes">fixture</section>'}
+    assert preview.json() == {
+        "html": '<!--ween-block:0-->\n<section data-fixture="yes">fixture</section><!--ween-block:1-->\n',
+        "blocks": 1,
+        "images": [],
+    }
     assert preview.headers["Cache-Control"] == "no-store"
 
     oversized = client.post(
@@ -578,6 +582,46 @@ def test_admin_post_preview_uses_real_renderer_and_bounds_input(configured_posts
     )
     assert oversized.status_code == 413
     assert oversized.json() == {"detail": "request too large"}
+
+
+def test_admin_post_preview_moves_and_resizes_one_image_and_returns_its_source(configured_posts, make_client):
+    password, _ = configured_posts
+    client, csrf = authenticated_client(password, make_client)
+    headers = mutation_headers(csrf)
+    image_id = "12345678-1234-1234-1234-123456789abc"
+    image = f"![](/media/{image_id}/lg.webp)"
+    body = f"one\n\n{image}\n\ntwo\n"
+
+    plain = client.post("/api/admin/posts/preview", headers=headers, json={"body_markdown": body}).json()
+    assert plain["images"] == [{"id": image_id, "block": 1, "standalone": True, "width": None}]
+    assert (plain["blocks"], "body_markdown" in plain) == (3, False)
+
+    moved = client.post(
+        "/api/admin/posts/preview",
+        headers=headers,
+        json={"body_markdown": body, "media_id": image_id, "move_to": 3},
+    ).json()
+    assert moved["body_markdown"] == f"one\n\ntwo\n\n{image}\n"
+    assert moved["images"] == [{"id": image_id, "block": 2, "standalone": True, "width": None}]
+
+    resized = client.post(
+        "/api/admin/posts/preview",
+        headers=headers,
+        json={"body_markdown": body, "media_id": image_id, "width": 640},
+    ).json()
+    assert resized["body_markdown"] == f'one\n\n<img src="/media/{image_id}/lg.webp" alt="" width="640">\n\ntwo\n'
+    assert resized["images"][0]["width"] == 640
+
+    for edit in (
+        {"media_id": image_id},
+        {"move_to": 0},
+        {"media_id": image_id, "move_to": 0, "width": 10},
+        {"media_id": image_id, "move_to": 9},
+        {"media_id": image_id, "width": 0},
+        {"media_id": "87654321-1234-1234-1234-123456789abc", "width": 10},
+    ):
+        refused = client.post("/api/admin/posts/preview", headers=headers, json={"body_markdown": body, **edit})
+        assert (refused.status_code, refused.json()) == (422, {"detail": "invalid post"}), edit
 
 
 @pytest.mark.parametrize(

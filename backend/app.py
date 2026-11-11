@@ -30,6 +30,7 @@ from pygments.util import ClassNotFound
 from anchors import add_heading_anchors
 from operations import check_readiness, configure_logging, load_schema_heads
 from page_markup import home_markup, site_footer
+import post_images
 import posts
 import routes
 
@@ -322,6 +323,10 @@ class PostVersion(BaseModel):
 class PostPreview(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     body_markdown: str
+    # Optional: first move (to before top-level block move_to) or resize (to width) one managed image of the body.
+    media_id: str | None = None
+    move_to: int | None = None
+    width: int | None = None
 
 
 MAX_TIMELINE_JSON_BYTES = 65_536  # body plus four alt texts; matches the CLI's JSON cap
@@ -937,7 +942,21 @@ def preview_admin_post(
     _access: Access = Depends(require_browser_mutation),
     payload: PostPreview = Depends(_post_preview_body),
 ):
-    return {"html": _post_operation(lambda: _post_storage().preview(payload.body_markdown))}
+    def preview():
+        body = payload.body_markdown
+        posts.check_body(body)
+        edits = (payload.move_to is not None) + (payload.width is not None)
+        if (payload.media_id is None) != (edits == 0) or edits > 1:
+            raise posts.InvalidPost("invalid edit")
+        if payload.move_to is not None:
+            body = post_images.move(md, body, payload.media_id, payload.move_to)
+        elif payload.width is not None:
+            body = post_images.resize(md, body, payload.media_id, payload.width)
+        posts.check_body(body)
+        result = post_images.preview(md, body, caption_figures)
+        return result if payload.media_id is None else {**result, "body_markdown": body}
+
+    return _post_operation(preview)
 
 
 @app.get("/api/admin/posts/{post_id}")
@@ -1111,9 +1130,12 @@ def all_posts() -> list[dict]:
 CAPTIONED = re.compile(r'<p>(<img [^>]*?title="([^"]*)"[^>]*>)</p>')
 
 
-def render_post(body: str) -> str:
-    html = md.render(body, {"heading_anchors": True})
+def caption_figures(html: str) -> str:
     return CAPTIONED.sub(r"<figure>\1<figcaption>\2</figcaption></figure>", html)
+
+
+def render_post(body: str) -> str:
+    return caption_figures(md.render(body, {"heading_anchors": True}))
 
 
 @app.api_route("/api/posts", methods=["GET", "HEAD"])
@@ -1304,6 +1326,9 @@ def frontend(path: str, request: Request):
         query = f"?{request.url.query}" if request.url.query else ""
         return RedirectResponse(quote("/" if file == index else target, safe="/") + query, status_code=301, headers=headers)
     if file:
+        if path.startswith("assets/"):
+            # Built public files only: the admin preview's sandbox (an opaque origin) loads its fonts and scripts by CORS.
+            headers = {**(headers or {}), "Access-Control-Allow-Origin": "*"}
         return FileResponse(file, headers=headers)
     preload, head, markup, status_code = render_page(routes.match(target), request)
     if status_code == 404:

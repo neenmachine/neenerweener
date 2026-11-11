@@ -21,7 +21,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.staticfiles import StaticFiles
 from markdown_it import MarkdownIt
 from mdit_py_plugins.dollarmath import dollarmath_plugin
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, PositiveInt, ValidationError
 from pygments import highlight as pygments_highlight
 from pygments.formatters import HtmlFormatter
 from pygments.lexers import TextLexer, get_lexer_by_name, get_lexer_for_filename
@@ -30,6 +30,7 @@ from pygments.util import ClassNotFound
 from anchors import add_heading_anchors
 from operations import check_readiness, configure_logging, load_schema_heads
 from page_markup import home_markup, site_footer
+import posts
 import routes
 
 POSTS_DIR = Path(os.environ.get("POSTS_DIR", Path(__file__).parent.parent / "posts"))
@@ -133,6 +134,8 @@ async def lifespan(_app):
     yield
     if timeline_store is not None:
         await asyncio.to_thread(timeline_store.close)
+    if post_store is not None:
+        await asyncio.to_thread(post_store.close)
     if auth_store is not None:
         await asyncio.to_thread(auth_store.close)
     if machine_auth_store is not None:
@@ -146,6 +149,14 @@ app.state.media_config = MediaConfig()
 configure_logging()
 timeline_store: TimelineStoreProtocol | None = (
     TimelineStore(os.environ["DATABASE_URL"]) if os.environ.get("DATABASE_URL") else None
+)
+post_store: posts.PostStore | None = (
+    posts.PostStore(
+        os.environ["DATABASE_URL"],
+        reserved_slugs=lambda: {path.stem for path in POSTS_DIR.glob("*.md") if FILENAME.fullmatch(path.name)},
+    )
+    if os.environ.get("DATABASE_URL")
+    else None
 )
 auth_store: AuthStore | None = AuthStore(os.environ["DATABASE_URL"]) if os.environ.get("DATABASE_URL") else None
 machine_auth_store: MachineAuthStore | None = (
@@ -288,7 +299,33 @@ class ProfileMutation(BaseModel):
     avatar_id: uuid.UUID | None = None
 
 
+class PostCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    title: str
+    slug: str
+    body_markdown: str = ""
+    excerpt: str | None = None
+    tags: list[str] = []
+    published_on: str | None = None
+
+
+class PostMutation(PostCreate):
+    version: PositiveInt
+    status: str
+
+
+class PostVersion(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    version: PositiveInt
+
+
+class PostPreview(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    body_markdown: str
+
+
 MAX_TIMELINE_JSON_BYTES = 65_536  # body plus four alt texts; matches the CLI's JSON cap
+MAX_POST_JSON_BYTES = 2 * 1024 * 1024
 
 
 class ChallengeRequest(BaseModel):
@@ -839,6 +876,140 @@ def delete_admin_timeline(
         raise HTTPException(503, "admin unavailable") from exc
     if not deleted:
         raise HTTPException(404, "timeline entry not found")
+
+
+def _post_storage() -> posts.PostStore:
+    if post_store is None:
+        raise HTTPException(503, "admin unavailable")
+    return post_store
+
+
+POST_VALIDATION_DETAILS = {
+    "invalid title",
+    "title too long",
+    "invalid body",
+    "body too long",
+    "invalid excerpt",
+    "excerpt too long",
+    "invalid tags",
+    "invalid date",
+    "invalid slug",
+    "slug reserved by file post",
+    "invalid status",
+    "live post needs title and body",
+    "slug already used",
+}
+
+
+def _post_operation(operation):
+    try:
+        return operation()
+    except posts.InvalidPost as exc:
+        detail = str(exc)
+        if detail == "invalid tag":
+            detail = "invalid tags"
+        if detail not in POST_VALIDATION_DETAILS:
+            detail = "invalid post"
+        raise HTTPException(422, detail) from exc
+    except posts.InvalidAttachment as exc:
+        raise HTTPException(422, "image unavailable") from exc
+    except ValueError as exc:
+        raise HTTPException(422, "invalid post") from exc
+    except posts.PostConflict as exc:
+        return JSONResponse(
+            {"detail": "post version conflict", "current_version": exc.current_version},
+            status_code=409,
+        )
+    except posts.PostNotFound as exc:
+        raise HTTPException(404, "post not found") from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("post storage unavailable: %s", type(exc).__name__)
+        raise HTTPException(503, "admin unavailable") from exc
+
+
+async def _post_create_body(request: Request) -> PostCreate:
+    return await _bounded_json(request, PostCreate, limit=MAX_POST_JSON_BYTES)
+
+
+async def _post_mutation_body(request: Request) -> PostMutation:
+    return await _bounded_json(request, PostMutation, limit=MAX_POST_JSON_BYTES)
+
+
+async def _post_version_body(request: Request) -> PostVersion:
+    return await _bounded_json(request, PostVersion, limit=MAX_POST_JSON_BYTES)
+
+
+async def _post_preview_body(request: Request) -> PostPreview:
+    return await _bounded_json(request, PostPreview, limit=MAX_POST_JSON_BYTES)
+
+
+@app.get("/api/admin/posts")
+def list_admin_posts(_access: Access = Depends(require_browser_read)):
+    return _post_operation(_post_storage().list)
+
+
+@app.post("/api/admin/posts", status_code=201)
+def create_admin_post(
+    _access: Access = Depends(require_browser_mutation),
+    payload: PostCreate = Depends(_post_create_body),
+):
+    return _post_operation(lambda: _post_storage().create(**payload.model_dump()))
+
+
+@app.post("/api/admin/posts/preview")
+def preview_admin_post(
+    _access: Access = Depends(require_browser_mutation),
+    payload: PostPreview = Depends(_post_preview_body),
+):
+    return {"html": _post_operation(lambda: _post_storage().preview(payload.body_markdown))}
+
+
+@app.get("/api/admin/posts/{post_id}")
+def get_admin_post(post_id: PositiveInt, _access: Access = Depends(require_browser_read)):
+    document = _post_operation(lambda: _post_storage().get(post_id))
+    if document is None:
+        raise HTTPException(404, "post not found")
+    return document
+
+
+@app.patch("/api/admin/posts/{post_id}")
+def update_admin_post(
+    post_id: PositiveInt,
+    _access: Access = Depends(require_browser_mutation),
+    payload: PostMutation = Depends(_post_mutation_body),
+):
+    values = payload.model_dump()
+    version = values.pop("version")
+    return _post_operation(lambda: _post_storage().update(post_id, version, **values))
+
+
+@app.delete("/api/admin/posts/{post_id}")
+def delete_admin_post(
+    post_id: PositiveInt,
+    _access: Access = Depends(require_browser_mutation),
+    payload: PostVersion = Depends(_post_version_body),
+):
+    return _post_operation(lambda: _post_storage().delete(post_id, payload.version))
+
+
+@app.get("/api/admin/posts/{post_id}/revisions")
+def list_admin_post_revisions(post_id: PositiveInt, _access: Access = Depends(require_browser_read)):
+    document = _post_operation(lambda: _post_storage().get(post_id))
+    if document is None:
+        raise HTTPException(404, "post not found")
+    return _post_operation(lambda: _post_storage().revisions(post_id))
+
+
+@app.post("/api/admin/posts/{post_id}/revisions/{revision_id}/restore")
+def restore_admin_post_revision(
+    post_id: PositiveInt,
+    revision_id: PositiveInt,
+    _access: Access = Depends(require_browser_mutation),
+    payload: PostVersion = Depends(_post_version_body),
+):
+    return _post_operation(lambda: _post_storage().restore(post_id, revision_id, payload.version))
 
 
 @app.api_route("/readyz", methods=["GET", "HEAD"])

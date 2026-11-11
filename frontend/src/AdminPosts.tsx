@@ -5,6 +5,7 @@ import type { AdminPageProps } from "./adminPages";
 import { Button, type Send } from "./EntryEditor";
 import { imageFiles, imageMarkdown, insertAt, type Spot } from "./postPaste";
 import { type Preview as Rendered, previewHtml, previewShell } from "./postPreview";
+import { replaceText } from "./textEdit";
 import type { Control, FrameEdit, FrameImage, FrameReady, FrameRender } from "./previewFrame";
 import { useRequest } from "./useRequest";
 
@@ -258,7 +259,14 @@ function PostEditor({ start, send, onSaved, onClose }: { start: Post | null; sen
     if (!ids.length || !markdown.current) return;
     const done = insertAt(markdown.current.value, spot, ids.map(imageMarkdown).join("\n\n"));
     caret.current = done.caret;
-    setFields((f) => ({ ...f, body: done.text }));
+    writeBody(done.text);
+  };
+  // Every text change the editor makes itself goes through here, so Cmd+Z undoes it like typing.
+  const writeBody = (next: string) => {
+    const el = markdown.current;
+    if (!el) return;
+    replaceText(el, next);
+    setFields((f) => ({ ...f, body: el.value }));
     setStatus("");
   };
   const takeImages = (e: React.ClipboardEvent<HTMLTextAreaElement> | React.DragEvent<HTMLTextAreaElement>) => {
@@ -322,6 +330,12 @@ function PostEditor({ start, send, onSaved, onClose }: { start: Post | null; sen
             <span className="muted" role="status">
               {uploading > 0 ? "uploading" : ""}
             </span>
+            {/* Beside the buttons, not below the tall textarea where it would be out of view. */}
+            {uploadError && (
+              <span className="error" role="alert">
+                {uploadError}
+              </span>
+            )}
           </div>
           {/* The textarea stays rendered under the preview, so its text, selection and undo history stay. */}
           <div className="markdown-stack">
@@ -337,13 +351,8 @@ function PostEditor({ start, send, onSaved, onClose }: { start: Post | null; sen
               onDrop={takeImages}
               readOnly={busy || deleted}
             />
-            <Preview body={fields.body} shown={mode === "preview"} send={send} onEdit={(body) => setFields((f) => ({ ...f, body }))} local={local.current} />
+            <Preview body={fields.body} shown={mode === "preview"} locked={busy || deleted} send={send} onEdit={writeBody} local={local.current} />
           </div>
-          {uploadError && (
-            <p className="error" role="alert">
-              {uploadError}
-            </p>
-          )}
         </div>
         <div className="save-row">
           <div className="admin-row">
@@ -398,12 +407,14 @@ function PostEditor({ start, send, onSaved, onClose }: { start: Post | null; sen
 function Preview({
   body,
   shown,
+  locked,
   send,
   onEdit,
   local,
 }: {
   body: string;
   shown: boolean;
+  locked: boolean; // a save is in flight (its answer replaces the text) or the post is deleted: no edits
   send: Send;
   onEdit: (body: string) => void;
   local: ReadonlyMap<string, string>;
@@ -425,6 +436,8 @@ function Preview({
   const current = useRef<{ seq: number; images: FrameImage[]; blocks: number } | null>(null);
   const text = useRef(body);
   text.current = body;
+  const frozen = useRef(locked);
+  frozen.current = locked;
   const wasShown = useRef(false);
 
   useEffect(() => {
@@ -446,6 +459,9 @@ function Preview({
       return p.ok ? { ok: true as const, p: p.data, shown: await previewHtml(p.data, local) } : p;
     });
     if (!r.ok) return r.status !== 401 && setError(r.message);
+    // The text changed while the edit was on its way (typing, a pasted image), or a save started: drop the edit and
+    // show the text as it is now.
+    if (edit && (text.current !== body || frozen.current)) return render(text.current);
     const next = r.p.body_markdown ?? body;
     rendered.current = next;
     seq.current += 1;
@@ -480,7 +496,7 @@ function Preview({
         return deliver();
       }
       const c = current.current;
-      if (!c || m.seq !== c.seq || !c.images.some((i) => i.id === m.id) || rendered.current !== text.current) return;
+      if (frozen.current || !c || m.seq !== c.seq || !c.images.some((i) => i.id === m.id) || rendered.current !== text.current) return;
       const move = Number.isInteger(m.move_to) && m.move_to! >= 0 && m.move_to! <= c.blocks;
       const width = Number.isInteger(m.width) && m.width! >= 1;
       if (move === width) return;

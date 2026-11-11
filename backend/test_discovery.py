@@ -165,6 +165,29 @@ def test_feed_raw_html_is_left_untouched(tmp_path, monkeypatch):
     assert content.text == '<p><a href="/raw">raw</a></p>\n'
 
 
+def test_feed_makes_raw_media_img_src_absolute_and_nothing_else(tmp_path, monkeypatch):
+    # The editor writes a resized image as raw <img src="/media/...">; feed readers need an absolute src.
+    posts = tmp_path / "posts"
+    posts.mkdir()
+    media = "/media/12345678-1234-1234-1234-123456789abc/lg.webp"
+    (posts / "raw.md").write_text(
+        "---\ntitle: raw\ndate: 2026-03-28\n---\n"
+        f'<img src="{media}" alt="" width="640">\n\n'
+        f'x <IMG alt="" SRC=\'{media}\'> <img src="/images/p.png"> <a href="{media}">raw</a>\n'
+    )
+    monkeypatch.setattr(app, "POSTS_DIR", posts)
+    monkeypatch.setattr(app, "DRAFTS_DIR", tmp_path / "drafts")
+    monkeypatch.setenv("CANONICAL_ORIGIN", "https://www.neenerweener.ca")
+
+    response = TestClient(app.app).get("/feed.xml")
+    content = ET.fromstring(response.content).find(f"{{{ATOM}}}entry/{{{ATOM}}}content")
+    assert content.text == (
+        f'<img src="https://www.neenerweener.ca{media}" alt="" width="640">\n'
+        f'<p>x <IMG alt="" SRC=\'https://www.neenerweener.ca{media}\'> <img src="/images/p.png"> '
+        f'<a href="{media}">raw</a></p>\n'
+    )
+
+
 def test_sitemap_locs_resolve(tmp_path, monkeypatch):
     posts = tmp_path / "posts"
     posts.mkdir()

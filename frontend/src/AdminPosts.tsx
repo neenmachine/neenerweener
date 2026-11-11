@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { compact } from "./App";
-import { hasText, type Result, type Uploaded } from "./adminApi";
+import type { Result, Uploaded } from "./adminApi";
 import type { AdminPageProps } from "./adminPages";
 import { Button, type Send } from "./EntryEditor";
 import { imageFiles, imageMarkdown, insertAt, type Spot } from "./postPaste";
@@ -154,7 +154,7 @@ function PostEditor({ start, send, onSaved, onClose }: { start: Post | null; sen
     const el = markdown.current;
     if (caret.current === null || !el) return;
     // Back to the textarea after the images, unless Henry has moved on to another field meanwhile.
-    if (!el.hidden && (document.activeElement === el || document.activeElement === document.body)) {
+    if (!el.inert && (document.activeElement === el || document.activeElement === document.body)) {
       el.focus();
       el.setSelectionRange(caret.current, caret.current);
     }
@@ -173,12 +173,20 @@ function PostEditor({ start, send, onSaved, onClose }: { start: Post | null; sen
   useEffect(() => {
     if (confirming) confirmButton.current?.focus();
   }, [confirming]);
+  // A new or opened post: the list button that had focus is gone.
+  useEffect(() => title.current?.focus(), []);
+  const cancelDelete = () => {
+    setConfirming(false);
+    setTimeout(() => deleteButton.current?.focus()); // after the delete button is back
+  };
 
   const set = (key: keyof Fields) => (e: { target: { value: string } }) => {
     setFields((f) => ({ ...f, [key]: e.target.value }));
     setStatus("");
+    if (!conflict) setError(""); // a conflict's message stays beside its reload button
   };
 
+  // The server owns every field rule ("invalid slug", "live post needs title and body", ...); its message shows inline.
   // Every request here answers with the post; a 409 (changed in another tab) keeps the fields as typed and offers reload.
   const call = async (request: (signal: AbortSignal) => Promise<Result<Post>>, message: string) => {
     const r = await run((signal) => {
@@ -262,8 +270,7 @@ function PostEditor({ start, send, onSaved, onClose }: { start: Post | null; sen
   };
 
   // Not while an image uploads: the saved post would replace the text before its markdown goes in.
-  // The server checks the slug and answers "invalid slug" or "slug reserved by file post".
-  const canSave = uploading === 0 && !deleted && hasText(fields.title);
+  const canSave = uploading === 0 && !deleted;
   const live = post?.status === "live";
   const field = (key: keyof Fields, label: string, type = "text") => (
     <div className={`field-${key}`}>
@@ -279,7 +286,7 @@ function PostEditor({ start, send, onSaved, onClose }: { start: Post | null; sen
         className="admin-section post-editor"
         onSubmit={(e) => {
           e.preventDefault();
-          if (canSave && (!live || hasText(fields.body))) save(live ? "live" : "draft", "saved");
+          if (canSave) save(live ? "live" : "draft", "saved");
         }}
       >
         <div className="admin-row">
@@ -316,20 +323,22 @@ function PostEditor({ start, send, onSaved, onClose }: { start: Post | null; sen
               {uploading > 0 ? "uploading" : ""}
             </span>
           </div>
-          {/* Kept mounted while previewing, so its text, selection and undo history stay. */}
-          <textarea
-            className="markdown"
-            aria-labelledby="post-markdown-label"
-            hidden={mode !== "raw"}
-            ref={markdown}
-            value={fields.body}
-            onChange={set("body")}
-            onPaste={takeImages}
-            onDragOver={(e) => e.dataTransfer.types.includes("Files") && e.preventDefault()}
-            onDrop={takeImages}
-            readOnly={busy || deleted}
-          />
-          <Preview body={fields.body} shown={mode === "preview"} send={send} onEdit={(body) => setFields((f) => ({ ...f, body }))} local={local.current} />
+          {/* The textarea stays rendered under the preview, so its text, selection and undo history stay. */}
+          <div className="markdown-stack">
+            <textarea
+              className={mode === "raw" ? "markdown" : "markdown covered"}
+              aria-labelledby="post-markdown-label"
+              inert={mode !== "raw"}
+              ref={markdown}
+              value={fields.body}
+              onChange={set("body")}
+              onPaste={takeImages}
+              onDragOver={(e) => e.dataTransfer.types.includes("Files") && e.preventDefault()}
+              onDrop={takeImages}
+              readOnly={busy || deleted}
+            />
+            <Preview body={fields.body} shown={mode === "preview"} send={send} onEdit={(body) => setFields((f) => ({ ...f, body }))} local={local.current} />
+          </div>
           {uploadError && (
             <p className="error" role="alert">
               {uploadError}
@@ -342,13 +351,13 @@ function PostEditor({ start, send, onSaved, onClose }: { start: Post | null; sen
               <span className="admin-actions">
                 {live ? (
                   <>
-                    <Button type="submit" busy={busy} off={!canSave || !hasText(fields.body)} label="save" busyLabel="saving" />
+                    <Button type="submit" busy={busy} off={!canSave} label="save" busyLabel="saving" />
                     <Button onClick={() => save("draft", "unpublished")} busy={busy} off={!canSave} label="unpublish" busyLabel="saving" />
                   </>
                 ) : (
                   <>
                     <Button type="submit" busy={busy} off={!canSave} label="save draft" busyLabel="saving" />
-                    <Button onClick={() => save("live", "published")} busy={busy} off={!canSave || !hasText(fields.body)} label="publish" busyLabel="saving" />
+                    <Button onClick={() => save("live", "published")} busy={busy} off={!canSave} label="publish" busyLabel="saving" />
                   </>
                 )}
                 {post && <Button ref={deleteButton} onClick={() => setConfirming(true)} off={busy} label="delete" />}
@@ -359,10 +368,10 @@ function PostEditor({ start, send, onSaved, onClose }: { start: Post | null; sen
                 className="admin-actions"
                 role="group"
                 aria-label="delete post?"
-                onKeyDown={(e) => e.key === "Escape" && !busy && (setConfirming(false), setTimeout(() => deleteButton.current?.focus()))}
+                onKeyDown={(e) => e.key === "Escape" && !busy && cancelDelete()}
               >
                 <Button ref={confirmButton} onClick={remove} busy={busy} label="confirm delete" busyLabel="deleting" danger />
-                <Button onClick={() => setConfirming(false)} off={busy} label="cancel" />
+                <Button onClick={cancelDelete} off={busy} label="cancel" />
               </span>
             )}
             {conflict && <Button onClick={reload} busy={busy} label="reload" busyLabel="loading" />}

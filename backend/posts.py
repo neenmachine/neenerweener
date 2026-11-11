@@ -34,12 +34,10 @@ from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.exc import IntegrityError
 
 from timeline import (
-    ATTACH_WINDOW,
-    DETACHED_GRACE,
     TORONTO,
     InvalidAttachment,
     _lock_assets,
-    _unused,
+    _replace_media_ownership,
     database_engine,
     media_assets,
     metadata,
@@ -367,29 +365,30 @@ class PostStore:
             return _document(connection, row)
 
     def restore(self, post_id: int, revision_id: int, version: int) -> dict:
+        with self.engine.connect() as connection:
+            revision = connection.execute(
+                select(web_post_revisions).where(
+                    web_post_revisions.c.id == revision_id,
+                    web_post_revisions.c.post_id == post_id,
+                )
+            ).mappings().one_or_none()
+        if revision is None:
+            raise PostNotFound(revision_id)
+        revision = dict(revision)
+        values, tags, asset_ids = self._validate(
+            revision["title"],
+            revision["slug"],
+            revision["body_markdown"],
+            revision["excerpt"],
+            revision["tags"],
+            revision["published_on"],
+            "draft",
+        )
+        values["published_at"] = revision["published_at"]
         try:
             with self.engine.begin() as connection:
                 _ownership_lock(connection)
                 current = _locked_document(connection, post_id, version)
-                revision = connection.execute(
-                    select(web_post_revisions).where(
-                        web_post_revisions.c.id == revision_id,
-                        web_post_revisions.c.post_id == post_id,
-                    )
-                ).mappings().one_or_none()
-                if revision is None:
-                    raise PostNotFound(revision_id)
-                revision = dict(revision)
-                values, tags, asset_ids = self._validate(
-                    revision["title"],
-                    revision["slug"],
-                    revision["body_markdown"],
-                    revision["excerpt"],
-                    revision["tags"],
-                    revision["published_on"],
-                    "draft",
-                )
-                values["published_at"] = revision["published_at"]
                 _record_revision(connection, current, "restore")
                 _set_slug(connection, post_id, current["slug"], revision["slug"])
                 _replace_tags(connection, post_id, tags)
@@ -549,35 +548,21 @@ def _replace_media(
     *,
     allow_recently_detached: bool = False,
 ) -> None:
-    requested_set = set(requested)
-    _lock_assets(connection, current | requested_set)
-    new = requested_set - current
-    if new:
-        condition = media_assets.c.detached_at.is_(None)
-        age = media_assets.c.created_at > func.now() - ATTACH_WINDOW
-        if allow_recently_detached:
-            recently_detached = media_assets.c.detached_at > func.now() - DETACHED_GRACE
-            condition = condition | recently_detached
-            age = age | recently_detached
-        attachable = connection.execute(
-            select(func.count())
-            .select_from(media_assets)
-            .where(media_assets.c.id.in_(new), condition, age, _unused)
-        ).scalar_one()
-        if attachable != len(new):
-            raise InvalidAttachment("media asset is unavailable or being swept")
-    removed = current - requested_set
-    if removed:
-        connection.execute(update(media_assets).where(media_assets.c.id.in_(removed)).values(detached_at=func.now()))
-    connection.execute(delete(web_post_media).where(web_post_media.c.post_id == post_id))
-    if requested:
-        connection.execute(
-            update(media_assets).where(media_assets.c.id.in_(requested_set)).values(detached_at=None)
-        )
-        connection.execute(
-            insert(web_post_media),
-            [{"post_id": post_id, "asset_id": asset_id} for asset_id in requested],
-        )
+    def replace() -> None:
+        connection.execute(delete(web_post_media).where(web_post_media.c.post_id == post_id))
+        if requested:
+            connection.execute(
+                insert(web_post_media),
+                [{"post_id": post_id, "asset_id": asset_id} for asset_id in requested],
+            )
+
+    _replace_media_ownership(
+        connection,
+        requested,
+        current,
+        replace,
+        allow_recently_detached=allow_recently_detached,
+    )
 
 
 def _raise_conflict(exc: IntegrityError) -> None:

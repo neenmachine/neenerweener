@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 import uuid
-from collections.abc import Sequence
+from collections.abc import Callable, Collection, Sequence
 from datetime import datetime, timedelta, timezone
 from typing import Protocol
 from zoneinfo import ZoneInfo
@@ -228,28 +228,15 @@ class TimelineStore:
         try:
             with self.engine.begin() as connection:
                 connection.execute(select(site_profile.c.id).where(site_profile.c.id == 1).with_for_update()).one()
-                if ids:
-                    attachable = connection.execute(
-                        select(media_assets.c.id)
-                        .where(
-                            media_assets.c.id.in_(ids),
-                            media_assets.c.detached_at.is_(None),
-                            media_assets.c.created_at > func.now() - ATTACH_WINDOW,
-                            _unused,
-                        )
-                        .order_by(media_assets.c.id)
-                        .with_for_update()
-                    ).scalars().all()
-                    if len(attachable) != len(ids):
-                        raise InvalidAttachment
                 row = connection.execute(
                     insert(timeline_entries).values(body_markdown=body_markdown).returning(timeline_entries)
                 ).mappings().one()
-                for position, (asset_id, alt) in enumerate(attachments):
-                    connection.execute(update(media_assets).where(media_assets.c.id == asset_id).values(alt_text=alt))
-                    connection.execute(
-                        insert(timeline_entry_media).values(entry_id=row["id"], asset_id=asset_id, position=position)
-                    )
+                _replace_media_ownership(
+                    connection,
+                    ids,
+                    (),
+                    lambda: _write_entry_media(connection, row["id"], attachments),
+                )
                 return _with_media(connection, row)
         except IntegrityError as exc:
             _raise_attachment_conflict(exc)
@@ -320,22 +307,27 @@ class TimelineStore:
                     .limit(limit)
                 ).scalars()
             )
+            candidate_condition = or_(
+                media_assets.c.detached_at < now - DETACHED_GRACE,
+                and_(
+                    media_assets.c.detached_at.is_(None),
+                    media_assets.c.created_at < now - NEVER_ATTACHED_GRACE,
+                ),
+            )
+            locked = list(
+                connection.execute(
+                    select(media_assets.c.id)
+                    .where(_unused, candidate_condition)
+                    .order_by(media_assets.c.id)
+                    .limit(limit - len(claimed))
+                    .with_for_update(skip_locked=True)
+                ).scalars()
+            )
             candidates = list(
                 connection.execute(
                     select(media_assets.c.id)
-                    .where(
-                        _unused,
-                        or_(
-                            media_assets.c.detached_at < now - DETACHED_GRACE,
-                            and_(
-                                media_assets.c.detached_at.is_(None),
-                                media_assets.c.created_at < now - NEVER_ATTACHED_GRACE,
-                            ),
-                        ),
-                    )
-                    .order_by(media_assets.c.created_at)
-                    .limit(limit - len(claimed))
-                    .with_for_update(skip_locked=True)
+                    .where(media_assets.c.id.in_(locked), _unused, candidate_condition)
+                    .order_by(media_assets.c.id)
                 ).scalars()
             )
             if candidates:
@@ -384,26 +376,15 @@ class TimelineStore:
             old = profile["avatar_asset_id"]
             new = old if avatar_asset_id is ... else avatar_asset_id
             if new != old:
-                _lock_assets(connection, {new, old} - {None})
-                if new is not None:
-                    eligible = connection.execute(
-                        select(
-                            exists().where(
-                                media_assets.c.id == new,
-                                media_assets.c.detached_at.is_(None),
-                                media_assets.c.created_at > func.now() - ATTACH_WINDOW,
-                                _unused,
-                            )
-                        )
-                    ).scalar_one()
-                    if not eligible:
-                        raise InvalidAttachment
-                    connection.execute(update(media_assets).where(media_assets.c.id == new).values(detached_at=None))
-                if old is not None:
-                    connection.execute(update(media_assets).where(media_assets.c.id == old).values(detached_at=func.now()))
+                _replace_media_ownership(
+                    connection,
+                    () if new is None else (new,),
+                    () if old is None else (old,),
+                    lambda: connection.execute(
+                        update(site_profile).where(site_profile.c.id == 1).values(avatar_asset_id=new)
+                    ),
+                )
             values = {"display_name": display_name.strip(), "handle": handle, "updated_at": func.now()}
-            if avatar_asset_id is not ...:
-                values["avatar_asset_id"] = new
             return dict(connection.execute(update(site_profile).where(site_profile.c.id == 1).values(**values).returning(site_profile)).mappings().one())
 
     def schema_revisions(self) -> frozenset[str]:
@@ -419,30 +400,57 @@ class TimelineStore:
         self.engine.dispose()
 
 
-def _replace_entry_media(connection: Connection, entry_id: int, attachments, media, ids) -> None:
-    kept = {uuid.UUID(item["id"]) for item in media}
-    _lock_assets(connection, kept | set(ids))
-    new = set(ids) - kept
+def _replace_media_ownership(
+    connection: Connection,
+    requested: Sequence[uuid.UUID],
+    current: Collection[uuid.UUID],
+    replace: Callable[[], object],
+    *,
+    allow_recently_detached: bool = False,
+) -> None:
+    """Lock assets in one order, recheck eligibility, then replace ownership."""
+    requested_set = set(requested)
+    current_set = set(current)
+    if len(requested_set) != len(requested):
+        raise InvalidAttachment
+    _lock_assets(connection, requested_set | current_set)
+    new = requested_set - current_set
     if new:
+        condition = media_assets.c.detached_at.is_(None)
+        age = media_assets.c.created_at > func.now() - ATTACH_WINDOW
+        if allow_recently_detached:
+            recently_detached = media_assets.c.detached_at > func.now() - DETACHED_GRACE
+            condition = condition | recently_detached
+            age = age | recently_detached
         attachable = connection.execute(
             select(func.count())
             .select_from(media_assets)
-            .where(
-                media_assets.c.id.in_(new),
-                media_assets.c.detached_at.is_(None),
-                media_assets.c.created_at > func.now() - ATTACH_WINDOW,
-                _unused,
-            )
+            .where(media_assets.c.id.in_(new), condition, age, _unused)
         ).scalar_one()
         if attachable != len(new):
-            raise InvalidAttachment
-    removed = kept - set(ids)
+            raise InvalidAttachment("media asset is unavailable or being swept")
+    replace()
+    removed = current_set - requested_set
     if removed:
         connection.execute(update(media_assets).where(media_assets.c.id.in_(removed)).values(detached_at=func.now()))
+    if requested_set:
+        connection.execute(update(media_assets).where(media_assets.c.id.in_(requested_set)).values(detached_at=None))
+
+
+def _write_entry_media(connection: Connection, entry_id: int, attachments) -> None:
     connection.execute(delete(timeline_entry_media).where(timeline_entry_media.c.entry_id == entry_id))
     for position, (asset_id, alt) in enumerate(attachments):
         connection.execute(update(media_assets).where(media_assets.c.id == asset_id).values(alt_text=alt))
         connection.execute(insert(timeline_entry_media).values(entry_id=entry_id, asset_id=asset_id, position=position))
+
+
+def _replace_entry_media(connection: Connection, entry_id: int, attachments, media, ids) -> None:
+    _replace_media_ownership(
+        connection,
+        ids,
+        {uuid.UUID(item["id"]) for item in media},
+        lambda: _write_entry_media(connection, entry_id, attachments),
+    )
 
 
 def _update_entry_row(connection: Connection, entry_id: int, body_markdown: str):
@@ -461,7 +469,7 @@ def _lock_entry(connection: Connection, entry_id: int):
 
 
 def _lock_assets(connection: Connection, ids) -> None:
-    """Row locks in id order (Postgres locks after the sort), the one asset lock order for update and delete."""
+    """Lock asset rows in the one id order used by attachment, deletion, and sweeping."""
     if ids:
         connection.execute(
             select(media_assets.c.id).where(media_assets.c.id.in_(ids)).order_by(media_assets.c.id).with_for_update()

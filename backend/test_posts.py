@@ -7,10 +7,10 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from markdown_it import MarkdownIt
-from sqlalchemy import delete, insert, select, update
+from sqlalchemy import delete, event, insert, select, text, update
 from sqlalchemy.exc import IntegrityError
 
-import posts
+import timeline as timeline_module
 from posts import (
     InvalidPost,
     PostConflict,
@@ -21,7 +21,15 @@ from posts import (
     web_post_tags,
     web_posts,
 )
-from timeline import InvalidAttachment, TimelineStore, media_assets, media_sweep_claims
+from timeline import (
+    InvalidAttachment,
+    TimelineStore,
+    media_assets,
+    media_sweep_claims,
+    site_profile,
+    timeline_entries,
+    timeline_entry_media,
+)
 
 UTC = timezone.utc
 
@@ -42,6 +50,9 @@ def post_store():
 
 def _clear(connection):
     connection.execute(delete(media_sweep_claims))
+    connection.execute(delete(timeline_entry_media))
+    connection.execute(update(site_profile).where(site_profile.c.id == 1).values(avatar_asset_id=None))
+    connection.execute(delete(timeline_entries))
     connection.execute(delete(web_post_media))
     connection.execute(delete(web_post_tags))
     connection.execute(delete(web_post_revisions))
@@ -308,13 +319,13 @@ def test_restore_and_sweep_serialize_on_the_asset(post_store, monkeypatch):
     deleted = post_store.delete(post["id"], post["version"])
     revision = post_store.revisions(post["id"])[0]
     lock_attempted = threading.Event()
-    original_lock_assets = posts._lock_assets
+    original_lock_assets = timeline_module._lock_assets
 
     def signaled_lock_assets(connection, asset_ids):
         lock_attempted.set()
         return original_lock_assets(connection, asset_ids)
 
-    monkeypatch.setattr(posts, "_lock_assets", signaled_lock_assets)
+    monkeypatch.setattr(timeline_module, "_lock_assets", signaled_lock_assets)
     timeline = TimelineStore("unused", engine=post_store.engine)
     with post_store.engine.begin() as connection:
         connection.execute(
@@ -381,6 +392,112 @@ def test_concurrent_slug_and_media_ownership_have_one_winner(post_store):
 
     assert sum(result is not None for result in slug_results) == 1
     assert sum(result is not None for result in media_results) == 1
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["timeline-create", "timeline-patch", "post-save", "revision-restore", "post-undelete"],
+)
+def test_all_media_attach_paths_share_the_ownership_gate(post_store, path):
+    timeline = TimelineStore("unused", engine=post_store.engine)
+    sequence = iter(range(100))
+
+    def prepare(asset_id, *, duplicate=False):
+        suffix = next(sequence)
+        assets = [asset_id, asset_id] if duplicate else [asset_id]
+        if path == "timeline-create":
+            return lambda: timeline.create("fixture", [(item, "") for item in assets])
+        if path == "timeline-patch":
+            entry = timeline.create("before")
+            return lambda: timeline.update(entry["id"], "after", [(item, "") for item in assets])
+
+        post = post_store.create(title="fixture", slug=f"gate-{path}-{suffix}", body_markdown="")
+        if path == "post-save":
+            return lambda: _update(post_store, post, body_markdown="\n".join(_image(item) for item in assets))
+
+        with_asset = _update(post_store, post, body_markdown=_image(asset_id))
+        if path == "revision-restore":
+            current = _update(post_store, with_asset, body_markdown="")
+        else:
+            current = post_store.delete(with_asset["id"], with_asset["version"])
+        revision = post_store.revisions(post["id"])[0]
+        if duplicate:
+            with post_store.engine.begin() as connection:
+                connection.execute(
+                    update(web_post_revisions)
+                    .where(web_post_revisions.c.id == revision["id"])
+                    .values(body_markdown=f"{_image(asset_id)}\n{_image(asset_id)}")
+                )
+        return lambda: post_store.restore(post["id"], revision["id"], current["version"])
+
+    success = _asset(post_store)
+    assert prepare(success)() is not None
+    assert timeline.is_in_use(success)
+
+    claimed = _asset(post_store)
+    claimed_call = prepare(claimed)
+    with post_store.engine.begin() as connection:
+        connection.execute(insert(media_sweep_claims).values(asset_id=claimed))
+    with pytest.raises(InvalidAttachment):
+        claimed_call()
+    assert not timeline.is_in_use(claimed)
+
+    concurrent_asset = _asset(post_store)
+    concurrent_call = prepare(concurrent_asset)
+    checked_out = threading.Event()
+    backend_pid = []
+
+    def capture_backend(dbapi_connection, _record, _proxy):
+        with dbapi_connection.cursor() as cursor:
+            cursor.execute("SELECT pg_backend_pid()")
+            backend_pid.append(cursor.fetchone()[0])
+        checked_out.set()
+
+    with post_store.engine.connect() as holder:
+        transaction = holder.begin()
+        holder.execute(select(media_assets.c.id).where(media_assets.c.id == concurrent_asset).with_for_update()).one()
+        event.listen(post_store.engine, "checkout", capture_backend)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(concurrent_call)
+            try:
+                assert checked_out.wait(2), "attachment did not check out a database connection"
+                event.remove(post_store.engine, "checkout", capture_backend)
+                deadline = time.monotonic() + 2
+                while holder.execute(
+                    text("SELECT wait_event_type = 'Lock' FROM pg_stat_activity WHERE pid = :pid"),
+                    {"pid": backend_pid[0]},
+                ).scalar_one() is not True:
+                    assert time.monotonic() < deadline, "attachment did not wait for the asset row lock"
+                    time.sleep(0.01)
+                holder.execute(insert(media_sweep_claims).values(asset_id=concurrent_asset))
+                transaction.commit()
+            finally:
+                if event.contains(post_store.engine, "checkout", capture_backend):
+                    event.remove(post_store.engine, "checkout", capture_backend)
+                if transaction.is_active:
+                    transaction.rollback()
+            try:
+                result = future.result(timeout=5)
+            except Exception as exc:
+                result = exc
+    assert isinstance(result, InvalidAttachment)
+    with post_store.engine.connect() as connection:
+        is_claimed = connection.execute(
+            select(media_sweep_claims.c.asset_id).where(media_sweep_claims.c.asset_id == concurrent_asset)
+        ).scalar_one_or_none()
+    assert (timeline.is_in_use(concurrent_asset), is_claimed) == (False, concurrent_asset)
+
+    foreign = _asset(post_store)
+    foreign_call = prepare(foreign)
+    with post_store.engine.begin() as connection:
+        connection.execute(update(media_assets).where(media_assets.c.id == foreign).values(detached_at=None))
+    timeline.create("other owner", [(foreign, "")])
+    with pytest.raises(InvalidAttachment):
+        foreign_call()
+
+    duplicate = _asset(post_store)
+    with pytest.raises(InvalidAttachment):
+        prepare(duplicate, duplicate=True)()
 
 
 def test_database_constraints_reject_invalid_direct_rows(post_store):

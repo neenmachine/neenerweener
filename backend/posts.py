@@ -226,6 +226,10 @@ class PostStore:
         self.reserved_slugs = reserved_slugs
         self.renderer = renderer
 
+    def preview(self, body_markdown: str) -> str:
+        _valid_text(body_markdown, MAX_BODY_CHARS, "body")
+        return self.renderer(body_markdown)
+
     def create(
         self,
         *,

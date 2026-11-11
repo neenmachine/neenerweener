@@ -23,6 +23,14 @@ from auth import (
 from fastapi.testclient import TestClient
 from sqlalchemy import delete, event, inspect, select, text, update
 from sqlalchemy.exc import IntegrityError
+from posts import (
+    PostStore,
+    web_post_media,
+    web_post_revisions,
+    web_post_slugs,
+    web_post_tags,
+    web_posts,
+)
 from timeline import TimelineStore, timeline_entries
 
 
@@ -373,6 +381,24 @@ def test_session_expiry_rotation_and_logout_revoke_token(configured_app, monkeyp
         ("post", "/api/admin/timeline", {"body_markdown": "fixture"}),
         ("patch", "/api/admin/timeline/1", {"body_markdown": "fixture"}),
         ("delete", "/api/admin/timeline/1", None),
+        ("post", "/api/admin/posts", {"title": "fixture", "slug": "fixture"}),
+        ("post", "/api/admin/posts/preview", {"body_markdown": "fixture"}),
+        (
+            "patch",
+            "/api/admin/posts/1",
+            {
+                "version": 1,
+                "title": "fixture",
+                "slug": "fixture",
+                "body_markdown": "",
+                "excerpt": None,
+                "tags": [],
+                "published_on": None,
+                "status": "draft",
+            },
+        ),
+        ("delete", "/api/admin/posts/1", {"version": 1}),
+        ("post", "/api/admin/posts/1/revisions/1/restore", {"version": 1}),
     ],
 )
 def test_every_mutation_requires_session_origin_and_csrf(configured_app, method, path, json_body, make_client):
@@ -394,6 +420,182 @@ def test_every_mutation_requires_session_origin_and_csrf(configured_app, method,
         json=json_body,
     )
     assert wrong_csrf.status_code == 403
+
+
+def test_post_reads_require_browser_session(make_client):
+    client = make_client(base_url="http://127.0.0.1")
+    for path in ("/api/admin/posts", "/api/admin/posts/1", "/api/admin/posts/1/revisions"):
+        response = client.get(path)
+        assert response.status_code == 401
+        assert response.headers["Cache-Control"] == "no-store"
+
+
+def test_post_mutation_auth_precedes_body_parsing(configured_app, make_client):
+    password, _, _ = configured_app
+    anonymous = make_client(base_url="http://127.0.0.1")
+    anonymous_response = anonymous.post(
+        "/api/admin/posts/preview",
+        headers={"Content-Type": "application/json"},
+        content=b"{",
+    )
+    assert anonymous_response.status_code == 401
+
+    client, csrf = authenticated_client(password, make_client)
+    missing_origin = client.post(
+        "/api/admin/posts/preview",
+        headers={"Content-Type": "application/json", "X-CSRF-Token": csrf},
+        content=b"{",
+    )
+    assert missing_origin.status_code == 403
+
+
+@pytest.fixture
+def configured_posts(configured_app, monkeypatch):
+    password, _, _ = configured_app
+    database_url = os.environ["DATABASE_URL"]
+    store = PostStore(database_url, renderer=app.render_post)
+    with store.engine.begin() as connection:
+        connection.execute(delete(web_post_media))
+        connection.execute(delete(web_post_tags))
+        connection.execute(delete(web_post_revisions))
+        connection.execute(delete(web_post_slugs))
+        connection.execute(delete(web_posts))
+    monkeypatch.setattr(app, "post_store", store)
+    yield password, store
+    with store.engine.begin() as connection:
+        connection.execute(delete(web_post_media))
+        connection.execute(delete(web_post_tags))
+        connection.execute(delete(web_post_revisions))
+        connection.execute(delete(web_post_slugs))
+        connection.execute(delete(web_posts))
+    store.close()
+
+
+def _post_update(document, **changes):
+    payload = {
+        "version": document["version"],
+        "title": document["title"],
+        "slug": document["slug"],
+        "body_markdown": document["body_markdown"],
+        "excerpt": document["excerpt"],
+        "tags": document["tags"],
+        "published_on": document["published_on"],
+        "status": document["status"],
+    }
+    payload.update(changes)
+    return payload
+
+
+def test_admin_post_lifecycle_conflict_and_revision_restore(configured_posts, make_client):
+    password, _ = configured_posts
+    client, csrf = authenticated_client(password, make_client)
+    headers = mutation_headers(csrf)
+
+    created_response = client.post(
+        "/api/admin/posts",
+        headers=headers,
+        json={"title": "fixture title", "slug": "fixture-post", "tags": [" Test ", "test"]},
+    )
+    assert created_response.status_code == 201
+    created = created_response.json()
+    assert (created["status"], created["version"], created["body_markdown"], created["tags"]) == (
+        "draft",
+        1,
+        "",
+        ["test"],
+    )
+    assert client.get("/api/admin/posts").json() == [created]
+    assert client.get(f"/api/admin/posts/{created['id']}").json() == created
+    assert client.get("/api/posts/fixture-post").status_code == 404
+
+    published_response = client.patch(
+        f"/api/admin/posts/{created['id']}",
+        headers=headers,
+        json=_post_update(created, body_markdown="fixture body", status="live"),
+    )
+    assert published_response.status_code == 200
+    published = published_response.json()
+    assert (published["status"], published["version"]) == ("live", 2)
+
+    conflict = client.patch(
+        f"/api/admin/posts/{created['id']}",
+        headers=headers,
+        json=_post_update(created, body_markdown="stale fixture"),
+    )
+    assert conflict.status_code == 409
+    assert conflict.json() == {"detail": "post version conflict", "current_version": 2}
+
+    unpublished = client.patch(
+        f"/api/admin/posts/{created['id']}",
+        headers=headers,
+        json=_post_update(published, status="draft"),
+    ).json()
+    revisions = client.get(f"/api/admin/posts/{created['id']}/revisions").json()
+    assert [(revision["version"], revision["action"]) for revision in reversed(revisions)] == [
+        (1, "publish"),
+        (2, "unpublish"),
+    ]
+
+    deleted = client.request(
+        "delete",
+        f"/api/admin/posts/{created['id']}",
+        headers=headers,
+        json={"version": unpublished["version"]},
+    ).json()
+    assert (deleted["version"], deleted["deleted_at"] is not None) == (4, True)
+
+    restored = client.post(
+        f"/api/admin/posts/{created['id']}/revisions/{revisions[-1]['id']}/restore",
+        headers=headers,
+        json={"version": deleted["version"]},
+    ).json()
+    assert (restored["status"], restored["version"], restored["body_markdown"], restored["deleted_at"]) == (
+        "draft",
+        5,
+        "",
+        None,
+    )
+
+
+def test_admin_post_preview_uses_real_renderer_and_bounds_input(configured_posts, make_client):
+    password, _ = configured_posts
+    client, csrf = authenticated_client(password, make_client)
+    headers = mutation_headers(csrf)
+
+    preview = client.post(
+        "/api/admin/posts/preview",
+        headers=headers,
+        json={"body_markdown": '<section data-fixture="yes">fixture</section>'},
+    )
+    assert preview.status_code == 200
+    assert preview.json() == {"html": '<section data-fixture="yes">fixture</section>'}
+    assert preview.headers["Cache-Control"] == "no-store"
+
+    oversized = client.post(
+        "/api/admin/posts/preview",
+        headers={**headers, "Content-Type": "application/json"},
+        content=b'{"body_markdown":"' + b"x" * (app.MAX_POST_JSON_BYTES + 1),
+    )
+    assert oversized.status_code == 413
+    assert oversized.json() == {"detail": "request too large"}
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"title": "fixture", "slug": "fixture", "unknown": True},
+        {"title": "fixture", "slug": "fixture", "tags": "not-a-list"},
+        {"title": "fixture", "slug": "fixture", "published_on": "01/02/2026"},
+    ],
+)
+def test_admin_post_rejects_outside_input(configured_posts, make_client, body):
+    password, store = configured_posts
+    client, csrf = authenticated_client(password, make_client)
+    response = client.post("/api/admin/posts", headers=mutation_headers(csrf), json=body)
+    assert response.status_code == 422
+    assert response.json()["detail"] in {"invalid request", "invalid post"}
+    assert response.headers["Cache-Control"] == "no-store"
+    assert store.list() == []
 
 
 def test_create_read_edit_same_body_and_hard_delete(configured_app, make_client):

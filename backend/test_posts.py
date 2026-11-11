@@ -170,6 +170,21 @@ def test_soft_delete_and_revision_restore_make_post_a_draft(post_store):
     ]
 
 
+def test_public_reads_exclude_drafts_and_deleted_posts_and_resolve_redirects(post_store):
+    draft = post_store.create(title="draft fixture", slug="draft-fixture", body_markdown="draft body")
+    live = post_store.create(title="live fixture", slug="first-live", body_markdown="live body")
+    live = _update(post_store, live, slug="current-live", status="live")
+    deleted = post_store.create(title="deleted fixture", slug="deleted-fixture", body_markdown="deleted body")
+    deleted = _update(post_store, deleted, status="live")
+    post_store.delete(deleted["id"], deleted["version"])
+
+    assert [post["slug"] for post in post_store.list_public()] == ["current-live"]
+    redirected, canonical = post_store.get_public("first-live")
+    assert (redirected["slug"], canonical) == ("current-live", "current-live")
+    assert post_store.get_public(draft["slug"]) is None
+    assert post_store.get_public(deleted["slug"]) is None
+
+
 def test_stale_version_reports_409_and_current_version(post_store):
     post = post_store.create(title="fixture", slug="fixture")
     current = _update(post_store, post, body_markdown="changed")

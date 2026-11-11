@@ -130,6 +130,7 @@ def test_lifespan_closes_stores_sequentially_off_event_loop(monkeypatch):
 
     monkeypatch.setattr(app, "timeline_store", BlockingStore("timeline"))
     monkeypatch.setattr(app, "auth_store", BlockingStore("auth"))
+    monkeypatch.setattr(app, "post_store", BlockingStore("posts"))
 
     async def run_lifespan():
         loop_thread = threading.get_ident()
@@ -139,7 +140,7 @@ def test_lifespan_closes_stores_sequentially_off_event_loop(monkeypatch):
 
     loop_thread = asyncio.run(run_lifespan())
 
-    assert [name for name, _ in close_calls] == ["timeline", "auth"]
+    assert [name for name, _ in close_calls] == ["timeline", "auth", "posts"]
     assert all(thread_id != loop_thread for _, thread_id in close_calls)
 
 
@@ -258,10 +259,16 @@ def test_draft_frontmatter_optional(tmp_path, monkeypatch):
     monkeypatch.setattr(app, "DRAFTS_DIR", drafts)
     monkeypatch.setenv("SHOW_DRAFTS", "1")
 
-    assert TestClient(app.app).get("/api/posts").json() == [
+    assert [{key: post[key] for key in ("slug", "date", "title", "excerpt", "tags", "draft")} for post in app.all_posts()] == [
         {"slug": "idea", "date": None, "title": "idea", "excerpt": None, "tags": [], "draft": True},
         {"slug": "planned", "date": "2026-04-01", "title": "Planned", "excerpt": None, "tags": [], "draft": True},
     ]
+    client = TestClient(app.app)
+    assert client.get("/api/posts").json() == [
+        {"slug": "idea", "date": None, "title": "idea", "excerpt": None, "tags": [], "draft": True},
+        {"slug": "planned", "date": "2026-04-01", "title": "Planned", "excerpt": None, "tags": [], "draft": True},
+    ]
+    assert client.get("/api/posts/idea").json()["draft"] is True
 
 
 def test_math():

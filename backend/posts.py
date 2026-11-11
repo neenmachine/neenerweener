@@ -170,7 +170,9 @@ def normalize_tags(tags: Sequence[str]) -> list[str]:
 
 
 def _valid_text(value: str, maximum: int, field: str, *, allow_empty: bool = True) -> None:
-    if not isinstance(value, str) or "\x00" in value or len(value) > maximum or (not allow_empty and not value):
+    if isinstance(value, str) and len(value) > maximum:
+        raise InvalidPost(f"{field} too long")
+    if not isinstance(value, str) or "\x00" in value or (not allow_empty and not value):
         raise InvalidPost(f"invalid {field}")
     try:
         value.encode("utf-8")
@@ -252,6 +254,10 @@ class PostStore:
         self.reserved_slugs = reserved_slugs
         self.renderer = renderer
 
+    def preview(self, body_markdown: str) -> str:
+        _valid_text(body_markdown, MAX_BODY_CHARS, "body")
+        return self.renderer(body_markdown)
+
     def create(
         self,
         *,
@@ -287,8 +293,18 @@ class PostStore:
 
     def list(self) -> list[dict]:
         with self.engine.connect() as connection:
-            rows = connection.execute(select(web_posts).order_by(web_posts.c.updated_at.desc())).mappings()
-            return [_document(connection, dict(row)) for row in rows]
+            rows = [
+                dict(row)
+                for row in connection.execute(select(web_posts).order_by(web_posts.c.updated_at.desc())).mappings()
+            ]
+            post_ids = [row["id"] for row in rows]
+            slugs = _slugs_by_post(connection, post_ids)
+            tags = _tags_by_post(connection, post_ids)
+            media = _media_by_post(connection, post_ids)
+            return [
+                {**row, "slug": slugs[row["id"]], "tags": tags[row["id"]], "media": media[row["id"]]}
+                for row in rows
+            ]
 
     def list_public(self) -> list[dict]:
         with self.engine.connect() as connection:
@@ -477,14 +493,16 @@ class PostStore:
         _valid_text(body_markdown, MAX_BODY_CHARS, "body")
         if excerpt is not None:
             _valid_text(excerpt, MAX_EXCERPT_CHARS, "excerpt")
-        if not isinstance(slug, str) or not SLUG.fullmatch(slug) or slug in self.reserved_slugs():
-            raise InvalidPost("invalid or reserved slug")
+        if not isinstance(slug, str) or not SLUG.fullmatch(slug):
+            raise InvalidPost("invalid slug")
+        if slug in self.reserved_slugs():
+            raise InvalidPost("slug reserved by file post")
         if status not in {"draft", "live"}:
             raise InvalidPost("invalid status")
         normalized_tags = normalize_tags(tags)
         parsed_date = _published_on(published_on)
         if status == "live" and (not title.strip() or not body_markdown.strip()):
-            raise InvalidPost("live posts need a title and body")
+            raise InvalidPost("live post needs title and body")
         rendered_html = self.renderer(body_markdown)
         return {
             "title": title,
@@ -535,6 +553,19 @@ def _document(connection: Connection, row: dict) -> dict:
     return row
 
 
+def _slugs_by_post(connection: Connection, post_ids: Sequence[int]) -> dict[int, str]:
+    if not post_ids:
+        return {}
+    return {
+        post_id: slug
+        for post_id, slug in connection.execute(
+            select(web_post_slugs.c.post_id, web_post_slugs.c.slug).where(
+                web_post_slugs.c.post_id.in_(post_ids), web_post_slugs.c.canonical.is_(True)
+            )
+        )
+    }
+
+
 def _tags_by_post(connection: Connection, post_ids: Sequence[int]) -> dict[int, list[str]]:
     tags = {post_id: [] for post_id in post_ids}
     if not post_ids:
@@ -547,6 +578,20 @@ def _tags_by_post(connection: Connection, post_ids: Sequence[int]) -> dict[int, 
     for post_id, tag in rows:
         tags[post_id].append(tag)
     return tags
+
+
+def _media_by_post(connection: Connection, post_ids: Sequence[int]) -> dict[int, list[str]]:
+    media = {post_id: [] for post_id in post_ids}
+    if not post_ids:
+        return media
+    rows = connection.execute(
+        select(web_post_media.c.post_id, web_post_media.c.asset_id)
+        .where(web_post_media.c.post_id.in_(post_ids))
+        .order_by(web_post_media.c.post_id, web_post_media.c.asset_id)
+    )
+    for post_id, asset_id in rows:
+        media[post_id].append(str(asset_id))
+    return media
 
 
 def _public_document(document: dict, tags: list[str]) -> dict:
@@ -603,7 +648,7 @@ def _set_slug(connection: Connection, post_id: int, old_slug: str, new_slug: str
         .with_for_update()
     ).one_or_none()
     if existing is not None and existing.post_id != post_id:
-        raise InvalidPost("slug unavailable")
+        raise InvalidPost("slug already used")
     connection.execute(
         update(web_post_slugs)
         .where(web_post_slugs.c.post_id == post_id, web_post_slugs.c.canonical.is_(True))
@@ -652,6 +697,6 @@ def _replace_media(
 def _raise_conflict(exc: IntegrityError) -> None:
     constraint = getattr(getattr(exc.orig, "diag", None), "constraint_name", None)
     if constraint in {"web_post_slugs_pkey", "uq_web_post_slugs_canonical_post"}:
-        raise InvalidPost("slug unavailable") from exc
+        raise InvalidPost("slug already used") from exc
     if constraint in {"web_post_media_asset_id_key", "web_post_media_pkey"}:
         raise InvalidAttachment from exc

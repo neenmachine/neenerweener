@@ -588,6 +588,10 @@
       "label": "posts"
     },
     {
+      "path": "/admin/agents",
+      "label": "agents"
+    },
+    {
       "path": "/admin/profile",
       "label": "profile"
     }

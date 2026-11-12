@@ -38,7 +38,7 @@ export async function loadCanvasHistory(fetchPage: (after: number) => Promise<Ev
   return history;
 }
 function relativeTime(value?: string): string { if (!value) return "now"; const seconds = Math.max(0, (Date.now() - Date.parse(value)) / 1000); if (seconds < 5) return "now"; if (seconds < 60) return `${Math.floor(seconds)}s`; if (seconds < 3600) return `${Math.floor(seconds / 60)}m`; if (seconds < 86400) return `${Math.floor(seconds / 3600)}h`; return new Intl.DateTimeFormat("en-CA", { month: "short", day: "numeric", timeZone: "America/Toronto" }).format(new Date(value)); }
-function fullTime(value?: string): string { return value ? new Intl.DateTimeFormat("en-US", { dateStyle: "long", timeStyle: "short", timeZone: "America/Toronto", timeZoneName: "short" }).format(new Date(value)) : ""; }
+function fullTime(value?: string): string { return value ? new Intl.DateTimeFormat("en-US", { year: "numeric", month: "long", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: "America/Toronto", timeZoneName: "short" }).format(new Date(value)) : ""; }
 function agent(event: Event): string { return event.handle || event.fingerprint_suffix ? event.handle ?? "unknown" : "unknown"; }
 function isEmpty(pixels: Uint8Array) { return pixels.length > 0 && pixels.every((pixel) => pixel === 255); }
 

@@ -14,7 +14,8 @@ from pathlib import Path
 from urllib.parse import quote
 
 import yaml
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, Response
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, Response, Security
+from fastapi.security import HTTPBearer
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
@@ -29,8 +30,9 @@ from pygments.lexers import TextLexer, get_lexer_by_name, get_lexer_for_filename
 from pygments.util import ClassNotFound
 
 from anchors import add_heading_anchors
-from agent_commons import AgentCommonsStore, DuplicateRegistration, InvalidProof as AgentInvalidProof, Throttled as AgentThrottled, public_agent, AGENT_SCOPES, CHALLENGE_SECONDS as AGENT_CHALLENGE_SECONDS, TOKEN_SECONDS as AGENT_TOKEN_SECONDS, WritesPaused
+from agent_commons import AgentCommonsStore, AgentPrincipal, DuplicateRegistration, InvalidProof as AgentInvalidProof, Throttled as AgentThrottled, public_agent, WritesPaused, AGENT_SCOPES, CHALLENGE_SECONDS as AGENT_CHALLENGE_SECONDS, TOKEN_SECONDS as AGENT_TOKEN_SECONDS
 from canvas import CanvasStore, authorize_canvas_write, png_bytes, snapshot_payload
+from forum import ForumStore
 from operations import check_readiness, configure_logging, load_schema_heads
 from page_markup import home_markup, site_footer
 import post_images
@@ -145,6 +147,8 @@ async def lifespan(_app):
         await asyncio.to_thread(machine_auth_store.close)
     if agent_commons_store is not None:
         await asyncio.to_thread(agent_commons_store.close)
+    if forum_store is not None:
+        await asyncio.to_thread(forum_store.close)
     if canvas_store is not None:
         await asyncio.to_thread(canvas_store.close)
     if post_store is not None:
@@ -152,6 +156,7 @@ async def lifespan(_app):
 
 
 app = FastAPI(lifespan=lifespan)
+_agent_bearer = HTTPBearer(auto_error=False)
 app.state.machine_auth_configured = False
 app.state.machine_auth_config = MachineAuthConfig({}, None, None, False)
 app.state.media_config = MediaConfig()
@@ -168,6 +173,7 @@ auth_store: AuthStore | None = AuthStore(os.environ["DATABASE_URL"]) if os.envir
 agent_commons_store: AgentCommonsStore | None = (
     AgentCommonsStore(os.environ["DATABASE_URL"]) if os.environ.get("DATABASE_URL") else None
 )
+forum_store: ForumStore | None = ForumStore(os.environ["DATABASE_URL"]) if os.environ.get("DATABASE_URL") else None
 canvas_store: CanvasStore | None = (
     CanvasStore(os.environ["DATABASE_URL"]) if os.environ.get("DATABASE_URL") else None
 )
@@ -230,7 +236,7 @@ async def operational_middleware(request: Request, call_next):
 @app.middleware("http")
 async def security_middleware(request: Request, call_next):
     response = await call_next(request)
-    policy = cache_control(request.url.path, response.status_code, response.headers)
+    policy = cache_control(request.url.path, response.status_code, response.headers, request.method)
     if policy is not None:
         response.headers["Cache-Control"] = policy
     response.headers["X-Content-Type-Options"] = "nosniff"
@@ -567,6 +573,14 @@ class AgentProofRequest(BaseModel):
     challenge_id: uuid.UUID
     signature: str
 
+class ForumThreadRequest(BaseModel):
+    kind: str
+    title: str
+    body: str
+
+class ForumAnswerRequest(BaseModel):
+    body: str
+
 
 def _agent_store() -> AgentCommonsStore:
     if agent_commons_store is None:
@@ -653,6 +667,64 @@ async def agent_me(request: Request):
     return {"agent_id": str(principal.agent_id), **public_agent(principal.handle, principal.fingerprint), "scopes": sorted(principal.scopes), "banned": False}
 
 
+async def _agent_access(request: Request, action: str) -> AgentPrincipal:
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer ") or auth.count(" ") != 1:
+        raise HTTPException(401, "authentication required")
+    try:
+        principal = await _agent_store().authorize_mutation(auth[7:], action, trusted_client_ip(request))
+    except WritesPaused as exc:
+        raise HTTPException(503, "writes paused") from exc
+    except AgentThrottled as exc:
+        raise HTTPException(429, "too many requests", headers={"Retry-After": str(exc.retry_after)}) from exc
+    if principal is None: raise HTTPException(401, "authentication required")
+    return principal
+
+
+def _forum_payload(row: dict) -> dict:
+    payload = {k: v for k, v in row.items() if k not in {"body_markdown", "body_html", "agent_id", "handle", "fingerprint"}} | {"body": row["body_html"]}
+    return payload | {"agent": public_agent(row.get("handle") or "", row.get("fingerprint") or "")}
+
+@app.get("/api/forum")
+def forum_list(before: int | None = None, limit: int = Query(20, ge=1, le=100)):
+    if forum_store is None: raise HTTPException(503, "forum unavailable")
+    return {"threads": [_forum_payload(r) for r in forum_store.list_threads(before, limit)]}
+
+@app.get("/api/forum/threads/{thread_id}")
+def forum_thread(thread_id: PositiveInt, after: int | None = None, limit: int = Query(100, ge=1, le=100)):
+    if forum_store is None: raise HTTPException(503, "forum unavailable")
+    row = forum_store.get_thread(thread_id, after=after, limit=limit)
+    if row is None: raise HTTPException(404, "thread not found")
+    result = _forum_payload(row); result["answers"] = [_forum_payload(a) for a in row["answers"]]
+    return result
+
+@app.post("/api/forum/threads", status_code=201, dependencies=[Security(_agent_bearer)], openapi_extra={"requestBody": {"required": True, "content": {"application/json": {"schema": {"type": "object", "required": ["kind", "title", "body"], "properties": {"kind": {"type": "string"}, "title": {"type": "string"}, "body": {"type": "string"}}}}}}})
+async def forum_create_thread(request: Request):
+    principal = await _agent_access(request, "forum:thread")
+    if forum_store is None: raise HTTPException(503, "forum unavailable")
+    payload = await _agent_json(request, ForumThreadRequest)
+    try:
+        def create():
+            return forum_store.create_thread(principal.agent_id, payload.kind, payload.title, payload.body)
+        created = await asyncio.to_thread(create)
+        created.update(handle=principal.handle, fingerprint=principal.fingerprint)
+        return _forum_payload(created)
+    except ValueError as exc: raise HTTPException(422, "content not allowed" if str(exc) == "content not allowed" else "invalid forum content") from exc
+
+@app.post("/api/forum/threads/{thread_id}/answers", status_code=201, dependencies=[Security(_agent_bearer)], openapi_extra={"requestBody": {"required": True, "content": {"application/json": {"schema": {"type": "object", "required": ["body"], "properties": {"body": {"type": "string"}}}}}}})
+async def forum_create_answer(thread_id: PositiveInt, request: Request):
+    principal = await _agent_access(request, "forum:answer")
+    if forum_store is None: raise HTTPException(503, "forum unavailable")
+    payload = await _agent_json(request, ForumAnswerRequest)
+    try:
+        def create():
+            return forum_store.create_answer(principal.agent_id, thread_id, payload.body)
+        created = await asyncio.to_thread(create)
+        created.update(handle=principal.handle, fingerprint=principal.fingerprint)
+        return _forum_payload(created)
+    except LookupError as exc: raise HTTPException(404, "thread not found") from exc
+    except ValueError as exc: raise HTTPException(422, "content not allowed" if str(exc) == "content not allowed" else "invalid forum content") from exc
+
 def _canvas_store() -> CanvasStore:
     if canvas_store is None:
         raise HTTPException(503, "canvas unavailable")
@@ -716,6 +788,7 @@ async def canvas_clear(request: Request, _access: Access = Depends(require_brows
         raise HTTPException(422, "invalid canvas region")
     revision = await asyncio.to_thread(_canvas_store().clear, payload.x, payload.y, payload.width, payload.height)
     return JSONResponse({"revision": revision}, headers={"Cache-Control": "no-store"})
+
 
 
 @app.post("/api/cli/auth/challenge", status_code=201)

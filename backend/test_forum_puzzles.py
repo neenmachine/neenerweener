@@ -32,7 +32,10 @@ def forum_app(monkeypatch):
     monkeypatch.setattr(app, "forum_store", __import__("forum").ForumStore(url))
     monkeypatch.setattr(app, "puzzle_store", PuzzleStore(url, secret=b"fixture-secret"))
     principal = AgentPrincipal(ids[0], "fixture-a", "SHA256:fixture", frozenset({"forum:write", "puzzle:submit"}))
-    monkeypatch.setattr(app, "agent_commons_store", type("Gate", (), {"authorize_mutation": lambda self, token, scope: principal})())
+    class Gate:
+        async def authorize_mutation(self, token, scope, client_ip):
+            return principal
+    monkeypatch.setattr(app, "agent_commons_store", Gate())
     client = TestClient(app.app)
     yield client, app.forum_store, app.puzzle_store, ids
     app.forum_store.close(); app.puzzle_store.close()
@@ -86,6 +89,19 @@ def test_http_puzzle_routes_secret_privacy_headers_and_attempt_limits(forum_app,
         assert "é" not in caplog.text
         assert client.post(f"/api/admin/agents/puzzles/{pid}/close").json() == {"closed": True}
     finally: app.app.dependency_overrides.pop(app.require_browser_mutation, None)
+
+
+def test_answer_pagination_after_covers_all_rows(forum_app):
+    _, forum, _, ids = forum_app
+    thread = forum.create_thread(ids[0], "question", "page", "body")
+    for n in range(105):
+        forum.create_answer(ids[0], thread["id"], f"answer {n}")
+    page = forum.get_thread(thread["id"], limit=100)
+    first = [row["id"] for row in page["answers"]]
+    assert len(first) == 100 and page["answers_next_after"] == first[-1]
+    second = forum.get_thread(thread["id"], after=page["answers_next_after"], limit=100)
+    rest = [row["id"] for row in second["answers"]]
+    assert len(rest) == 5 and set(first).isdisjoint(rest) and first + rest == sorted(first + rest)
 
 
 def test_exact_filter_unicode_markdown_boundary_and_case(forum_app):
@@ -163,6 +179,37 @@ def test_schedule_overlap_race_and_toronto_aware(forum_app):
     with pytest.raises(ValueError): puzzle.create("naive", "body", "z", datetime(2026, 1, 1), datetime(2026, 1, 2))
 
 
+def test_thirty_attempt_cap(forum_app):
+    _, _, puzzle, ids = forum_app
+    now = datetime.now(timezone.utc)
+    row = puzzle.create("a", "body", "private", now - timedelta(hours=1), now + timedelta(hours=1))
+    for n in range(30):
+        assert puzzle.submit(row["id"], ids[0], f"wrong-{n}", now=now + timedelta(seconds=11 * n)) == "incorrect"
+    with pytest.raises(PuzzleRateLimited):
+        puzzle.submit(row["id"], ids[0], "last", now=now + timedelta(seconds=330))
+
+
+def test_forum_post_and_immediate_puzzle_creation_are_serialized(forum_app):
+    _, forum, puzzle, ids = forum_app
+    now = datetime.now(timezone.utc)
+    barrier = __import__("threading").Barrier(2)
+    def post():
+        barrier.wait()
+        try:
+            return "post", forum.create_thread(ids[0], "question", "race", "secret")
+        except ValueError as exc:
+            return "rejected", str(exc)
+    def create():
+        barrier.wait()
+        return "puzzle", puzzle.create("race", "body", "secret", now, now + timedelta(hours=1))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        results = [future.result() for future in [pool.submit(post), pool.submit(create)]]
+    assert {result[0] for result in results} == {"puzzle", "post"} or {result[0] for result in results} == {"puzzle", "rejected"}
+    if any(result[0] == "post" for result in results):
+        with forum.engine.connect() as c:
+            assert c.execute(select(forum_threads.c.body_markdown).where(forum_threads.c.body_markdown == "secret")).first() is not None
+
+
 def test_attempt_digest_has_no_plain_answer(forum_app):
     _, _, puzzle, ids = forum_app
     now = datetime.now(timezone.utc)
@@ -177,7 +224,7 @@ def test_attempt_digest_has_no_plain_answer(forum_app):
 def test_http_policy_matrix(monkeypatch, policy, status):
     import app
     class Gate:
-        def authorize_mutation(self, token, scope):
+        async def authorize_mutation(self, token, scope, client_ip):
             if policy == "banned": return None
             from agent_commons import WritesPaused
             raise WritesPaused

@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib, hmac, unicodedata
 from datetime import timedelta
 from datetime import datetime, timezone
-from sqlalchemy import BigInteger, Boolean, Column, DateTime, ForeignKey, Integer, LargeBinary, MetaData, Table, Text, and_, desc, func, insert, select, update
+from sqlalchemy import BigInteger, Boolean, Column, DateTime, ForeignKey, Integer, LargeBinary, MetaData, Table, Text, and_, desc, func, insert, select, update, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
@@ -11,6 +11,8 @@ from agent_commons import agents
 from zoneinfo import ZoneInfo
 from timeline import database_engine
 from untrusted_markdown import validate_untrusted_markdown
+
+_FORUM_PUZZLE_LOCK = 843921779
 
 metadata = MetaData()
 puzzles = Table("puzzles", metadata,
@@ -45,6 +47,7 @@ class PuzzleStore:
         html = validate_untrusted_markdown(body, maximum=5000); answer = normalize_answer(answer)
         try:
             with self.engine.begin() as c:
+                c.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": _FORUM_PUZZLE_LOCK})
                 overlap = c.execute(select(puzzles.c.id).where(puzzles.c.publish_at < close_at, puzzles.c.close_at > publish_at)).first()
                 if overlap: raise ValueError("puzzle schedule overlaps")
                 try:
@@ -88,5 +91,7 @@ class PuzzleStore:
             rows = c.execute(select(puzzle_attempts.c.agent_id, puzzle_attempts.c.submitted_at, agents.c.handle).join(agents, agents.c.id == puzzle_attempts.c.agent_id).where(puzzle_attempts.c.puzzle_id == puzzle_id, puzzle_attempts.c.correct.is_(True), agents.c.banned_at.is_(None)).order_by(puzzle_attempts.c.submitted_at, puzzle_attempts.c.agent_id)).mappings()
             return [{"agent_id": str(r["agent_id"]), "handle": r["handle"], "submitted_at": r["submitted_at"]} for r in rows]
     def close_puzzle(self, puzzle_id: int) -> bool:
-        with self.engine.begin() as c: return c.execute(update(puzzles).where(puzzles.c.id == puzzle_id, puzzles.c.closed_at.is_(None)).values(closed_at=datetime.now(timezone.utc))).rowcount == 1
+        with self.engine.begin() as c:
+            c.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": _FORUM_PUZZLE_LOCK})
+            return c.execute(update(puzzles).where(puzzles.c.id == puzzle_id, puzzles.c.closed_at.is_(None)).values(closed_at=func.now())).rowcount == 1
     def close(self): self.engine.dispose()

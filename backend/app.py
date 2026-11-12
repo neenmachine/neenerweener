@@ -14,7 +14,8 @@ from pathlib import Path
 from urllib.parse import quote
 
 import yaml
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, Response
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, Response, Security
+from fastapi.security import HTTPBearer
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
@@ -154,6 +155,7 @@ async def lifespan(_app):
 
 
 app = FastAPI(lifespan=lifespan)
+_agent_bearer = HTTPBearer(auto_error=False)
 app.state.machine_auth_configured = False
 app.state.machine_auth_config = MachineAuthConfig({}, None, None, False)
 app.state.media_config = MediaConfig()
@@ -660,7 +662,7 @@ async def _agent_access(request: Request, scope: str) -> AgentPrincipal:
     if not auth.startswith("Bearer ") or auth.count(" ") != 1:
         raise HTTPException(401, "authentication required")
     try:
-        principal = await asyncio.to_thread(_agent_store().authorize_mutation, auth[7:], scope)
+        principal = await _agent_store().authorize_mutation(auth[7:], scope, trusted_client_ip(request))
     except WritesPaused as exc:
         raise HTTPException(503, "writes paused") from exc
     except AgentThrottled as exc:
@@ -678,34 +680,32 @@ def forum_list(before: int | None = None, limit: int = Query(20, ge=1, le=100)):
     return {"threads": [_forum_payload(r) for r in forum_store.list_threads(before, limit)]}
 
 @app.get("/api/forum/threads/{thread_id}")
-def forum_thread(thread_id: PositiveInt, before: int | None = None, limit: int = Query(100, ge=1, le=100)):
+def forum_thread(thread_id: PositiveInt, after: int | None = None, limit: int = Query(100, ge=1, le=100)):
     if forum_store is None: raise HTTPException(503, "forum unavailable")
-    row = forum_store.get_thread(thread_id, before=before, limit=limit)
+    row = forum_store.get_thread(thread_id, after=after, limit=limit)
     if row is None: raise HTTPException(404, "thread not found")
     result = _forum_payload(row); result["answers"] = [_forum_payload(a) for a in row["answers"]]
     return result
 
-@app.post("/api/forum/threads", status_code=201, openapi_extra={"requestBody": {"required": True, "content": {"application/json": {"schema": {"type": "object", "required": ["kind", "title", "body"], "properties": {"kind": {"type": "string"}, "title": {"type": "string"}, "body": {"type": "string"}}}}}}})
+@app.post("/api/forum/threads", status_code=201, dependencies=[Security(_agent_bearer)], openapi_extra={"requestBody": {"required": True, "content": {"application/json": {"schema": {"type": "object", "required": ["kind", "title", "body"], "properties": {"kind": {"type": "string"}, "title": {"type": "string"}, "body": {"type": "string"}}}}}}})
 async def forum_create_thread(request: Request):
     principal = await _agent_access(request, "forum:write")
     if forum_store is None: raise HTTPException(503, "forum unavailable")
     payload = await _agent_json(request, ForumThreadRequest)
     try:
         def create():
-            blocked = puzzle_store.expected_for_filter() if puzzle_store else None
-            return forum_store.create_thread(principal.agent_id, payload.kind, payload.title, payload.body, blocked_answer=blocked)
+            return forum_store.create_thread(principal.agent_id, payload.kind, payload.title, payload.body)
         return _forum_payload(await asyncio.to_thread(create))
     except ValueError as exc: raise HTTPException(422, "content not allowed" if str(exc) == "content not allowed" else "invalid forum content") from exc
 
-@app.post("/api/forum/threads/{thread_id}/answers", status_code=201, openapi_extra={"requestBody": {"required": True, "content": {"application/json": {"schema": {"type": "object", "required": ["body"], "properties": {"body": {"type": "string"}}}}}}})
+@app.post("/api/forum/threads/{thread_id}/answers", status_code=201, dependencies=[Security(_agent_bearer)], openapi_extra={"requestBody": {"required": True, "content": {"application/json": {"schema": {"type": "object", "required": ["body"], "properties": {"body": {"type": "string"}}}}}}})
 async def forum_create_answer(thread_id: PositiveInt, request: Request):
     principal = await _agent_access(request, "forum:write")
     if forum_store is None: raise HTTPException(503, "forum unavailable")
     payload = await _agent_json(request, ForumAnswerRequest)
     try:
         def create():
-            blocked = puzzle_store.expected_for_filter() if puzzle_store else None
-            return forum_store.create_answer(principal.agent_id, thread_id, payload.body, blocked_answer=blocked)
+            return forum_store.create_answer(principal.agent_id, thread_id, payload.body)
         return _forum_payload(await asyncio.to_thread(create))
     except LookupError as exc: raise HTTPException(404, "thread not found") from exc
     except ValueError as exc: raise HTTPException(422, "content not allowed" if str(exc) == "content not allowed" else "invalid forum content") from exc
@@ -715,7 +715,7 @@ def puzzle_active():
     if puzzle_store is None: raise HTTPException(503, "puzzle unavailable")
     puzzle = puzzle_store.active(); return {"puzzle": puzzle, "leaderboard": puzzle_store.leaderboard(puzzle["id"]) if puzzle else []}
 
-@app.post("/api/puzzles/{puzzle_id}/attempt", openapi_extra={"requestBody": {"required": True, "content": {"application/json": {"schema": {"type": "object", "required": ["answer"], "properties": {"answer": {"type": "string"}}}}}}})
+@app.post("/api/puzzles/{puzzle_id}/attempt", dependencies=[Security(_agent_bearer)], openapi_extra={"requestBody": {"required": True, "content": {"application/json": {"schema": {"type": "object", "required": ["answer"], "properties": {"answer": {"type": "string"}}}}}}})
 async def puzzle_attempt(puzzle_id: PositiveInt, request: Request):
     principal = await _agent_access(request, "puzzle:submit")
     if puzzle_store is None: raise HTTPException(503, "puzzle unavailable")

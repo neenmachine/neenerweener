@@ -43,16 +43,19 @@ class PuzzleStore:
         publish_at, close_at = publish_at.astimezone(timezone.utc), close_at.astimezone(timezone.utc)
         if not title.strip() or len(title) > 120 or publish_at >= close_at: raise ValueError("invalid puzzle")
         html = validate_untrusted_markdown(body, maximum=5000); answer = normalize_answer(answer)
-        with self.engine.begin() as c:
-            overlap = c.execute(select(puzzles.c.id).where(puzzles.c.publish_at < close_at, puzzles.c.close_at > publish_at)).first()
-            if overlap: raise ValueError("puzzle schedule overlaps")
-            try:
-                with c.begin_nested():
-                    row = c.execute(insert(puzzles).values(title=title, body_markdown=body, body_html=html, answer_secret=answer, verifier_kind="exact-text-v1", publish_at=publish_at, close_at=close_at, created_at=datetime.now(timezone.utc)).returning(puzzles)).mappings().one()
-            except IntegrityError as exc:
-                raise ValueError("puzzle schedule overlaps") from None
-            except SQLAlchemyError:
-                raise RuntimeError("puzzle storage unavailable") from None
+        try:
+            with self.engine.begin() as c:
+                overlap = c.execute(select(puzzles.c.id).where(puzzles.c.publish_at < close_at, puzzles.c.close_at > publish_at)).first()
+                if overlap: raise ValueError("puzzle schedule overlaps")
+                try:
+                    with c.begin_nested():
+                        row = c.execute(insert(puzzles).values(title=title, body_markdown=body, body_html=html, answer_secret=answer, verifier_kind="exact-text-v1", publish_at=publish_at, close_at=close_at, created_at=datetime.now(timezone.utc)).returning(puzzles)).mappings().one()
+                except IntegrityError:
+                    raise ValueError("puzzle schedule overlaps") from None
+        except ValueError:
+            raise
+        except SQLAlchemyError:
+            raise RuntimeError("puzzle storage unavailable") from None
         return self.public(dict(row))
     def active(self, now: datetime | None = None) -> dict | None:
         now = now or datetime.now(timezone.utc)

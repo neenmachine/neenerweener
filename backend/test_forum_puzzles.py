@@ -82,7 +82,7 @@ def test_http_puzzle_routes_secret_privacy_headers_and_attempt_limits(forum_app,
         wrong = client.post(f"/api/puzzles/{pid}/attempt", json={"answer": "no"}, headers=headers)
         assert wrong.status_code == 200 and wrong.json()["result"] == "incorrect" and wrong.headers["cache-control"] == "no-store"
         assert client.post(f"/api/puzzles/{pid}/attempt", json={"answer": "é"}, headers=headers).status_code == 429
-        with pytest.raises(PuzzleRateLimited): puzzle.submit(pid, ids[0], "é", now=now + timedelta(seconds=11))
+        assert puzzle.submit(pid, ids[0], "é", now=now + timedelta(seconds=11)) == "already solved"
         assert "é" not in caplog.text
         assert client.post(f"/api/admin/agents/puzzles/{pid}/close").json() == {"closed": True}
     finally: app.app.dependency_overrides.pop(app.require_browser_mutation, None)
@@ -93,6 +93,64 @@ def test_exact_filter_unicode_markdown_boundary_and_case(forum_app):
     for body in ("e\u0301", "**é**", "café"):
         with pytest.raises(ValueError, match="content not allowed"): forum.create_thread(ids[0], "question", "t", body, blocked_answer="é")
     assert forum.create_thread(ids[0], "question", "t", "theory", blocked_answer="he")
+
+
+def test_puzzle_db_exception_never_logs_or_returns_answer(caplog):
+    from sqlalchemy.exc import SQLAlchemyError
+    class Broken:
+        def begin(self): return self
+        def __enter__(self): return self
+        def __exit__(self, *args): return False
+        def execute(self, *args, **kwargs): raise SQLAlchemyError("database unavailable")
+    puzzle = PuzzleStore("unused", engine=Broken())
+    with pytest.raises(RuntimeError): puzzle.create("title", "body", "PRIVATE-ANSWER", datetime.now(timezone.utc), datetime.now(timezone.utc) + timedelta(hours=1))
+    assert "PRIVATE-ANSWER" not in caplog.text
+
+
+def test_duplicate_correct_concurrent_attempts_give_one_solve(forum_app):
+    _, _, puzzle, ids = forum_app
+    now = datetime.now(timezone.utc)
+    row = puzzle.create("a", "body", "x", now - timedelta(minutes=1), now + timedelta(hours=1))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _: puzzle.submit(row["id"], ids[0], "x", now=now), range(2)))
+    assert sorted(results) == ["already solved", "correct"]
+    with puzzle.engine.connect() as c:
+        assert c.execute(select(puzzle_attempts.c.correct).where(puzzle_attempts.c.puzzle_id == row["id"], puzzle_attempts.c.correct.is_(True))).fetchall() == [(True,)]
+
+
+def test_toronto_dst_boundary_activation_and_close(forum_app):
+    _, _, puzzle, _ = forum_app
+    spring = puzzle.create("spring", "body", "s", datetime(2026, 3, 8, 5, tzinfo=timezone.utc), datetime(2026, 3, 9, 4, tzinfo=timezone.utc))
+    fall = puzzle.create("fall", "body", "f", datetime(2026, 11, 1, 4, tzinfo=timezone.utc), datetime(2026, 11, 2, 5, tzinfo=timezone.utc))
+    assert puzzle.active(datetime(2026, 3, 8, 4, 59, tzinfo=timezone.utc)) is None
+    assert puzzle.active(datetime(2026, 3, 8, 5, tzinfo=timezone.utc))["id"] == spring["id"]
+    assert puzzle.active(datetime(2026, 3, 9, 4, tzinfo=timezone.utc)) is None
+    assert puzzle.active(datetime(2026, 11, 1, 4, tzinfo=timezone.utc))["id"] == fall["id"]
+    assert puzzle.active(datetime(2026, 11, 2, 5, tzinfo=timezone.utc)) is None
+
+
+def test_leaderboard_tie_order(forum_app):
+    _, _, puzzle, ids = forum_app
+    now = datetime.now(timezone.utc)
+    row = puzzle.create("a", "body", "x", now - timedelta(minutes=1), now + timedelta(hours=1))
+    puzzle.submit(row["id"], ids[1], "x", now=now)
+    puzzle.submit(row["id"], ids[0], "x", now=now)
+    result = puzzle.leaderboard(row["id"])
+    assert [r["agent_id"] for r in result] == sorted(str(i) for i in ids)
+
+
+def test_admin_create_close_http_auth_and_answer_privacy(forum_app):
+    client, _, _, _ = forum_app
+    denied = client.post("/api/admin/agents/puzzles", json={"title":"x","body":"b","expected_answer":"secret","publish_at":datetime.now(timezone.utc).isoformat(),"close_at":(datetime.now(timezone.utc)+timedelta(hours=1)).isoformat()})
+    assert denied.status_code in {401, 403}
+    app.app.dependency_overrides[app.require_browser_mutation] = lambda: object()
+    try:
+        response = client.post("/api/admin/agents/puzzles", json={"title":"x","body":"b","expected_answer":"secret","publish_at":datetime.now(timezone.utc).isoformat(),"close_at":(datetime.now(timezone.utc)+timedelta(hours=1)).isoformat()})
+        assert response.status_code == 201 and "secret" not in response.text
+        pid = response.json()["id"]
+        closed = client.post(f"/api/admin/agents/puzzles/{pid}/close")
+        assert closed.status_code == 200 and closed.json() == {"closed": True}
+    finally: app.app.dependency_overrides.pop(app.require_browser_mutation, None)
 
 
 def test_schedule_overlap_race_and_toronto_aware(forum_app):

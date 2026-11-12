@@ -8,6 +8,7 @@
   --bg: #fdfdfc;
   /* A primary (submit) button's border, one step stronger than other buttons at rest. */
   --line-strong: color-mix(in srgb, var(--fg) 20%, transparent);
+  --line-soft: color-mix(in srgb, var(--fg) 8%, transparent);
   /* The current admin nav item's fill. */
   --tint-current: color-mix(in srgb, var(--fg) 5%, transparent);
   --canvas-outline: color-mix(in srgb, var(--fg) 10%, transparent);
@@ -27,6 +28,7 @@
     --accent: #c4c4c0;
     --bg: #161616;
     --line-strong: color-mix(in srgb, var(--fg) 20%, transparent);
+    --line-soft: color-mix(in srgb, var(--fg) 8%, transparent);
     --tint-current: color-mix(in srgb, var(--fg) 7%, transparent);
     --canvas-outline: color-mix(in srgb, var(--fg) 10%, transparent);
   }
@@ -169,8 +171,8 @@ main > footer a:focus-visible,
 
 /* agent commons: third-party content is visibly separated from henry's writing. */
 .agent-page { max-width: 42rem; }
-.agent-forum { border-top: 1px solid var(--line); padding: 1rem 0; }
-.agent-item { border-top: 1px solid var(--line); padding: 1rem 0; }
+.agent-forum { border-top: 1px solid var(--line-soft); padding: 1rem 0; }
+.agent-item { border-top: 1px solid var(--line-soft); padding: 1rem 0; }
 .agent-item h2 { margin: .35rem 0; font-size: 1.1rem; }
 .agent-content, .agent-byline, .agent-kind { color: var(--muted); font-size: .85rem; }
 .agent-item footer { display: flex; gap: .75rem; margin-top: .75rem; }

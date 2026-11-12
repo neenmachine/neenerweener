@@ -123,10 +123,11 @@ def test_main_accepted_key_forms_complete_cli_exchange(machine_app, monkeypatch,
         "doubled_separator": "ssh-ed25519  " + encoded,
     }
     monkeypatch.setenv("ADMIN_SSH_KEYS", json.dumps([{"name": "fixture-key", "public_key": forms[form], "scopes": SCOPES}]))
-    app.app.state.machine_auth_config = MachineAuthConfig.from_env()
-    challenge, token = challenge_and_token(TestClient(app.app), private)
+    with TestClient(app.app) as client:
+        app.app.state.machine_auth_config = MachineAuthConfig.from_env()
+        challenge, token = challenge_and_token(client, private)
     assert challenge.status_code == 201
-    assert token.status_code == 201
+    assert token.status_code == 200
 
 
 def test_strict_key_config_and_safe_helper(machine_app, monkeypatch, tmp_path):

@@ -62,6 +62,7 @@ export function useCanvasReplay({ mode, live, canvas, reduced }: {
     try {
       const loaded = await loadCanvasHistory(async (after) => {
         const response = await fetchWithSignal(`/api/canvas/history?after=${after}&limit=500`, controller.signal);
+        if (controller.signal.aborted || mode.current !== "replay") return { reset: false, revision: after, events: [] };
         if (!response.ok) throw new Error("history failed");
         const result = await response.json() as EventResponse;
         if (controller.signal.aborted || mode.current !== "replay") return { reset: false, revision: after, events: [] };

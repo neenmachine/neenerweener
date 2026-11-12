@@ -91,6 +91,7 @@ export function useCanvasLive(initial: CanvasSnapshot, initialEvents: CanvasEven
         let catchUp = false;
         if (needsSnapshot.current) {
           const response = await fetchWithSignal("/api/canvas", controller.signal, { headers: etag.current ? { "If-None-Match": etag.current } : undefined });
+          if (stopped || controller.signal.aborted || mode.current !== "live") return;
           if (response.status === 304) { needsSnapshot.current = false; schedule(3000); return; }
           if (!response.ok) throw new Error("snapshot failed");
           const next = await response.json() as CanvasSnapshot;
@@ -100,6 +101,7 @@ export function useCanvasLive(initial: CanvasSnapshot, initialEvents: CanvasEven
         } else {
           const currentRevision = eventRevision.current;
           const response = await fetchWithSignal(`/api/canvas/events?after=${currentRevision}`, controller.signal);
+          if (stopped || controller.signal.aborted || mode.current !== "live") return;
           if (!response.ok) throw new Error("poll failed");
           const result = await response.json() as EventResponse;
           if (stopped || controller.signal.aborted || mode.current !== "live") return;
@@ -149,6 +151,7 @@ export function useCanvasLive(initial: CanvasSnapshot, initialEvents: CanvasEven
     for (let attempt = 0; attempt < 3 && !controller.signal.aborted; attempt += 1) {
       try {
         const response = await fetchWithSignal("/api/canvas", controller.signal);
+        if (!mounted.current || controller.signal.aborted || mode.current !== "live") return false;
         if (!response.ok) throw new Error("restore failed");
         const live = await response.json() as CanvasSnapshot;
         if (!mounted.current || controller.signal.aborted || mode.current !== "live") return false;

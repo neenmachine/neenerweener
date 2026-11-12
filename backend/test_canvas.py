@@ -2,7 +2,7 @@ import concurrent.futures
 import os
 import threading
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -12,7 +12,7 @@ from sqlalchemy import delete, event, insert
 import app
 from agent_commons import AgentPrincipal, agent_keys, agents
 from auth import AuthStore, admin_login_failures, admin_sessions, hash_password
-from canvas import CanvasCooldown, CanvasStore, EMPTY, HEIGHT, WIDTH, canvas_cells, canvas_cooldowns, canvas_events, png_bytes, snapshot_payload
+from canvas import CanvasStore, EMPTY, HEIGHT, WIDTH, canvas_cells, canvas_events, png_bytes, snapshot_payload
 from machine_auth import Throttled
 
 
@@ -64,7 +64,6 @@ def canvas_db():
     ids = [uuid.uuid4(), uuid.uuid4()]
     with store.engine.begin() as c:
         c.execute(delete(canvas_cells))
-        c.execute(delete(canvas_cooldowns))
         c.execute(delete(canvas_events))
         c.execute(delete(agent_keys).where(agent_keys.c.agent_id.in_(ids)))
         c.execute(delete(agents).where(agents.c.id.in_(ids)))
@@ -73,25 +72,10 @@ def canvas_db():
     yield store, [AgentPrincipal(ids[0], "canvas_test_a", "fp-a", frozenset({"canvas:write"})), AgentPrincipal(ids[1], "canvas_test_b", "fp-b", frozenset({"canvas:write"}))]
     with store.engine.begin() as c:
         c.execute(delete(canvas_cells))
-        c.execute(delete(canvas_cooldowns))
         c.execute(delete(canvas_events))
         c.execute(delete(agent_keys).where(agent_keys.c.agent_id.in_(ids)))
         c.execute(delete(agents).where(agents.c.id.in_(ids)))
     store.close()
-
-
-def test_concurrent_same_agent_placement_cannot_bypass_cooldown(canvas_db):
-    store, principals = canvas_db
-    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
-        results = list(pool.map(lambda point: _place(store, principals[0], point), ((1, 1), (2, 2))))
-    assert sorted(type(result).__name__ for result in results) == ["CanvasCooldown", "dict"]
-
-
-def _place(store, principal, point):
-    try:
-        return store.place(principal, *point, 1)
-    except Exception as exc:
-        return exc
 
 
 def test_concurrent_different_agents_have_monotonic_revisions_and_matching_events(canvas_db):
@@ -211,7 +195,8 @@ class _CanvasAgentStore:
         self.principal = principal
         self.error = error
 
-    async def authorize_mutation(self, token, scope, client_ip):
+    async def authorize_mutation(self, token, action, client_ip):
+        assert action == "canvas:pixel"
         if self.error:
             raise self.error
         return self.principal
@@ -254,7 +239,7 @@ def test_canvas_http_rejects_bad_body_content_and_coordinates(canvas_db, monkeyp
         assert client.post("/api/canvas/pixels", headers=headers, json={"x": 0, "y": 0, "color": 16}).status_code == 422
 
 
-def test_canvas_http_cooldown_and_shared_denials_are_retryable_or_forbidden(canvas_db, monkeypatch):
+def test_canvas_http_shared_denials_are_retryable_or_forbidden(canvas_db, monkeypatch):
     store, principals = canvas_db
     monkeypatch.setattr(app, "canvas_store", store)
     with TestClient(app.app) as client:
@@ -266,28 +251,6 @@ def test_canvas_http_cooldown_and_shared_denials_are_retryable_or_forbidden(canv
                 assert response.headers["retry-after"] == "9"
         monkeypatch.setattr(app, "agent_commons_store", _CanvasAgentStore(principals[0]))
         assert client.post("/api/canvas/pixels", headers={"Authorization": "Bearer token"}, json={"x": 1, "y": 1, "color": 1}).status_code == 201
-        cooldown = client.post("/api/canvas/pixels", headers={"Authorization": "Bearer token"}, json={"x": 2, "y": 2, "color": 1})
-        assert cooldown.status_code == 429
-        assert int(cooldown.headers["retry-after"]) > 0
-
-
-def test_canvas_cooldown_retry_after_rounds_up(monkeypatch, canvas_db):
-    store, principals = canvas_db
-    import canvas
-
-    class ControlledDateTime(datetime):
-        current = datetime(2026, 1, 1, tzinfo=timezone.utc)
-
-        @classmethod
-        def now(cls, tz=None):
-            return cls.current
-
-    monkeypatch.setattr(canvas, "datetime", ControlledDateTime)
-    store.place(principals[0], 1, 1, 1)
-    ControlledDateTime.current += timedelta(milliseconds=1)
-    with pytest.raises(CanvasCooldown) as error:
-        store.place(principals[0], 2, 2, 1)
-    assert error.value.retry_after == 30
 
 
 def test_canvas_history_exposes_public_identity_not_internal_agent_id(canvas_db):

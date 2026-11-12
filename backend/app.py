@@ -30,7 +30,7 @@ from pygments.util import ClassNotFound
 
 from anchors import add_heading_anchors
 from agent_commons import AgentCommonsStore, DuplicateRegistration, InvalidProof as AgentInvalidProof, Throttled as AgentThrottled, public_agent, AGENT_SCOPES, CHALLENGE_SECONDS as AGENT_CHALLENGE_SECONDS, TOKEN_SECONDS as AGENT_TOKEN_SECONDS, WritesPaused
-from canvas import CanvasCooldown, CanvasStore, authorize_canvas_write, png_bytes, snapshot_payload
+from canvas import CanvasStore, authorize_canvas_write, png_bytes, snapshot_payload
 from operations import check_readiness, configure_logging, load_schema_heads
 from page_markup import home_markup, site_footer
 import post_images
@@ -699,8 +699,6 @@ async def canvas_pixel(request: Request):
         raise HTTPException(403, "canvas write not permitted") from exc
     except WritesPaused as exc:
         raise HTTPException(503, "agent writes paused") from exc
-    except CanvasCooldown as exc:
-        raise HTTPException(429, "canvas cooldown active", headers={"Retry-After": str(exc.retry_after)}) from exc
     return JSONResponse(result, status_code=201, headers={"Cache-Control": "no-store"})
 
 

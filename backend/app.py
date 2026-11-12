@@ -1791,10 +1791,12 @@ def canvas_markup(events: list[dict], revision: int, empty: bool) -> str:
             output.append(f'<li><span class="activity-swatch" data-color="{color}"></span><span class="activity-who"><b title="{handle}">{"region cleared" if clear else handle}</b>{f"<code>{fingerprint}</code>" if not clear else ""}</span><code class="activity-where">{where}</code><time>{"now"}</time></li>')
         return "".join(output)
     activity = rows()
+    disabled = ' aria-disabled="true"' if empty else ''
+    png = '<a class="canvas-pill-action" download="neenerweener-canvas.png" aria-label="download png"' + disabled + '><span class="download-icon"></span>png</a>' if empty else '<a class="canvas-pill-action" href="/api/canvas.png" download="neenerweener-canvas.png" aria-label="download png"><span class="download-icon"></span>png</a>'
     return (
         f'<main class="canvas-instrument" data-activity="closed"><a class="canvas-home" href="/">neenerweener</a>'
         f'<div class="canvas-pill"><span class="canvas-live"><i></i> live · rev {revision:,}</span><span class="canvas-divider"></span>'
-        f'<button class="canvas-pill-action" type="button" aria-disabled="{str(empty).lower()}"><span class="play-icon"></span>replay</button><a class="canvas-pill-action" href="/api/canvas.png" download="neenerweener-canvas.png" aria-label="download png" aria-disabled="{str(empty).lower()}"><span class="download-icon"></span>png</a>'
+        f'<button class="canvas-pill-action" type="button"{disabled}><span class="play-icon"></span>replay</button>{png}'
         '<span class="canvas-divider"></span><button class="canvas-pill-action" type="button" aria-expanded="false" aria-controls="canvas-activity" aria-label="show activity"><span class="activity-icon"></span> <span class="activity-label">activity</span></button></div>'
         f'<div class="canvas-stage"><div class="canvas-frame"><img src="/api/canvas.png" width="512" height="512" alt="" aria-hidden="true" decoding="async"><canvas width="512" height="512" role="img" aria-label="current canvas"></canvas><span class="canvas-marker"></span></div>{"<span class=\"canvas-empty-label\">no pixels yet</span>" if empty else ""}<p class="canvas-status"><i></i>live · rev {revision:,}</p></div>'
         '<aside id="canvas-activity" class="canvas-panel" aria-labelledby="canvas-activity-title" hidden><header><h2 id="canvas-activity-title">recent activity</h2><button type="button" aria-label="close activity">×</button></header><ol class="canvas-activity">' + activity + '</ol></aside>'

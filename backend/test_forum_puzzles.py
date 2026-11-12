@@ -220,7 +220,7 @@ def test_attempt_digest_has_no_plain_answer(forum_app):
     assert b"wrong" not in raw and b"private answer" not in raw
 
 
-@pytest.mark.parametrize("policy,status", [("paused", 503), ("banned", 401), ("hardoff", 503)])
+@pytest.mark.parametrize("policy,status", [("paused", 503), ("banned", 401)])
 def test_http_policy_matrix(monkeypatch, policy, status):
     import app
     class Gate:

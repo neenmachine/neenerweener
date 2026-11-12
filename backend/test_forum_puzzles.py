@@ -1,14 +1,14 @@
 import logging
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import delete
 
 import app
-from agent_commons import AgentPrincipal, agent_settings, agents
+from agent_commons import AGENT_SCOPES, agent_keys, agent_settings, agent_tokens, agents, auth_digest
 from forum import forum_answers, forum_threads, validate_answer, validate_thread
 from machine_auth import machine_auth_events
 
@@ -23,18 +23,19 @@ def forum_app(monkeypatch):
         pytest.skip("agent store unavailable")
     ids = [uuid.uuid4(), uuid.uuid4()]
     with store.engine.begin() as c:
-        c.execute(delete(forum_answers)); c.execute(delete(forum_threads)); c.execute(delete(agents).where(agents.c.id.in_(ids)))
+        c.execute(delete(forum_answers)); c.execute(delete(forum_threads)); c.execute(delete(machine_auth_events)); c.execute(delete(agent_tokens)); c.execute(delete(agent_keys))
+        c.execute(delete(agents).where(agents.c.id.in_(ids)))
         c.execute(agents.insert(), [{"id": i, "handle": f"fixture-{n}-{str(i)[:8]}", "created_at": datetime.now(timezone.utc)} for n, i in enumerate(ids)])
         c.execute(delete(agent_settings)); c.execute(agent_settings.insert().values(id="global", writes_enabled=True))
+        c.execute(agent_keys.insert().values(fingerprint="SHA256:fixture", agent_id=ids[0], public_key="ssh-ed25519 AAAAfixture", created_at=datetime.now(timezone.utc)))
+        c.execute(agent_tokens.insert().values(token_digest=auth_digest("fixture"), agent_id=ids[0], fingerprint="SHA256:fixture", scopes=sorted(AGENT_SCOPES), issued_at=datetime.now(timezone.utc), expires_at=datetime.now(timezone.utc) + timedelta(hours=1)))
     monkeypatch.setattr(app, "forum_store", __import__("forum").ForumStore(url))
-    principal = AgentPrincipal(ids[0], "fixture-a", "SHA256:fixture", frozenset({"forum:write"}))
-    class Gate:
-        async def authorize_mutation(self, token, scope, client_ip):
-            return principal
-    monkeypatch.setattr(app, "agent_commons_store", Gate())
+    monkeypatch.setattr(app, "agent_commons_store", store)
     client = TestClient(app.app)
     yield client, app.forum_store, ids
     app.forum_store.close()
+    with store.engine.begin() as c:
+        c.execute(delete(forum_answers)); c.execute(delete(forum_threads)); c.execute(delete(agent_tokens)); c.execute(delete(agent_keys)); c.execute(delete(agents).where(agents.c.id.in_(ids)))
 
 def test_agent_write_operations_document_bearer_security():
     schema = TestClient(app.app).get("/openapi.json").json()
@@ -62,14 +63,28 @@ def test_http_forum_routes_and_pagination_and_hidden(forum_app):
     next_page = client.get(f"/api/forum/threads/{thread_id}?after={page['answers'][0]['id']}&limit=1")
     assert next_page.status_code == 200 and next_page.json()["answers"] == []
     assert client.get(f"/api/forum/threads/{thread_id}?limit=101").status_code == 422
-    with app.forum_store.engine.begin() as c: c.execute(agents.update().where(agents.c.id == ids[0]).values(banned_at=datetime.now(timezone.utc)))
-    assert client.get("/api/forum").json()["threads"] == []
-    assert client.get(f"/api/forum/threads/{thread_id}").status_code == 404
     assert client.post("/api/forum/threads", json={"kind": "question", "title": "bad\x00title", "body": "body"}, headers=h).status_code == 422
     import json
     invalid_title = json.dumps({"kind": "question", "title": "bad\ud800title", "body": "body"}).encode()
     assert client.post("/api/forum/threads", content=invalid_title, headers={**h, "Content-Type": "application/json"}).status_code == 422
+    with app.forum_store.engine.begin() as c: c.execute(agents.update().where(agents.c.id == ids[0]).values(banned_at=datetime.now(timezone.utc)))
+    assert client.get("/api/forum").json()["threads"] == []
+    assert client.get(f"/api/forum/threads/{thread_id}").status_code == 404
     with pytest.raises(LookupError): app.forum_store.create_answer(ids[1], thread_id, "orphan")
+
+def test_http_mutation_buckets_are_action_specific(forum_app):
+    client, _, _ids = forum_app
+    headers = {"Authorization": "Bearer fixture"}
+    for n in range(3):
+        response = client.post("/api/forum/threads", json={"kind": "question", "title": f"title {n}", "body": "body"}, headers=headers)
+        assert response.status_code == 201
+        thread_id = response.json()["id"]
+    limited = client.post("/api/forum/threads", json={"kind": "question", "title": "title 4", "body": "body"}, headers=headers)
+    assert limited.status_code == 429
+    assert int(limited.headers["Retry-After"]) > 0
+    answer = client.post(f"/api/forum/threads/{thread_id}/answers", json={"body": "answer"}, headers=headers)
+    assert answer.status_code == 201
+
 
 def test_answer_pagination_after_covers_all_rows(forum_app):
     _, forum, ids = forum_app

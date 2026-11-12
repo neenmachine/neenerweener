@@ -17,15 +17,18 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.engine import Engine
 
 from client_identity import rate_limit_key
-from machine_auth import AuthorizedKey, InvalidProof, Throttled, auth_digest, auth_message, machine_auth_events, parse_agent_ed25519_public_key, verify_auth_signature
+from machine_auth import AGENT_EVENT_PREFIX, AuthorizedKey, InvalidProof, Throttled, auth_digest, auth_message, machine_auth_events, parse_agent_ed25519_public_key, retry_after_seconds, verify_auth_signature
 from timeline import database_engine, metadata
 
 AGENT_NAMESPACE = "neenerweener-agent-v1"
 AGENT_SCOPES = frozenset({"canvas:write", "forum:write"})
+ACTION_LIMITS = {
+    "canvas:pixel": {"scope": "canvas:write", "windows": ((30, 1, None, None), (3600, None, 120, 1200))},
+    "forum:thread": {"scope": "forum:write", "windows": ((3600, 3, None, None), (86400, 10, 20, 200))},
+    "forum:answer": {"scope": "forum:write", "windows": ((3600, 20, None, None), (86400, 100, 200, 2000))},
+}
 HANDLE_PATTERN = re.compile(r"[a-z0-9][a-z0-9_-]{2,31}\Z", re.ASCII)
 RESERVED_HANDLES = frozenset({"henry", "admin", "root", "neen", "neenerweener", "system", "moderator"})
-# scope -> persistent event, per-agent, per-IP, global limits, and window. canvas cooldown is feature data.
-SCOPE_LIMITS = {"canvas:write": ("agent_canvas_write", None, 120, 1200, 3600), "forum:write": ("agent_forum_write", 200, 20, 200, 86400)}
 CHALLENGE_SECONDS = 300
 TOKEN_SECONDS = 600
 
@@ -60,9 +63,9 @@ def public_agent(handle: str, fingerprint: str) -> dict[str, str]:
 class AgentCommonsStore:
     """One policy operation for pr 2 canvas and pr 3 forum callers.
 
-    ``authorize_mutation(token, scope, client_ip)`` checks token expiry, scope, key revocation,
+    ``authorize_mutation(token, action, client_ip)`` checks token expiry, scope, key revocation,
     bans, the database pause switch, and the environment hard-off in one call.
-    Feature-specific limits are applied by the caller after this shared gate.
+    The action table owns every agent write limit and records the attempt atomically.
     """
     def __init__(self, database_url: str, engine: Engine | None = None):
         self.engine = engine or database_engine(database_url, pool_pre_ping=True, pool_timeout=1, connect_args={"connect_timeout": 2, "options": "-c statement_timeout=2000"})
@@ -94,13 +97,15 @@ class AgentCommonsStore:
         if secret is None: return 1
         values = [("ip_key", rate_limit_key(secret, "ip", ip) if ip else None, limits[0]), ("fingerprint_key", rate_limit_key(secret, "fingerprint", fingerprint) if fingerprint else None, limits[1]), (None, None, limits[2])]
         cutoff = now - timedelta(seconds=window)
+        retry_after = 0
         for column, value, limit in values:
             if limit is None or (column and value is None): continue
             q = select(text("occurred_at")).select_from(text("machine_auth_events")).where(text("event = :event AND occurred_at > :cutoff")).params(event=event, cutoff=cutoff)
             if column: q = q.where(text(f"{column} = :value")).params(value=value)
             rows = c.execute(q.order_by(text("occurred_at DESC")).limit(limit)).scalars().all()
-            if len(rows) >= limit: return max(1, int((rows[-1] + timedelta(seconds=window) - now).total_seconds()))
-        return None
+            if len(rows) >= limit:
+                retry_after = max(retry_after, retry_after_seconds(rows[-1] + timedelta(seconds=window) - now))
+        return retry_after or None
 
     def _event(self, c, event, ip, fingerprint):
         secret = self._secret()
@@ -115,9 +120,9 @@ class AgentCommonsStore:
         now = datetime.now(timezone.utc); cid = uuid.uuid4(); nonce = secrets.token_bytes(32); expires = now + timedelta(seconds=CHALLENGE_SECONDS)
         with self.engine.begin() as c:
             c.execute(text("SELECT pg_advisory_xact_lock(843921772)"))
-            retry = self._retry(c, "registration", client_ip, None, (3, None, 100), now, 86400)
+            retry = self._retry(c, f"{AGENT_EVENT_PREFIX}registration", client_ip, None, (3, None, 100), now, 86400)
             if retry: raise Throttled(retry)
-            self._event(c, "registration", client_ip, None)
+            self._event(c, f"{AGENT_EVENT_PREFIX}registration", client_ip, None)
             duplicate = c.execute(select(agents.c.id).where(agents.c.handle == handle)).first() or c.execute(select(agent_keys.c.fingerprint).where(agent_keys.c.fingerprint == fingerprint)).first()
         if duplicate: raise DuplicateRegistration("handle or key already registered")
         with self.engine.begin() as c:
@@ -133,9 +138,9 @@ class AgentCommonsStore:
             c.execute(text("SELECT pg_advisory_xact_lock(843921771)"))
             row = c.execute(select(agent_registration_challenges).where(agent_registration_challenges.c.challenge_id == challenge_id)).mappings().one_or_none()
             fingerprint = row["fingerprint"] if row else None
-            retry = self._retry(c, "agent_registration_exchange", client_ip, fingerprint, (5, 5, 30), now, 900)
+            retry = self._retry(c, f"{AGENT_EVENT_PREFIX}registration_exchange", client_ip, fingerprint, (5, 5, 30), now, 900)
             if retry: raise Throttled(retry)
-            self._event(c, "agent_registration_exchange", client_ip, fingerprint)
+            self._event(c, f"{AGENT_EVENT_PREFIX}registration_exchange", client_ip, fingerprint)
         self._assert_writes_enabled()
         with self.engine.begin() as c:
             row = c.execute(select(agent_registration_challenges).where(agent_registration_challenges.c.challenge_id == challenge_id).with_for_update()).mappings().one_or_none()
@@ -156,9 +161,9 @@ class AgentCommonsStore:
         with self.engine.begin() as c:
             c.execute(text("SELECT pg_advisory_xact_lock(843921771)"))
             keyrow = c.execute(select(agent_keys).where(agent_keys.c.fingerprint == fingerprint, agent_keys.c.revoked_at.is_(None))).mappings().one_or_none()
-            retry = self._retry(c, "agent_challenge", client_ip, fingerprint, (30, 30, 300), now, 900)
+            retry = self._retry(c, f"{AGENT_EVENT_PREFIX}challenge", client_ip, fingerprint, (30, 30, 300), now, 900)
             if retry: raise Throttled(retry)
-            self._event(c, "agent_challenge", client_ip, fingerprint)
+            self._event(c, f"{AGENT_EVENT_PREFIX}challenge", client_ip, fingerprint)
         if not keyrow: raise InvalidProof
         self._assert_writes_enabled()
         with self.engine.begin() as c:
@@ -172,9 +177,9 @@ class AgentCommonsStore:
         with self.engine.connect() as c: row = c.execute(select(agent_challenges).where(agent_challenges.c.challenge_id == challenge_id)).mappings().one_or_none()
         fingerprint = row["fingerprint"] if row else None
         with self.engine.begin() as c:
-            c.execute(text("SELECT pg_advisory_xact_lock(843921771)")); retry = self._retry(c, "agent_exchange", client_ip, fingerprint, (5, 5, 30), now, 900)
+            c.execute(text("SELECT pg_advisory_xact_lock(843921771)")); retry = self._retry(c, f"{AGENT_EVENT_PREFIX}exchange", client_ip, fingerprint, (5, 5, 30), now, 900)
             if retry: raise Throttled(retry)
-            self._event(c, "agent_exchange", client_ip, fingerprint)
+            self._event(c, f"{AGENT_EVENT_PREFIX}exchange", client_ip, fingerprint)
         with self.engine.begin() as c:
             row = c.execute(select(agent_challenges).where(agent_challenges.c.challenge_id == challenge_id).with_for_update()).mappings().one_or_none()
             keyrow = c.execute(select(agent_keys).where(agent_keys.c.fingerprint == (row["fingerprint"] if row else ""), agent_keys.c.revoked_at.is_(None))).mappings().one_or_none() if row else None
@@ -194,35 +199,49 @@ class AgentCommonsStore:
             row = c.execute(select(agent_tokens, agents.c.handle, agents.c.banned_at, agent_keys.c.revoked_at.label("key_revoked_at")).join(agents, agents.c.id == agent_tokens.c.agent_id).join(agent_keys, agent_keys.c.agent_id == agents.c.id).where(agent_tokens.c.token_digest == auth_digest(token))).mappings().one_or_none()
         if not row or row["expires_at"] <= now or row["revoked_at"] is not None or row["banned_at"] is not None or row["key_revoked_at"] is not None: return None
         scopes = frozenset(row["scopes"])
+        if scopes != AGENT_SCOPES: return None
         if required and required not in scopes: return None
         return AgentPrincipal(row["agent_id"], row["handle"], row["fingerprint"], scopes)
 
-    def _permit_scope(self, principal: AgentPrincipal, scope: str, client_ip: str | None, now: datetime) -> None:
-        limit_spec = SCOPE_LIMITS.get(scope)
-        if limit_spec is None: return
-        event, agent_limit, ip_limit, global_limit, window = limit_spec
+    def _permit_action(self, principal: AgentPrincipal, action: str, client_ip: str | None, now: datetime) -> None:
+        spec = ACTION_LIMITS.get(action)
+        if spec is None:
+            raise ValueError("unknown mutation action")
         secret = self._secret()
-        if secret is None: raise Throttled(1)
-        dimensions = [("fingerprint_key", rate_limit_key(secret, "fingerprint", principal.fingerprint), agent_limit), ("ip_key", rate_limit_key(secret, "ip", client_ip) if client_ip else None, ip_limit), (None, None, global_limit)]
+        if secret is None:
+            raise Throttled(1)
         with self.engine.begin() as c:
             c.execute(text("SELECT pg_advisory_xact_lock(843921771)"))
-            cutoff = now - timedelta(seconds=window)
-            for column, key, limit in dimensions:
-                if limit is None: continue
-                query = select(text("occurred_at")).select_from(text("machine_auth_events")).where(text("event = :event AND occurred_at > :cutoff")).params(event=event, cutoff=cutoff)
-                if column: query = query.where(text(f"{column} = :key")).params(key=key)
-                rows = c.execute(query.order_by(text("occurred_at DESC")).limit(limit)).scalars().all()
-                if len(rows) >= limit: raise Throttled(max(1, int((rows[-1] + timedelta(seconds=window) - now).total_seconds())))
+            retry_after = 0
+            for window, agent_limit, ip_limit, global_limit in spec["windows"]:
+                event = f"{AGENT_EVENT_PREFIX}{action}"
+                cutoff = now - timedelta(seconds=window)
+                dimensions = (("fingerprint_key", rate_limit_key(secret, "fingerprint", principal.fingerprint), agent_limit), ("ip_key", rate_limit_key(secret, "ip", client_ip) if client_ip else None, ip_limit), (None, None, global_limit))
+                for column, key, limit in dimensions:
+                    if limit is None or key is None and column is not None:
+                        continue
+                    query = select(text("occurred_at")).select_from(text("machine_auth_events")).where(text("event = :event AND occurred_at > :cutoff")).params(event=event, cutoff=cutoff)
+                    if column:
+                        query = query.where(text(f"{column} = :key")).params(key=key)
+                    rows = c.execute(query.order_by(text("occurred_at DESC")).limit(limit)).scalars().all()
+                    if len(rows) >= limit:
+                        retry_after = max(retry_after, retry_after_seconds(rows[-1] + timedelta(seconds=window) - now))
+            if retry_after:
+                raise Throttled(retry_after)
             self._event(c, event, client_ip, principal.fingerprint)
 
-    async def authorize_mutation(self, token: str, scope: str, client_ip: str | None) -> AgentPrincipal | None:
-        return await asyncio.to_thread(self._authorize_mutation, token, scope, client_ip)
+    async def authorize_mutation(self, token: str, action: str, client_ip: str | None) -> AgentPrincipal | None:
+        return await asyncio.to_thread(self._authorize_mutation, token, action, client_ip)
 
-    def _authorize_mutation(self, token: str, scope: str, client_ip: str | None) -> AgentPrincipal | None:
-        principal = self._token_principal(token, scope)
-        if principal is None: return None
+    def _authorize_mutation(self, token: str, action: str, client_ip: str | None) -> AgentPrincipal | None:
+        spec = ACTION_LIMITS.get(action)
+        if spec is None:
+            raise ValueError("unknown mutation action")
+        principal = self._token_principal(token, spec["scope"])
+        if principal is None:
+            return None
         self._assert_writes_enabled()
-        self._permit_scope(principal, scope, client_ip, datetime.now(timezone.utc))
+        self._permit_action(principal, action, client_ip, datetime.now(timezone.utc))
         return principal
 
     def _writes_enabled(self) -> bool:
@@ -238,7 +257,7 @@ class AgentCommonsStore:
             key = next(iter(table.primary_key.columns))
             expired = select(key).where(table.c.expires_at < now).limit(100)
             c.execute(delete(table).where(key.in_(expired)))
-        event_ids = select(machine_auth_events.c.id).where(machine_auth_events.c.occurred_at < now - timedelta(hours=24)).limit(100)
+        event_ids = select(machine_auth_events.c.id).where(machine_auth_events.c.event.startswith(AGENT_EVENT_PREFIX, autoescape=True), machine_auth_events.c.occurred_at < now - timedelta(hours=24)).limit(100)
         c.execute(delete(machine_auth_events).where(machine_auth_events.c.id.in_(event_ids)))
 
     def ban(self, agent_id: uuid.UUID, reason: str | None = None) -> None:

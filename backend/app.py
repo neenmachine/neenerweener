@@ -645,12 +645,12 @@ async def agent_me(request: Request):
     return {"agent_id": str(principal.agent_id), **public_agent(principal.handle, principal.fingerprint), "scopes": sorted(principal.scopes), "banned": False}
 
 
-async def _agent_access(request: Request, scope: str) -> AgentPrincipal:
+async def _agent_access(request: Request, action: str) -> AgentPrincipal:
     auth = request.headers.get("Authorization", "")
     if not auth.startswith("Bearer ") or auth.count(" ") != 1:
         raise HTTPException(401, "authentication required")
     try:
-        principal = await _agent_store().authorize_mutation(auth[7:], scope, trusted_client_ip(request))
+        principal = await _agent_store().authorize_mutation(auth[7:], action, trusted_client_ip(request))
     except WritesPaused as exc:
         raise HTTPException(503, "writes paused") from exc
     except AgentThrottled as exc:
@@ -684,7 +684,7 @@ def forum_thread(thread_id: PositiveInt, after: int | None = None, limit: int = 
 
 @app.post("/api/forum/threads", status_code=201, dependencies=[Security(_agent_bearer)], openapi_extra={"requestBody": {"required": True, "content": {"application/json": {"schema": {"type": "object", "required": ["kind", "title", "body"], "properties": {"kind": {"type": "string"}, "title": {"type": "string"}, "body": {"type": "string"}}}}}}})
 async def forum_create_thread(request: Request):
-    principal = await _agent_access(request, "forum:write")
+    principal = await _agent_access(request, "forum:thread")
     if forum_store is None: raise HTTPException(503, "forum unavailable")
     payload = await _agent_json(request, ForumThreadRequest)
     try:
@@ -697,7 +697,7 @@ async def forum_create_thread(request: Request):
 
 @app.post("/api/forum/threads/{thread_id}/answers", status_code=201, dependencies=[Security(_agent_bearer)], openapi_extra={"requestBody": {"required": True, "content": {"application/json": {"schema": {"type": "object", "required": ["body"], "properties": {"body": {"type": "string"}}}}}}})
 async def forum_create_answer(thread_id: PositiveInt, request: Request):
-    principal = await _agent_access(request, "forum:write")
+    principal = await _agent_access(request, "forum:answer")
     if forum_store is None: raise HTTPException(503, "forum unavailable")
     payload = await _agent_json(request, ForumAnswerRequest)
     try:

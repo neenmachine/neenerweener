@@ -9,18 +9,19 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import delete, select
+from sqlalchemy import delete, insert, select
 
+from client_identity import rate_limit_key
 import app
 import agent_commons
 import machine_auth
 from agent_commons import (
+    ACTION_LIMITS,
     AGENT_NAMESPACE,
     AGENT_SCOPES,
     HANDLE_PATTERN,
     RESERVED_HANDLES,
     AgentCommonsStore,
-    SCOPE_LIMITS,
     agent_challenges,
     agent_keys,
     agent_registration_challenges,
@@ -29,7 +30,7 @@ from agent_commons import (
     agents,
     public_agent,
 )
-from machine_auth import AuthorizedKey, Throttled, machine_auth_events, parse_agent_ed25519_public_key, parse_ed25519_public_key
+from machine_auth import AuthorizedKey, MachineAuthStore, Throttled, machine_auth_events, parse_agent_ed25519_public_key, parse_ed25519_public_key
 
 
 def test_public_agent_owns_fingerprint_suffix_display():
@@ -63,10 +64,8 @@ def test_strict_key_parser_rejects_comments_controls_and_wrong_algorithms():
 
 def test_allowed_signers_rejects_key_control_injection(monkeypatch, tmp_path):
     public = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-    called = []
-    monkeypatch.setattr(machine_auth.subprocess, "run", lambda *args, **kwargs: called.append(args) or None)
-    assert not machine_auth._verify_signature(b"message", "signature", AuthorizedKey("agent", public + "\\nattacker", "SHA256:x", AGENT_SCOPES), AGENT_NAMESPACE)
-    assert called == []
+    with pytest.raises(ValueError):
+        AuthorizedKey("agent", public + "\\nattacker", "SHA256:x", AGENT_SCOPES)
 
 
 def test_agent_namespace_and_fixed_scopes():
@@ -122,13 +121,55 @@ def test_http_registration_challenge_token_and_policy_end_to_end(agent_app):
     me = client.get("/api/agents/me", headers={"Authorization": f"Bearer {token}"})
     assert me.status_code == 200
     assert me.json()["fingerprint_suffix"] == identity["fingerprint"].removeprefix("SHA256:")[-8:]
-    assert asyncio.run(store.authorize_mutation(token, "canvas:write", "10.0.0.1")).handle == "agent_one"
+    assert asyncio.run(store.authorize_mutation(token, "canvas:pixel", "10.0.0.1")).handle == "agent_one"
     with store.engine.connect() as connection:
         digest = connection.execute(select(agent_tokens.c.token_digest)).scalar_one()
     assert digest == hashlib.sha256(token.encode()).digest()
     assert token not in digest.hex()
     for path in ("/api/agents/auth/register/challenge", "/api/agents/auth/challenge", "/api/agents/auth/token"):
         assert client.post(path, json={}).headers["cache-control"] == "no-store"
+
+
+def test_token_with_stale_scope_is_rejected(agent_app):
+    client, store, _private, _public = agent_app
+    identity = register(client, _private, _public, "stale_scope_agent")
+    raw = "stale-scope-token"
+    issued = datetime.now(timezone.utc)
+    with store.engine.begin() as connection:
+        connection.execute(
+            agent_tokens.insert().values(
+                token_digest=agent_commons.auth_digest(raw),
+                agent_id=uuid.UUID(identity["agent_id"]),
+                fingerprint=identity["fingerprint"],
+                scopes=sorted((*AGENT_SCOPES, "puzzle:submit")),
+                issued_at=issued,
+                expires_at=issued + timedelta(minutes=5),
+            )
+        )
+    response = client.get("/api/agents/me", headers={"Authorization": f"Bearer {raw}"})
+    assert response.status_code == 401
+    assert asyncio.run(store.authorize_mutation(raw, "canvas:pixel", "10.0.0.1")) is None
+
+
+def test_agent_auth_retry_after_uses_maximum_ceiled_wait(agent_app):
+    _client, store, _private, _public = agent_app
+    now = datetime.now(timezone.utc)
+    secret = store._secret()
+    ip = rate_limit_key(secret, "ip", "10.0.0.1")
+    fingerprint = rate_limit_key(secret, "fingerprint", "SHA256:test")
+    with store.engine.begin() as connection:
+        connection.execute(
+            machine_auth_events.insert().values(
+                event="agent_registration_exchange", ip_key=ip, occurred_at=now - timedelta(seconds=0.2)
+            )
+        )
+        connection.execute(
+            machine_auth_events.insert().values(
+                event="agent_registration_exchange", fingerprint_key=fingerprint, occurred_at=now - timedelta(seconds=1.2)
+            )
+        )
+        retry = store._retry(connection, "agent_registration_exchange", "10.0.0.1", "SHA256:test", (1, 1, None), now, 30)
+    assert retry == 30
 
 
 def test_namespace_replay_and_failed_proofs_are_counted(agent_app):
@@ -168,15 +209,63 @@ def test_scope_limit_is_enforced_by_single_mutation_gate(agent_app):
     client, store, private, public = agent_app
     identity = register(client, private, public, "scope_limit_agent")
     token = authenticate(client, store, private, identity["fingerprint"])
-    original = SCOPE_LIMITS["forum:write"]
-    SCOPE_LIMITS["forum:write"] = ("agent_forum_write_test", 1, 20, 200, 3600)
+    original = ACTION_LIMITS["forum:thread"]
+    ACTION_LIMITS["forum:thread"] = {"scope": "forum:write", "windows": ((3600, 1, 20, 200),)}
     try:
-        assert asyncio.run(store.authorize_mutation(token, "forum:write", "10.0.0.1")) is not None
+        assert asyncio.run(store.authorize_mutation(token, "forum:thread", "10.0.0.1")) is not None
         with pytest.raises(Throttled) as raised:
-            asyncio.run(store.authorize_mutation(token, "forum:write", "10.0.0.1"))
+            asyncio.run(store.authorize_mutation(token, "forum:thread", "10.0.0.1"))
         assert raised.value.args[0] > 0
     finally:
-        SCOPE_LIMITS["forum:write"] = original
+        ACTION_LIMITS["forum:thread"] = original
+
+
+def test_action_retry_after_ceil_never_understates_wait(agent_app):
+    _client, store, _private, _public = agent_app
+    now = datetime.now(timezone.utc)
+    principal = agent_commons.AgentPrincipal(uuid.uuid4(), "retry_agent", "SHA256:test", AGENT_SCOPES)
+    original = ACTION_LIMITS["forum:thread"]
+    ACTION_LIMITS["forum:thread"] = {"scope": "forum:write", "windows": ((30, None, None, 1),)}
+    try:
+        with store.engine.begin() as connection:
+            connection.execute(
+                machine_auth_events.insert().values(
+                    event="agent_forum:thread", occurred_at=now - timedelta(seconds=0.2)
+                )
+            )
+        with pytest.raises(Throttled) as raised:
+            store._permit_action(principal, "forum:thread", None, now)
+        assert raised.value.args[0] == 30
+    finally:
+        ACTION_LIMITS["forum:thread"] = original
+
+
+def test_concurrent_final_slot_claim_has_one_winner(agent_app):
+    client, store, private, public = agent_app
+    first = register(client, private, public, "race_limit_one")
+    second_private = private.with_name("race-limit-two")
+    subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(second_private)], check=True)
+    second_public = " ".join(second_private.with_suffix(".pub").read_text().split()[:2])
+    second = register(client, second_private, second_public, "race_limit_two")
+    token_one = authenticate(client, store, private, first["fingerprint"])
+    token_two = authenticate(client, store, second_private, second["fingerprint"])
+    original = ACTION_LIMITS["forum:thread"]
+    ACTION_LIMITS["forum:thread"] = {"scope": "forum:write", "windows": ((3600, None, None, 1),)}
+    try:
+        def claim(token):
+            try:
+                asyncio.run(store.authorize_mutation(token, "forum:thread", None))
+                return "won"
+            except Throttled:
+                return "lost"
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(claim, (token_one, token_two)))
+        assert sorted(results) == ["lost", "won"]
+        with store.engine.connect() as connection:
+            assert len(connection.execute(select(machine_auth_events).where(machine_auth_events.c.event == "agent_forum:thread")).fetchall()) == 1
+    finally:
+        ACTION_LIMITS["forum:thread"] = original
 
 
 def test_pause_and_hard_off_deny_mutation(agent_app, monkeypatch):
@@ -186,12 +275,12 @@ def test_pause_and_hard_off_deny_mutation(agent_app, monkeypatch):
     with store.engine.begin() as connection:
         connection.execute(agent_settings.update().where(agent_settings.c.id == "global").values(writes_enabled=False))
     with pytest.raises(Exception):
-        asyncio.run(store.authorize_mutation(token, "canvas:write", "10.0.0.1"))
+        asyncio.run(store.authorize_mutation(token, "canvas:pixel", "10.0.0.1"))
     with store.engine.begin() as connection:
         connection.execute(agent_settings.update().where(agent_settings.c.id == "global").values(writes_enabled=True))
     monkeypatch.setenv("AGENT_COMMONS_WRITES_ENABLED", "0")
     with pytest.raises(Exception):
-        asyncio.run(store.authorize_mutation(token, "canvas:write", "10.0.0.1"))
+        asyncio.run(store.authorize_mutation(token, "canvas:pixel", "10.0.0.1"))
 
 
 def test_pause_blocks_all_agent_state_routes(agent_app, monkeypatch):
@@ -256,6 +345,43 @@ def test_registration_limit_last_24_hours_only(agent_app, monkeypatch):
     assert client.post("/api/agents/auth/register/challenge", json={"handle": "window_24h", "public_key": public}, headers={"x-forwarded-for": "10.0.0.2"}).status_code == 201
 
 
+def test_cli_and_agent_cleanup_own_event_retention(agent_app):
+    _client, agent_store, _private, _public = agent_app
+    machine_store = MachineAuthStore(os.environ["DATABASE_URL"])
+    now = datetime.now(timezone.utc)
+    agent_prefix = "agent_"
+    try:
+        with agent_store.engine.begin() as connection:
+            connection.execute(
+                insert(machine_auth_events),
+                [
+                    {"event": f"{agent_prefix}test_two_hours", "occurred_at": now - timedelta(hours=2)},
+                    {"event": "test_cli_two_hours", "occurred_at": now - timedelta(hours=2)},
+                    {"event": f"{agent_prefix}test_25_hours", "occurred_at": now - timedelta(hours=25)},
+                    {"event": "test_cli_25_hours", "occurred_at": now - timedelta(hours=25)},
+                ],
+            )
+            machine_store._cleanup(connection, now)
+            events = set(connection.execute(select(machine_auth_events.c.event)).scalars())
+            assert f"{agent_prefix}test_two_hours" in events
+            assert f"{agent_prefix}test_25_hours" in events
+            assert "test_cli_two_hours" not in events
+            assert "test_cli_25_hours" not in events
+            connection.execute(
+                insert(machine_auth_events).values(
+                    event="test_cli_after_machine_cleanup",
+                    occurred_at=now - timedelta(hours=2),
+                )
+            )
+            agent_store._cleanup(connection, now)
+            events = set(connection.execute(select(machine_auth_events.c.event)).scalars())
+            assert f"{agent_prefix}test_two_hours" in events
+            assert f"{agent_prefix}test_25_hours" not in events
+            assert "test_cli_after_machine_cleanup" in events
+    finally:
+        machine_store.close()
+
+
 def test_auth_challenge_runs_bounded_expiry_cleanup(agent_app):
     client, store, _private, public = agent_app
     identity = register(client, _private, public, "cleanup_agent")
@@ -289,10 +415,10 @@ def test_expiry_revocation_and_ban_are_denials(agent_app):
     token = authenticate(client, store, private, identity["fingerprint"])
     agent_id = uuid.UUID(identity["agent_id"])
     store.revoke(agent_id)
-    assert asyncio.run(store.authorize_mutation(token, "canvas:write", "10.0.0.1")) is None
+    assert asyncio.run(store.authorize_mutation(token, "canvas:pixel", "10.0.0.1")) is None
     token = authenticate(client, store, private, identity["fingerprint"])
     store.ban(agent_id)
-    assert asyncio.run(store.authorize_mutation(token, "canvas:write", "10.0.0.1")) is None
+    assert asyncio.run(store.authorize_mutation(token, "canvas:pixel", "10.0.0.1")) is None
 
 
 def test_scope_gate_enforces_ip_and_global_dimensions(agent_app):
@@ -304,17 +430,17 @@ def test_scope_gate_enforces_ip_and_global_dimensions(agent_app):
     second = register(client, second_private, second_public, "ip_limit_two")
     token_one = authenticate(client, store, private, first["fingerprint"])
     token_two = authenticate(client, store, second_private, second["fingerprint"])
-    original = SCOPE_LIMITS["forum:write"]
-    SCOPE_LIMITS["forum:write"] = ("agent_forum_write_test", 100, 1, 2, 3600)
+    original = ACTION_LIMITS["forum:thread"]
+    ACTION_LIMITS["forum:thread"] = {"scope": "forum:write", "windows": ((3600, 100, 1, 2),)}
     try:
-        assert asyncio.run(store.authorize_mutation(token_one, "forum:write", "10.0.0.9"))
+        assert asyncio.run(store.authorize_mutation(token_one, "forum:thread", "10.0.0.9"))
         with pytest.raises(Throttled):
-            asyncio.run(store.authorize_mutation(token_two, "forum:write", "10.0.0.9"))
-        assert asyncio.run(store.authorize_mutation(token_two, "forum:write", "10.0.0.10"))
+            asyncio.run(store.authorize_mutation(token_two, "forum:thread", "10.0.0.9"))
+        assert asyncio.run(store.authorize_mutation(token_two, "forum:thread", "10.0.0.10"))
         with pytest.raises(Throttled):
-            asyncio.run(store.authorize_mutation(token_two, "forum:write", "10.0.0.11"))
+            asyncio.run(store.authorize_mutation(token_two, "forum:thread", "10.0.0.11"))
     finally:
-        SCOPE_LIMITS["forum:write"] = original
+        ACTION_LIMITS["forum:thread"] = original
 
 
 def test_async_mutation_gate_does_not_block_event_loop(monkeypatch):
@@ -322,7 +448,7 @@ def test_async_mutation_gate_does_not_block_event_loop(monkeypatch):
     started = threading.Event()
     release = threading.Event()
 
-    def blocked(token, scope, client_ip):
+    def blocked(token, action, client_ip):
         import time
         started.set()
         while not release.is_set():
@@ -332,7 +458,7 @@ def test_async_mutation_gate_does_not_block_event_loop(monkeypatch):
     monkeypatch.setattr(store, "_authorize_mutation", blocked)
 
     async def exercise():
-        task = asyncio.create_task(store.authorize_mutation("token", "canvas:write", "127.0.0.1"))
+        task = asyncio.create_task(store.authorize_mutation("token", "canvas:pixel", "127.0.0.1"))
         await asyncio.wait_for(asyncio.to_thread(started.wait, 2), 2)
         await asyncio.sleep(0)
         assert not task.done()

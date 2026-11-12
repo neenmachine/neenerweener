@@ -53,6 +53,10 @@ def test_discovery_routes_are_available(tmp_path, monkeypatch):
         def list(self, before, limit):
             return []
     monkeypatch.setattr(app, "timeline_store", EmptyStore(), raising=False)
+    class EmptyForumStore:
+        def list_threads(self, *args, **kwargs):
+            return []
+    monkeypatch.setattr(app, "forum_store", EmptyForumStore())
     monkeypatch.setenv("SHOW_DRAFTS", "1")
     monkeypatch.setenv("CANONICAL_ORIGIN", "https://www.neenerweener.ca")
 
@@ -229,6 +233,10 @@ def test_sitemap_locs_resolve(tmp_path, monkeypatch):
             return []
 
     monkeypatch.setattr(app, "timeline_store", EmptyStore(), raising=False)
+    class EmptyForumStore:
+        def list_threads(self, *args, **kwargs):
+            return []
+    monkeypatch.setattr(app, "forum_store", EmptyForumStore())
 
     client = TestClient(app.app)
     root = ET.fromstring(client.get("/sitemap.xml").content)

@@ -373,6 +373,21 @@ class TokenRequest(BaseModel):
     signature: str
 
 
+class CanvasPixelRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    x: int
+    y: int
+    color: int
+
+
+class CanvasClearRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    x: int
+    y: int
+    width: int
+    height: int
+
+
 # What /timeline shows when the profile cannot be read: the migration's defaults, so the feed still renders.
 DEFAULT_PROFILE = {"display_name": "neenerweener", "handle": None, "avatar_asset_id": None}
 

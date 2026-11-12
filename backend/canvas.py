@@ -11,6 +11,7 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID, insert
 from sqlalchemy.engine import Engine
 
 from agent_commons import AgentPrincipal, AgentCommonsStore
+from agent_commons import agents
 from timeline import database_engine, metadata
 
 WIDTH = HEIGHT = 64
@@ -39,10 +40,14 @@ class CanvasStore:
     def __init__(self, database_url: str, engine: Engine | None = None):
         self.engine = engine or database_engine(database_url, pool_pre_ping=True, pool_timeout=1, connect_args={"connect_timeout": 2, "options": "-c statement_timeout=2000"})
 
+    @staticmethod
+    def _lock(c) -> None:
+        c.execute(text("SELECT pg_advisory_xact_lock(hashtextextended('agent-canvas', 901))"))
+
     def place(self, principal: AgentPrincipal, x: int, y: int, color: int) -> dict:
         now = datetime.now(timezone.utc)
         with self.engine.begin() as c:
-            c.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 901))"), {"key": principal.fingerprint})
+            self._lock(c)
             last = c.execute(select(canvas_cooldowns.c.placed_at).where(canvas_cooldowns.c.fingerprint == principal.fingerprint)).scalar_one_or_none()
             if last is not None and last + COOLDOWN > now:
                 raise CanvasCooldown(max(1, int((last + COOLDOWN - now).total_seconds())))
@@ -52,23 +57,36 @@ class CanvasStore:
         return {"revision": revision, "x": x, "y": y, "color": color, "agent": principal.handle, "next_allowed_at": (now + COOLDOWN).isoformat().replace("+00:00", "Z")}
 
     def snapshot(self) -> tuple[int, bytes]:
-        with self.engine.connect() as c:
+        with self.engine.begin() as c:
+            self._lock(c)
             revision = c.execute(select(canvas_events.c.revision).order_by(canvas_events.c.revision.desc()).limit(1)).scalar_one_or_none() or 0
             cells = c.execute(select(canvas_cells.c.x, canvas_cells.c.y, canvas_cells.c.color)).all()
         data = bytearray([EMPTY] * (WIDTH * HEIGHT))
-        for x, y, color in cells: data[y * WIDTH + x] = color
+        for x, y, color in cells:
+            data[y * WIDTH + x] = color
         return revision, bytes(data)
 
     def events(self, after: int, limit: int = 500) -> dict:
-        with self.engine.connect() as c:
+        with self.engine.begin() as c:
+            self._lock(c)
             latest = c.execute(select(canvas_events.c.revision).order_by(canvas_events.c.revision.desc()).limit(1)).scalar_one_or_none() or 0
-            if latest - after > 10000: return {"reset": True, "revision": latest, "events": []}
-            rows = c.execute(select(canvas_events).where(canvas_events.c.revision > after).order_by(canvas_events.c.revision).limit(limit)).mappings().all()
-        return {"reset": False, "revision": latest, "events": [dict(r) for r in rows]}
+            if latest - after > 10000:
+                return {"reset": True, "revision": latest, "events": []}
+            rows = c.execute(
+                select(canvas_events.c.revision, canvas_events.c.x, canvas_events.c.y, canvas_events.c.color, canvas_events.c.event_kind, canvas_events.c.created_at, canvas_events.c.clear_bounds, agents.c.handle)
+                .select_from(canvas_events.outerjoin(agents, canvas_events.c.agent_id == agents.c.id))
+                .where(canvas_events.c.revision > after).order_by(canvas_events.c.revision).limit(limit)
+            ).mappings().all()
+        events = []
+        for row in rows:
+            event = {"revision": row["revision"], "x": row["x"], "y": row["y"], "color": row["color"], "event_kind": row["event_kind"], "created_at": row["created_at"], "clear_bounds": row["clear_bounds"], "agent": row["handle"]}
+            events.append(event)
+        return {"reset": False, "revision": latest, "events": events}
 
     def clear(self, x: int, y: int, width: int, height: int) -> int:
         now = datetime.now(timezone.utc)
         with self.engine.begin() as c:
+            self._lock(c)
             revision = c.execute(insert(canvas_events).values(event_kind="clear", clear_bounds={"x": x, "y": y, "width": width, "height": height}, created_at=now).returning(canvas_events.c.revision)).scalar_one()
             c.execute(delete(canvas_cells).where(canvas_cells.c.x.between(x, x + width - 1), canvas_cells.c.y.between(y, y + height - 1)))
         return revision
@@ -88,6 +106,7 @@ def png_bytes(pixels: bytes) -> bytes:
         value = value.lstrip("#"); palette.extend(bytes.fromhex(value))
     palette.extend([0, 0, 0] * (256 - len(PALETTE)))
     image.putpalette(palette)
+    image.info["transparency"] = EMPTY
     image = image.resize((512, 512), Image.Resampling.NEAREST)
     output = io.BytesIO(); image.save(output, format="PNG", optimize=False)
     return output.getvalue()

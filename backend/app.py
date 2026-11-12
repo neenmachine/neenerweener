@@ -16,6 +16,7 @@ from urllib.parse import quote
 import yaml
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -671,13 +672,15 @@ async def canvas_snapshot(request: Request):
 
 
 @app.get("/api/canvas/events")
-async def canvas_events(after: int = Query(0, ge=0)):
-    return await asyncio.to_thread(_canvas_store().events, after)
+async def canvas_events(request: Request, after: int = Query(0, ge=0)):
+    value = await asyncio.to_thread(_canvas_store().events, after)
+    return etag_response(request, json.dumps(jsonable_encoder(value), separators=(",", ":")).encode(), "application/json", {"Cache-Control": "public, max-age=3, must-revalidate"})
 
 
 @app.get("/api/canvas/history")
-async def canvas_history(after: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=500)):
-    return await asyncio.to_thread(_canvas_store().events, after, limit)
+async def canvas_history(request: Request, after: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=500)):
+    value = await asyncio.to_thread(_canvas_store().events, after, limit)
+    return etag_response(request, json.dumps(jsonable_encoder(value), separators=(",", ":")).encode(), "application/json", {"Cache-Control": "public, max-age=3, must-revalidate"})
 
 
 @app.post("/api/canvas/pixels", status_code=201)
@@ -688,6 +691,8 @@ async def canvas_pixel(request: Request):
     try:
         principal = await asyncio.to_thread(authorize_canvas_write, _agent_store(), _canvas_token(request))
         result = await asyncio.to_thread(_canvas_store().place, principal, payload.x, payload.y, payload.color)
+    except AgentThrottled as exc:
+        raise HTTPException(429, "too many requests", headers={"Retry-After": str(exc.retry_after)}) from exc
     except PermissionError as exc:
         raise HTTPException(403, "canvas write not permitted") from exc
     except WritesPaused as exc:
@@ -701,7 +706,7 @@ async def canvas_pixel(request: Request):
 async def canvas_png(request: Request):
     revision, pixels = await asyncio.to_thread(_canvas_store().snapshot)
     data = await asyncio.to_thread(png_bytes, pixels)
-    return etag_response(request, data, "image/png", {"Cache-Control": "public, max-age=3, must-revalidate", "X-Canvas-Revision": str(revision)})
+    return etag_response(request, data, "image/png", {"Cache-Control": "public, max-age=3, must-revalidate", "X-Canvas-Revision": str(revision)}, etag=f'"canvas-revision-{revision}"')
 
 
 @app.post("/api/admin/agents/canvas/clear")

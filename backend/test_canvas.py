@@ -130,7 +130,7 @@ def test_event_gap_resets_and_clear_bounds_are_applied(canvas_db):
 
 def test_canvas_pixel_maps_shared_throttle_to_retryable_http(monkeypatch):
     class ThrottledStore:
-        def authorize_mutation(self, token, scope):
+        async def authorize_mutation(self, token, scope, client_ip):
             raise Throttled(9)
 
         def close(self):
@@ -148,7 +148,7 @@ class _CanvasAgentStore:
         self.principal = principal
         self.error = error
 
-    def authorize_mutation(self, token, scope):
+    async def authorize_mutation(self, token, scope, client_ip):
         if self.error:
             raise self.error
         return self.principal

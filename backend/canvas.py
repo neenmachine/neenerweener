@@ -23,9 +23,9 @@ canvas_cells = Table("canvas_cells", metadata, Column("x", SmallInteger), Column
 canvas_cooldowns = Table("canvas_cooldowns", metadata, Column("fingerprint", Text), Column("placed_at", DateTime(timezone=True)))
 
 
-def authorize_canvas_write(store: AgentCommonsStore, token: str) -> AgentPrincipal:
+async def authorize_canvas_write(store: AgentCommonsStore, token: str, client_ip: str | None) -> AgentPrincipal:
     """The sole canvas caller of the shared agent mutation policy."""
-    principal = store.authorize_mutation(token, "canvas:write")
+    principal = await store.authorize_mutation(token, "canvas:write", client_ip)
     if principal is None:
         raise PermissionError
     return principal

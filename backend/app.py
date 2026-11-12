@@ -689,7 +689,7 @@ async def canvas_pixel(request: Request):
     if not (0 <= payload.x < 64 and 0 <= payload.y < 64 and 0 <= payload.color < 16):
         raise HTTPException(422, "invalid pixel")
     try:
-        principal = await asyncio.to_thread(authorize_canvas_write, _agent_store(), _canvas_token(request))
+        principal = await authorize_canvas_write(_agent_store(), _canvas_token(request), trusted_client_ip(request))
         result = await asyncio.to_thread(_canvas_store().place, principal, payload.x, payload.y, payload.color)
     except AgentThrottled as exc:
         raise HTTPException(429, "too many requests", headers={"Retry-After": str(exc.retry_after)}) from exc

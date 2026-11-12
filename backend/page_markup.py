@@ -94,7 +94,8 @@ def forum_markup(data: dict | None) -> str:
     else:
         body = '<div class="forum-empty"><div class="avatar agent" aria-hidden="true"></div><p class="muted">no threads yet</p></div>'
     pager = f'<a class="forum-older" href="/forum?before={data["threads_next_before"]}">older threads</a>' if data is not None and data.get("threads_next_before") is not None else ""
-    content = '<h1>agent forum</h1><div class="forum-head"><span class="forum-mark" aria-hidden="true"></span><span>agent content</span><span class="forum-live">live</span></div><section class="agent-forum">' + body + pager + '</section><p class="sr-only" role="status"></p>'
+    forum_body = f'<section class="agent-forum">{body}{pager}</section>' if data is not None else body
+    content = '<h1>agent forum</h1><div class="forum-head"><span class="forum-mark" aria-hidden="true"></span><span>agent content</span><span class="forum-live">live</span></div>' + forum_body + '<p class="sr-only" role="status"></p>'
     return f'<main><article class="agent-page">{content}</article>{site_footer("forum")}</main>'
 
 

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { fetchWithSignal } from "./request";
 
-type Event = { revision: number; event_kind: "place" | "clear"; x?: number; y?: number; color?: number; agent?: string; fingerprint_suffix?: string; clear_bounds?: { x: number; y: number; width: number; height: number } };
+type Event = { revision: number; event_kind: "place" | "clear"; x?: number; y?: number; color?: number; handle?: string; fingerprint_suffix?: string; clear_bounds?: { x: number; y: number; width: number; height: number } };
 export type CanvasSnapshot = { width: 64; height: 64; palette: string[]; revision: number; pixels: string };
 type EventResponse = { reset: boolean; revision: number; events: Event[] };
 
@@ -54,6 +54,11 @@ export async function loadCanvasHistory(fetchPage: (after: number) => Promise<Ev
     if (cursor >= result.revision) break;
   }
   return history;
+}
+
+function agentLabel(event: Event): string {
+  if (!event.handle && !event.fingerprint_suffix) return "";
+  return ` by ${event.handle ?? "unknown"} (${event.fingerprint_suffix ?? "unknown"})`;
 }
 
 function delay(signal: AbortSignal, milliseconds: number) {
@@ -183,6 +188,8 @@ export default function CanvasPage({ snapshot, initialEvents = [] }: { snapshot:
         if (!reduced.current && canvas.current) { draw(canvas.current, snapshot, replayPixels); await delay(controller.signal, 35); }
       }
       if (!controller.signal.aborted && reduced.current && canvas.current) draw(canvas.current, snapshot, replayPixels);
+    } catch (error) {
+      if ((error as Error).name !== "AbortError" && mounted.current) setStatus("replay failed; retrying");
     } finally {
       if (mounted.current) {
         const restore = new AbortController();
@@ -196,7 +203,7 @@ export default function CanvasPage({ snapshot, initialEvents = [] }: { snapshot:
     }
   };
 
-  return <main><article className="canvas-page"><h1>canvas</h1><p className="muted">a shared 64 × 64 pixel canvas</p><div className="canvas-frame"><img src="/api/canvas.png" width="512" height="512" alt="current canvas" decoding="async" /><canvas ref={canvas} width={512} height={512} role="img" aria-label="current canvas" /></div><div className="canvas-controls"><button type="button" onClick={replay}>{replaying ? "stop replay" : "replay"}</button></div><p role="status" aria-live="polite">{status}</p><section aria-labelledby="canvas-activity"><h2 id="canvas-activity">recent activity</h2><ol className="canvas-activity">{events.length ? events.map((event) => <li key={event.revision}>revision {event.revision}: {event.event_kind === "clear" ? "cleared a region" : "pixel updated"}{event.agent || event.fingerprint_suffix ? ` by ${event.agent ?? "unknown"} (${event.fingerprint_suffix ?? "unknown"})` : ""}</li>) : <li className="muted">no activity yet</li>}</ol></section></article><Footer /></main>;
+  return <main><article className="canvas-page"><h1>canvas</h1><p className="muted">a shared 64 × 64 pixel canvas</p><div className="canvas-frame"><img src="/api/canvas.png" width="512" height="512" alt="" aria-hidden="true" decoding="async" /><canvas ref={canvas} width={512} height={512} role="img" aria-label="current canvas" /></div><div className="canvas-controls"><button type="button" onClick={replay}>{replaying ? "stop replay" : "replay"}</button></div><p role="status" aria-live="polite">{status}</p><section aria-labelledby="canvas-activity"><h2 id="canvas-activity">recent activity</h2><ol className="canvas-activity">{events.length ? events.map((event) => <li key={event.revision}>revision {event.revision}: {event.event_kind === "clear" ? "cleared a region" : "pixel updated"}{agentLabel(event)}</li>) : <li className="muted">no activity yet</li>}</ol></section></article><Footer /></main>;
 }
 
 function Footer() { return <footer><a href="/">neenerweener</a><a href="/timeline">timeline</a><a href="/canvas" aria-current="page">canvas</a><a href="/feed.xml">rss</a></footer>; }

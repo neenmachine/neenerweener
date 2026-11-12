@@ -1640,11 +1640,19 @@ def timeline_page_data(request: Request) -> tuple[dict, dict, str, int]:
     return {"/api/timeline": page, "/api/profile": profile}, {"title": "timeline", "description": "timeline"}, markup, status_code
 
 
+def canvas_agent_label(event: dict) -> str:
+    handle = event.get("handle")
+    suffix = event.get("fingerprint_suffix")
+    if not handle and not suffix:
+        return ""
+    return f' by {escape(str(handle or "unknown"))} ({escape(str(suffix or "unknown"))})'
+
+
 def canvas_markup(events: list[dict]) -> str:
     activity = "".join(
         f'<li>revision {escape(str(event["revision"]))}: '
         f'{"cleared a region" if event.get("event_kind") == "clear" else "pixel updated"}'
-        f'{" by " + str(event["agent"]) if event.get("agent") else " by " + str(event["fingerprint_suffix"]) if event.get("fingerprint_suffix") else ""}</li>'
+        f'{canvas_agent_label(event)}</li>'
         for event in events
     )
     if not activity:
@@ -1652,7 +1660,7 @@ def canvas_markup(events: list[dict]) -> str:
     return (
         '<main><article class="canvas-page"><h1>canvas</h1>'
         '<p class="muted">a shared 64 × 64 pixel canvas</p>'
-        '<div class="canvas-frame"><img width="512" height="512" alt="current canvas" decoding="async" '
+        '<div class="canvas-frame"><img width="512" height="512" alt="" aria-hidden="true" decoding="async" '
         'src="/api/canvas.png"><canvas width="512" height="512" role="img" aria-label="current canvas"></canvas></div>'
         '<div class="canvas-controls"><button type="button">replay</button></div>'
         '<p role="status" aria-live="polite"></p>'

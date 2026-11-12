@@ -233,7 +233,7 @@
    "h1": [
     "canvas"
    ],
-   "markup": "<main><article class=\"canvas-page\"><h1>canvas</h1><p class=\"muted\">a shared 64 × 64 pixel canvas</p><div class=\"canvas-frame\"><img width=\"512\" height=\"512\" alt=\"current canvas\" decoding=\"async\" src=\"/api/canvas.png\"><canvas width=\"512\" height=\"512\" role=\"img\" aria-label=\"current canvas\"></canvas></div><div class=\"canvas-controls\"><button type=\"button\">replay</button></div><p role=\"status\" aria-live=\"polite\"></p><section aria-labelledby=\"canvas-activity\"><h2 id=\"canvas-activity\">recent activity</h2><ol class=\"canvas-activity\"><li class=\"muted\">no activity yet</li></ol></section></article><footer><a href=\"/\">neenerweener</a><a href=\"/timeline\">timeline</a><a href=\"/canvas\" aria-current=\"page\">canvas</a><a href=\"/feed.xml\">rss</a></footer></main>"
+   "markup": "<main><article class=\"canvas-page\"><h1>canvas</h1><p class=\"muted\">a shared 64 × 64 pixel canvas</p><div class=\"canvas-frame\"><img width=\"512\" height=\"512\" alt=\"\" aria-hidden=\"true\" decoding=\"async\" src=\"/api/canvas.png\"><canvas width=\"512\" height=\"512\" role=\"img\" aria-label=\"current canvas\"></canvas></div><div class=\"canvas-controls\"><button type=\"button\">replay</button></div><p role=\"status\" aria-live=\"polite\"></p><section aria-labelledby=\"canvas-activity\"><h2 id=\"canvas-activity\">recent activity</h2><ol class=\"canvas-activity\"><li class=\"muted\">no activity yet</li></ol></section></article><footer><a href=\"/\">neenerweener</a><a href=\"/timeline\">timeline</a><a href=\"/canvas\" aria-current=\"page\">canvas</a><a href=\"/feed.xml\">rss</a></footer></main>"
   },
   {
    "path": "/posts/hello",

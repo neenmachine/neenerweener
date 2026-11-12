@@ -28,6 +28,11 @@ def client(tmp_path, monkeypatch):
     return TestClient(app.app)
 
 
+def test_canvas_markup_formats_public_identity_like_react():
+    markup = app.canvas_markup([{"revision": 1, "event_kind": "place", "handle": "agent_a", "fingerprint_suffix": "abc123"}])
+    assert "revision 1: pixel updated by agent_a (abc123)" in markup
+
+
 def test_unknown_path_is_404_get_and_head(client):
     get = client.get("/no-such-page")
     head = client.head("/no-such-page")

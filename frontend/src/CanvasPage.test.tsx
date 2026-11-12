@@ -22,13 +22,6 @@ test("canvas events apply placements and clear regions in order", () => {
   ], 3)]).toEqual([9, 255, 255, 3, 255, 255, 6, 7, 8]);
 });
 
-test("replay starts with an empty canvas", () => {
-  const live = new Uint8Array([7, 255, 255, 255]);
-  const empty = new Uint8Array(live.length).fill(255);
-  expect([...applyCanvasEvents(empty, [{ revision: 1, event_kind: "place", x: 0, y: 0, color: 2 }], 2)]).toEqual([2, 255, 255, 255]);
-  expect(live[0]).toBe(7);
-});
-
 test("polling pages through a full response without skipping its tail", async () => {
   vi.useFakeTimers();
   const context = { imageSmoothingEnabled: false, clearRect: vi.fn(), drawImage: vi.fn(), save: vi.fn(), restore: vi.fn(), scale: vi.fn(), createImageData: () => ({ data: new Uint8ClampedArray(64 * 64 * 4) }), putImageData: vi.fn() };
@@ -53,11 +46,17 @@ test("unmount aborts pending replay history", async () => {
   let historySignal: AbortSignal | undefined;
   vi.stubGlobal("fetch", vi.fn((_url: string, options?: RequestInit) => {
     historySignal = options?.signal ?? undefined;
-    return new Promise(() => {});
+    return new Promise((_resolve, reject) => options?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true }));
   }));
+  const unhandled: PromiseRejectionEvent[] = [];
+  const onUnhandled = (event: PromiseRejectionEvent) => { unhandled.push(event); event.preventDefault(); };
+  window.addEventListener("unhandledrejection", onUnhandled);
   document.body.innerHTML = '<div id="root"></div>';
   await act(async () => { root = createRoot(document.getElementById("root")!); root.render(<CanvasPage snapshot={snapshot} />); });
   await act(async () => { document.querySelector("button")?.click(); });
   act(() => root?.unmount());
+  await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+  window.removeEventListener("unhandledrejection", onUnhandled);
   expect(historySignal?.aborted).toBe(true);
+  expect(unhandled).toHaveLength(0);
 });

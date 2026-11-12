@@ -17,6 +17,7 @@ import yaml
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, Response, Security
 from fastapi.security import HTTPBearer
 from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles

@@ -204,7 +204,7 @@ def test_alembic_has_one_head():
 
     config = Config(str(Path(__file__).with_name('alembic.ini')))
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == ['010_forum']
+    assert script.get_heads() == ['011_agent_moderation_audit']
     assert script.get_revision('001_timeline').down_revision is None
     assert script.get_revision('002_admin_auth').down_revision == '001_timeline'
     assert script.get_revision('003_machine_auth').down_revision == '002_admin_auth'
@@ -275,7 +275,7 @@ def test_alembic_upgrade_down_up_is_repeatable():
     engine = create_engine(os.environ['DATABASE_URL'])
     try:
         with engine.connect() as connection:
-            assert connection.execute(text('select version_num from alembic_version')).scalar() == '010_forum'
+            assert connection.execute(text('select version_num from alembic_version')).scalar() == '011_agent_moderation_audit'
     finally:
         engine.dispose()
         app.configure_logging()

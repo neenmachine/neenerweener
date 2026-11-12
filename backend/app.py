@@ -33,6 +33,7 @@ from anchors import add_heading_anchors
 from agent_commons import AgentCommonsStore, AgentPrincipal, DuplicateRegistration, InvalidProof as AgentInvalidProof, Throttled as AgentThrottled, public_agent, WritesPaused, AGENT_SCOPES, CHALLENGE_SECONDS as AGENT_CHALLENGE_SECONDS, TOKEN_SECONDS as AGENT_TOKEN_SECONDS
 from forum import ForumStore
 from canvas import CanvasCooldown, CanvasStore, authorize_canvas_write, png_bytes, snapshot_payload
+from moderation import ModerationStore
 from operations import check_readiness, configure_logging, load_schema_heads
 from page_markup import home_markup, site_footer
 import post_images
@@ -151,6 +152,8 @@ async def lifespan(_app):
         await asyncio.to_thread(forum_store.close)
     if canvas_store is not None:
         await asyncio.to_thread(canvas_store.close)
+    if moderation_store is not None:
+        await asyncio.to_thread(moderation_store.close)
     if post_store is not None:
         await asyncio.to_thread(post_store.close)
 
@@ -177,6 +180,7 @@ forum_store: ForumStore | None = ForumStore(os.environ["DATABASE_URL"]) if os.en
 canvas_store: CanvasStore | None = (
     CanvasStore(os.environ["DATABASE_URL"]) if os.environ.get("DATABASE_URL") else None
 )
+moderation_store: ModerationStore | None = ModerationStore(os.environ["DATABASE_URL"]) if os.environ.get("DATABASE_URL") else None
 machine_auth_store: MachineAuthStore | None = (
     MachineAuthStore(os.environ["DATABASE_URL"]) if os.environ.get("DATABASE_URL") else None
 )
@@ -581,6 +585,16 @@ class ForumThreadRequest(BaseModel):
 class ForumAnswerRequest(BaseModel):
     body: str
 
+class ModerationContentRequest(BaseModel):
+    confirm: bool = False
+
+class ModerationBanRequest(BaseModel):
+    banned: bool
+    reason: str | None = None
+
+class ModerationWritesRequest(BaseModel):
+    enabled: bool
+
 
 def _agent_store() -> AgentCommonsStore:
     if agent_commons_store is None:
@@ -789,9 +803,45 @@ async def canvas_clear(request: Request, _access: Access = Depends(require_brows
     if payload.width < 1 or payload.height < 1 or payload.x < 0 or payload.y < 0 or payload.x + payload.width > 64 or payload.y + payload.height > 64:
         raise HTTPException(422, "invalid canvas region")
     revision = await asyncio.to_thread(_canvas_store().clear, payload.x, payload.y, payload.width, payload.height)
+    await asyncio.to_thread(_moderation().audit, "clear_canvas", f"{payload.x},{payload.y},{payload.width},{payload.height}")
     return JSONResponse({"revision": revision}, headers={"Cache-Control": "no-store"})
 
 
+
+def _moderation() -> ModerationStore:
+    if moderation_store is None: raise HTTPException(503, "moderation unavailable")
+    return moderation_store
+
+@app.get("/api/admin/agents")
+def admin_agents(_access: Access = Depends(require_browser_read)):
+    data = _moderation().overview()
+    data["canvas"] = _canvas_store().events(0, 100)["events"]
+    return JSONResponse(data, headers={"Cache-Control": "no-store"})
+
+@app.post("/api/admin/agents/{agent_id}/ban")
+async def admin_ban(agent_id: str, request: Request, _access: Access = Depends(require_browser_mutation)):
+    payload = await _bounded_json(request, ModerationBanRequest)
+    try:
+        if payload.banned:
+            await asyncio.to_thread(_agent_store().ban, uuid.UUID(agent_id), payload.reason)
+        await asyncio.to_thread(_moderation().ban, uuid.UUID(agent_id), payload.banned, payload.reason)
+    except Exception as exc: raise HTTPException(422, "invalid agent") from exc
+    return JSONResponse({"ok": True}, headers={"Cache-Control": "no-store"})
+
+@app.post("/api/admin/forum/{kind}/{item_id}/{action}")
+async def admin_forum_action(kind: str, item_id: PositiveInt, action: str, request: Request, _access: Access = Depends(require_browser_mutation)):
+    if kind not in {"thread", "answer"} or action not in {"hide", "unhide", "delete"}: raise HTTPException(404, "not found")
+    payload = await _bounded_json(request, ModerationContentRequest)
+    try: _moderation().set_content(kind, item_id, action, payload.confirm)
+    except ValueError as exc: raise HTTPException(409, str(exc)) from exc
+    except LookupError as exc: raise HTTPException(404, "not found") from exc
+    return JSONResponse({"ok": True}, headers={"Cache-Control": "no-store"})
+
+@app.post("/api/admin/writes")
+async def admin_writes(request: Request, _access: Access = Depends(require_browser_mutation)):
+    payload = await _bounded_json(request, ModerationWritesRequest)
+    _moderation().writes(payload.enabled)
+    return JSONResponse({"writes_enabled": payload.enabled}, headers={"Cache-Control": "no-store"})
 
 @app.post("/api/cli/auth/challenge", status_code=201)
 async def machine_challenge(request: Request):

@@ -34,11 +34,9 @@ def test_puzzle_public_serialization_never_contains_answer():
 def test_every_agent_write_route_uses_shared_pause_policy(monkeypatch, path, policy):
     import app
     class Paused:
-        def authorize(self, token, scope):
+        def authorize_mutation(self, token, scope):
             if policy == "banned": return None
-            return AgentPrincipal(uuid.uuid4(), "fixture", "SHA256:fixture", frozenset({"forum:write", "puzzle:submit"}))
-        def assert_writes_enabled(self): raise WritesPaused
-        def permit(self, *args): raise AssertionError("permit must not run while paused")
+            raise WritesPaused
     monkeypatch.setattr(app, "agent_commons_store", Paused())
     client = TestClient(app.app)
     body = {"kind": "question", "title": "fixture", "body": "fixture"} if path.endswith("threads") else {"body": "fixture"} if "answers" in path else {"answer": "fixture"}

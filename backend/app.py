@@ -231,7 +231,7 @@ async def operational_middleware(request: Request, call_next):
 @app.middleware("http")
 async def security_middleware(request: Request, call_next):
     response = await call_next(request)
-    policy = cache_control(request.url.path, response.status_code, response.headers)
+    policy = cache_control(request.url.path, response.status_code, response.headers, request.method)
     if policy is not None:
         response.headers["Cache-Control"] = policy
     response.headers["X-Content-Type-Options"] = "nosniff"
@@ -655,20 +655,17 @@ async def agent_me(request: Request):
     return {"agent_id": str(principal.agent_id), "handle": principal.handle, "fingerprint": principal.fingerprint, "scopes": sorted(principal.scopes), "banned": False}
 
 
-def _agent_access(request: Request, scope: str) -> AgentPrincipal:
+async def _agent_access(request: Request, scope: str) -> AgentPrincipal:
     auth = request.headers.get("Authorization", "")
     if not auth.startswith("Bearer ") or auth.count(" ") != 1:
         raise HTTPException(401, "authentication required")
-    principal = _agent_store().authorize(auth[7:], scope)
-    if principal is None:
-        raise HTTPException(401, "authentication required")
     try:
-        _agent_store().assert_writes_enabled()
-        _agent_store().permit(principal, "agent_" + scope.replace(":", "_"), {"forum:write": 200, "puzzle:submit": 30}.get(scope, 1))
+        principal = await asyncio.to_thread(_agent_store().authorize_mutation, auth[7:], scope)
     except WritesPaused as exc:
         raise HTTPException(503, "writes paused") from exc
     except AgentThrottled as exc:
         raise HTTPException(429, "too many requests", headers={"Retry-After": str(exc.retry_after)}) from exc
+    if principal is None: raise HTTPException(401, "authentication required")
     return principal
 
 
@@ -681,27 +678,35 @@ def forum_list(before: int | None = None, limit: int = Query(20, ge=1, le=100)):
     return {"threads": [_forum_payload(r) for r in forum_store.list_threads(before, limit)]}
 
 @app.get("/api/forum/threads/{thread_id}")
-def forum_thread(thread_id: PositiveInt):
+def forum_thread(thread_id: PositiveInt, before: int | None = None, limit: int = Query(100, ge=1, le=100)):
     if forum_store is None: raise HTTPException(503, "forum unavailable")
-    row = forum_store.get_thread(thread_id)
+    row = forum_store.get_thread(thread_id, before=before, limit=limit)
     if row is None: raise HTTPException(404, "thread not found")
     result = _forum_payload(row); result["answers"] = [_forum_payload(a) for a in row["answers"]]
     return result
 
-@app.post("/api/forum/threads", status_code=201)
+@app.post("/api/forum/threads", status_code=201, openapi_extra={"requestBody": {"required": True, "content": {"application/json": {"schema": {"type": "object", "required": ["kind", "title", "body"], "properties": {"kind": {"type": "string"}, "title": {"type": "string"}, "body": {"type": "string"}}}}}}})
 async def forum_create_thread(request: Request):
-    principal = _agent_access(request, "forum:write")
+    principal = await _agent_access(request, "forum:write")
     if forum_store is None: raise HTTPException(503, "forum unavailable")
     payload = await _agent_json(request, ForumThreadRequest)
-    try: blocked = puzzle_store.expected_for_filter() if puzzle_store else None; return _forum_payload(await asyncio.to_thread(forum_store.create_thread, principal.agent_id, payload.kind, payload.title, payload.body, blocked_answer=blocked))
+    try:
+        def create():
+            blocked = puzzle_store.expected_for_filter() if puzzle_store else None
+            return forum_store.create_thread(principal.agent_id, payload.kind, payload.title, payload.body, blocked_answer=blocked)
+        return _forum_payload(await asyncio.to_thread(create))
     except ValueError as exc: raise HTTPException(422, "content not allowed" if str(exc) == "content not allowed" else "invalid forum content") from exc
 
-@app.post("/api/forum/threads/{thread_id}/answers", status_code=201)
+@app.post("/api/forum/threads/{thread_id}/answers", status_code=201, openapi_extra={"requestBody": {"required": True, "content": {"application/json": {"schema": {"type": "object", "required": ["body"], "properties": {"body": {"type": "string"}}}}}}})
 async def forum_create_answer(thread_id: PositiveInt, request: Request):
-    principal = _agent_access(request, "forum:write")
+    principal = await _agent_access(request, "forum:write")
     if forum_store is None: raise HTTPException(503, "forum unavailable")
     payload = await _agent_json(request, ForumAnswerRequest)
-    try: blocked = puzzle_store.expected_for_filter() if puzzle_store else None; return _forum_payload(await asyncio.to_thread(forum_store.create_answer, principal.agent_id, thread_id, payload.body, blocked_answer=blocked))
+    try:
+        def create():
+            blocked = puzzle_store.expected_for_filter() if puzzle_store else None
+            return forum_store.create_answer(principal.agent_id, thread_id, payload.body, blocked_answer=blocked)
+        return _forum_payload(await asyncio.to_thread(create))
     except LookupError as exc: raise HTTPException(404, "thread not found") from exc
     except ValueError as exc: raise HTTPException(422, "content not allowed" if str(exc) == "content not allowed" else "invalid forum content") from exc
 
@@ -710,9 +715,9 @@ def puzzle_active():
     if puzzle_store is None: raise HTTPException(503, "puzzle unavailable")
     puzzle = puzzle_store.active(); return {"puzzle": puzzle, "leaderboard": puzzle_store.leaderboard(puzzle["id"]) if puzzle else []}
 
-@app.post("/api/puzzles/{puzzle_id}/attempt")
+@app.post("/api/puzzles/{puzzle_id}/attempt", openapi_extra={"requestBody": {"required": True, "content": {"application/json": {"schema": {"type": "object", "required": ["answer"], "properties": {"answer": {"type": "string"}}}}}}})
 async def puzzle_attempt(puzzle_id: PositiveInt, request: Request):
-    principal = _agent_access(request, "puzzle:submit")
+    principal = await _agent_access(request, "puzzle:submit")
     if puzzle_store is None: raise HTTPException(503, "puzzle unavailable")
     payload = await _agent_json(request, PuzzleAttemptRequest)
     try: return {"result": await asyncio.to_thread(puzzle_store.submit, puzzle_id, principal.agent_id, payload.answer)}

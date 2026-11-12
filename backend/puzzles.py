@@ -6,7 +6,9 @@ from datetime import datetime, timezone
 from sqlalchemy import BigInteger, Boolean, Column, DateTime, ForeignKey, Integer, LargeBinary, MetaData, Table, Text, and_, desc, func, insert, select, update
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.engine import Engine
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from agent_commons import agents
+from zoneinfo import ZoneInfo
 from timeline import database_engine
 from untrusted_markdown import validate_untrusted_markdown
 
@@ -31,12 +33,14 @@ def normalize_answer(value: str) -> str:
 
 class PuzzleStore:
     def __init__(self, database_url: str, engine: Engine | None = None, secret: bytes | None = None):
-        self.engine = engine or database_engine(database_url)
+        self.engine = engine or database_engine(database_url, hide_parameters=True)
         if secret is None:
             from auth import AdminConfig
             secret = AdminConfig.from_env().rate_limit_key
         self.secret = secret or b"agent-puzzle-test-secret"
     def create(self, title: str, body: str, answer: str, publish_at: datetime, close_at: datetime) -> dict:
+        if publish_at.tzinfo is None or close_at.tzinfo is None: raise ValueError("invalid puzzle")
+        publish_at, close_at = publish_at.astimezone(timezone.utc), close_at.astimezone(timezone.utc)
         if not title.strip() or len(title) > 120 or publish_at >= close_at: raise ValueError("invalid puzzle")
         html = validate_untrusted_markdown(body, maximum=5000); answer = normalize_answer(answer)
         with self.engine.begin() as c:
@@ -46,7 +50,9 @@ class PuzzleStore:
                 with c.begin_nested():
                     row = c.execute(insert(puzzles).values(title=title, body_markdown=body, body_html=html, answer_secret=answer, verifier_kind="exact-text-v1", publish_at=publish_at, close_at=close_at, created_at=datetime.now(timezone.utc)).returning(puzzles)).mappings().one()
             except IntegrityError as exc:
-                raise ValueError("puzzle schedule overlaps") from exc
+                raise ValueError("puzzle schedule overlaps") from None
+            except SQLAlchemyError:
+                raise RuntimeError("puzzle storage unavailable") from None
         return self.public(dict(row))
     def active(self, now: datetime | None = None) -> dict | None:
         now = now or datetime.now(timezone.utc)
@@ -76,8 +82,8 @@ class PuzzleStore:
             return "correct" if correct else "incorrect"
     def leaderboard(self, puzzle_id: int) -> list[dict]:
         with self.engine.connect() as c:
-            rows = c.execute(select(puzzle_attempts.c.agent_id, puzzle_attempts.c.submitted_at).where(puzzle_attempts.c.puzzle_id == puzzle_id, puzzle_attempts.c.correct.is_(True)).order_by(puzzle_attempts.c.submitted_at, puzzle_attempts.c.agent_id)).mappings()
-            return [{"agent_id": str(r["agent_id"]), "submitted_at": r["submitted_at"]} for r in rows]
+            rows = c.execute(select(puzzle_attempts.c.agent_id, puzzle_attempts.c.submitted_at, agents.c.handle).join(agents, agents.c.id == puzzle_attempts.c.agent_id).where(puzzle_attempts.c.puzzle_id == puzzle_id, puzzle_attempts.c.correct.is_(True), agents.c.banned_at.is_(None)).order_by(puzzle_attempts.c.submitted_at, puzzle_attempts.c.agent_id)).mappings()
+            return [{"agent_id": str(r["agent_id"]), "handle": r["handle"], "submitted_at": r["submitted_at"]} for r in rows]
     def close_puzzle(self, puzzle_id: int) -> bool:
         with self.engine.begin() as c: return c.execute(update(puzzles).where(puzzles.c.id == puzzle_id, puzzles.c.closed_at.is_(None)).values(closed_at=datetime.now(timezone.utc))).rowcount == 1
     def close(self): self.engine.dispose()

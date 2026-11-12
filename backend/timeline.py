@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Protocol
 from zoneinfo import ZoneInfo
 
-from markdown_it import MarkdownIt
+from untrusted_markdown import render_untrusted_markdown
 from sqlalchemy import (
     BigInteger,
     CheckConstraint,
@@ -112,10 +112,6 @@ MAX_ALT_CHARS = 1000
 class InvalidAttachment(ValueError):
     """An attachment that is unknown, already attached, detached, expired, or malformed."""
 
-_timeline_md = MarkdownIt("commonmark", {"html": False}).disable("image")
-_UNSAFE_SCHEME = re.compile(r"^(?:javascript|vbscript|data):", re.IGNORECASE)
-_UNSAFE_MARKDOWN_LINK = re.compile(r"\]\(\s*(?:javascript|vbscript|data):", re.IGNORECASE)
-
 
 CONNECT_TIMEOUT_SECONDS = 2
 POOL_TIMEOUT_SECONDS = 1
@@ -174,17 +170,7 @@ def validate_timeline_create(body: str, alts: Sequence[str]) -> None:
 
 def render_timeline(body: str) -> str:
     """Render submitted Markdown without HTML, images, or unsafe links."""
-    if _UNSAFE_MARKDOWN_LINK.search(body):
-        raise ValueError("unsafe link")
-    tokens = _timeline_md.parse(body)
-    for token in tokens:
-        if token.type == "inline" and token.children:
-            for child in token.children:
-                if child.type == "link_open":
-                    href = child.attrGet("href") or ""
-                    if _UNSAFE_SCHEME.match(href.strip()) or href.startswith("\\"):
-                        raise ValueError("unsafe link")
-    return _timeline_md.renderer.render(tokens, _timeline_md.options, {})
+    return render_untrusted_markdown(body, maximum=10_000, absolute_links=False)
 
 
 class TimelineStore:

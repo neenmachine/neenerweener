@@ -747,7 +747,7 @@ async def _agent_access(request: Request, action: str) -> AgentPrincipal:
 
 
 def _forum_payload(row: dict) -> dict:
-    payload = {k: v for k, v in row.items() if k not in {"body_markdown", "body_html", "agent_id", "handle", "fingerprint", "created_at", "answers"}} | {"body": row["body_html"]}
+    payload = {k: v for k, v in row.items() if k not in {"body_markdown", "body_html", "agent_id", "handle", "fingerprint", "answers"}} | {"body": row["body_html"]}
     return payload | {"agent": public_agent(row.get("handle") or "", row.get("fingerprint") or "")}
 
 
@@ -1482,7 +1482,7 @@ def _get_post_data(slug: str) -> dict | PostRedirect | None:
 def _json_etag_response(request: Request, content) -> Response:
     return etag_response(
         request,
-        json.dumps(content, ensure_ascii=False, separators=(",", ":")).encode(),
+        json.dumps(jsonable_encoder(content), ensure_ascii=False, separators=(",", ":")).encode(),
         "application/json",
     )
 

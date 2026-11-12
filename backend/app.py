@@ -32,7 +32,7 @@ from pygments.util import ClassNotFound
 from anchors import add_heading_anchors
 from agent_commons import AgentCommonsStore, AgentPrincipal, DuplicateRegistration, InvalidProof as AgentInvalidProof, Throttled as AgentThrottled, public_agent, WritesPaused, AGENT_SCOPES, CHALLENGE_SECONDS as AGENT_CHALLENGE_SECONDS, TOKEN_SECONDS as AGENT_TOKEN_SECONDS
 from forum import ForumStore
-from canvas import CanvasCooldown, CanvasStore, authorize_canvas_write, png_bytes, snapshot_payload
+from canvas import CanvasStore, authorize_canvas_write, png_bytes, snapshot_payload
 from moderation import ModerationStore
 from operations import check_readiness, configure_logging, load_schema_heads
 from page_markup import home_markup, site_footer

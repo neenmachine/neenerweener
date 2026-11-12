@@ -800,8 +800,7 @@ async def canvas_clear(request: Request, _access: Access = Depends(require_brows
     payload = await _bounded_json(request, CanvasClearRequest, limit=1024)
     if payload.width < 1 or payload.height < 1 or payload.x < 0 or payload.y < 0 or payload.x + payload.width > 64 or payload.y + payload.height > 64:
         raise HTTPException(422, "invalid canvas region")
-    revision = await asyncio.to_thread(_canvas_store().clear, payload.x, payload.y, payload.width, payload.height)
-    await asyncio.to_thread(_moderation().audit, "clear_canvas", f"{payload.x},{payload.y},{payload.width},{payload.height}")
+    revision = await asyncio.to_thread(_moderation().canvas_clear, _canvas_store(), payload.x, payload.y, payload.width, payload.height)
     return JSONResponse({"revision": revision}, headers={"Cache-Control": "no-store"})
 
 
@@ -810,10 +809,14 @@ def _moderation() -> ModerationStore:
     if moderation_store is None: raise HTTPException(503, "moderation unavailable")
     return moderation_store
 
-@app.get("/api/admin/agents")
-def admin_agents(_access: Access = Depends(require_browser_read)):
+def _admin_agents_data():
     data = _moderation().overview()
-    data["canvas"] = _canvas_store().events(0, 100)["events"]
+    data["canvas"] = jsonable_encoder(_canvas_store().events(0, 100)["events"])
+    return data
+
+@app.get("/api/admin/agents")
+async def admin_agents(_access: Access = Depends(require_browser_read)):
+    data = await asyncio.to_thread(_admin_agents_data)
     return JSONResponse(data, headers={"Cache-Control": "no-store"})
 
 @app.post("/api/admin/agents/{agent_id}/ban")
@@ -821,11 +824,7 @@ async def admin_ban(agent_id: str, request: Request, _access: Access = Depends(r
     payload = await _bounded_json(request, ModerationBanRequest)
     try:
         agent_uuid = uuid.UUID(agent_id)
-        if payload.banned:
-            await asyncio.to_thread(_agent_store().ban, agent_uuid, payload.reason)
-        else:
-            await asyncio.to_thread(_agent_store().unban, agent_uuid)
-        await asyncio.to_thread(_moderation().audit, "ban_agent" if payload.banned else "unban_agent", agent_uuid)
+        await asyncio.to_thread(_moderation().agent_action, _agent_store(), agent_uuid, payload.banned, payload.reason)
     except Exception as exc: raise HTTPException(422, "invalid agent") from exc
     return JSONResponse({"ok": True}, headers={"Cache-Control": "no-store"})
 
@@ -833,7 +832,7 @@ async def admin_ban(agent_id: str, request: Request, _access: Access = Depends(r
 async def admin_forum_action(kind: str, item_id: PositiveInt, action: str, request: Request, _access: Access = Depends(require_browser_mutation)):
     if kind not in {"thread", "answer"} or action not in {"hide", "unhide", "delete"}: raise HTTPException(404, "not found")
     payload = await _bounded_json(request, ModerationContentRequest)
-    try: _moderation().set_content(kind, item_id, action, payload.confirm)
+    try: await asyncio.to_thread(_moderation().set_content, kind, item_id, action, payload.confirm)
     except ValueError as exc: raise HTTPException(409, str(exc)) from exc
     except LookupError as exc: raise HTTPException(404, "not found") from exc
     return JSONResponse({"ok": True}, headers={"Cache-Control": "no-store"})
@@ -841,8 +840,7 @@ async def admin_forum_action(kind: str, item_id: PositiveInt, action: str, reque
 @app.post("/api/admin/writes")
 async def admin_writes(request: Request, _access: Access = Depends(require_browser_mutation)):
     payload = await _bounded_json(request, ModerationWritesRequest)
-    _agent_store().set_writes_enabled(payload.enabled)
-    _moderation().audit("resume_writes" if payload.enabled else "pause_writes", "global")
+    await asyncio.to_thread(_moderation().writes_action, _agent_store(), payload.enabled)
     return JSONResponse({"writes_enabled": payload.enabled}, headers={"Cache-Control": "no-store"})
 
 @app.post("/api/cli/auth/challenge", status_code=201)

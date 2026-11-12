@@ -264,18 +264,28 @@ class AgentCommonsStore:
         event_ids = select(machine_auth_events.c.id).where(machine_auth_events.c.event.startswith(AGENT_EVENT_PREFIX, autoescape=True), machine_auth_events.c.occurred_at < now - timedelta(hours=24)).limit(100)
         c.execute(delete(machine_auth_events).where(machine_auth_events.c.id.in_(event_ids)))
 
-    def ban(self, agent_id: uuid.UUID, reason: str | None = None) -> None:
+    def ban_in_transaction(self, c, agent_id: uuid.UUID, reason: str | None = None) -> None:
         now = datetime.now(timezone.utc)
-        with self.engine.begin() as c: c.execute(update(agents).where(agents.c.id == agent_id).values(banned_at=now, ban_reason_admin_only=reason)); c.execute(update(agent_tokens).where(agent_tokens.c.agent_id == agent_id, agent_tokens.c.revoked_at.is_(None)).values(revoked_at=now))
+        c.execute(update(agents).where(agents.c.id == agent_id).values(banned_at=now, ban_reason_admin_only=reason))
+        c.execute(update(agent_tokens).where(agent_tokens.c.agent_id == agent_id, agent_tokens.c.revoked_at.is_(None)).values(revoked_at=now))
+
+    def ban(self, agent_id: uuid.UUID, reason: str | None = None) -> None:
+        with self.engine.begin() as c: self.ban_in_transaction(c, agent_id, reason)
 
     def revoke(self, agent_id: uuid.UUID) -> None:
         with self.engine.begin() as c: c.execute(update(agent_tokens).where(agent_tokens.c.agent_id == agent_id, agent_tokens.c.revoked_at.is_(None)).values(revoked_at=datetime.now(timezone.utc)))
 
+    def unban_in_transaction(self, c, agent_id: uuid.UUID) -> None:
+        c.execute(update(agents).where(agents.c.id == agent_id).values(banned_at=None, ban_reason_admin_only=None))
+
     def unban(self, agent_id: uuid.UUID) -> None:
-        with self.engine.begin() as c: c.execute(update(agents).where(agents.c.id == agent_id).values(banned_at=None, ban_reason_admin_only=None))
+        with self.engine.begin() as c: self.unban_in_transaction(c, agent_id)
+
+    def set_writes_enabled_in_transaction(self, c, enabled: bool) -> None:
+        c.execute(update(agent_settings).where(agent_settings.c.id == "global").values(writes_enabled=enabled))
 
     def set_writes_enabled(self, enabled: bool) -> None:
-        with self.engine.begin() as c: c.execute(update(agent_settings).where(agent_settings.c.id == "global").values(writes_enabled=enabled))
+        with self.engine.begin() as c: self.set_writes_enabled_in_transaction(c, enabled)
 
     def close(self): self.engine.dispose()
 

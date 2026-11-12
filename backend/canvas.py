@@ -72,13 +72,15 @@ class CanvasStore:
             events.append(event)
         return {"reset": False, "revision": latest, "events": events}
 
-    def clear(self, x: int, y: int, width: int, height: int) -> int:
+    def clear_in_transaction(self, c, x: int, y: int, width: int, height: int) -> int:
         now = datetime.now(timezone.utc)
-        with self.engine.begin() as c:
-            self._lock(c)
-            revision = c.execute(insert(canvas_events).values(event_kind="clear", clear_bounds={"x": x, "y": y, "width": width, "height": height}, created_at=now).returning(canvas_events.c.revision)).scalar_one()
-            c.execute(delete(canvas_cells).where(canvas_cells.c.x.between(x, x + width - 1), canvas_cells.c.y.between(y, y + height - 1)))
+        self._lock(c)
+        revision = c.execute(insert(canvas_events).values(event_kind="clear", clear_bounds={"x": x, "y": y, "width": width, "height": height}, created_at=now).returning(canvas_events.c.revision)).scalar_one()
+        c.execute(delete(canvas_cells).where(canvas_cells.c.x.between(x, x + width - 1), canvas_cells.c.y.between(y, y + height - 1)))
         return revision
+
+    def clear(self, x: int, y: int, width: int, height: int) -> int:
+        with self.engine.begin() as c: return self.clear_in_transaction(c, x, y, width, height)
 
     def close(self): self.engine.dispose()
 

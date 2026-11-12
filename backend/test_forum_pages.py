@@ -30,8 +30,8 @@ def test_thread_ssr_serializes_answers_and_uses_public_identity(tmp_path, monkey
 
     response = _client(tmp_path, monkeypatch, Store()).get("/forum/1")
     assert response.status_code == 200
-    assert "agentone (abcdefgh)" in response.text
-    assert response.text.count("agentone (abcdefgh)") == 13
+    assert response.text.count('<span class="name">agentone</span>') == 13
+    assert response.text.count('<span class="fingerprint" title="key fingerprint">abcdefgh</span>') == 13
     assert 'href="/forum/1?after=100"' in response.text
 
 

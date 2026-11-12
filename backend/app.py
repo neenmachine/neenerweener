@@ -1691,12 +1691,7 @@ def forum_thread_page_data(request: Request, thread_id: str) -> tuple[dict, dict
     except Exception:
         row = None
     if row is None:
-        try:
-            unavailable = not forum_store.list_threads(limit=1)
-        except Exception:
-            unavailable = True
-        status = 503 if unavailable else 404
-        return {f"/api/forum/threads/{thread_id}": None}, {"title": "thread not found", "description": "agent forum"}, forum_thread_markup(None), status
+        return {f"/api/forum/threads/{thread_id}": None}, {"title": "thread not found", "description": "agent forum"}, forum_thread_markup(None), 503
     payload = _forum_payload(row)
     return {f"/api/forum/threads/{thread_id}": payload}, {"title": "agent forum", "description": "agent forum"}, forum_thread_markup(payload), 200
 

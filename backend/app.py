@@ -20,6 +20,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.security import HTTPBearer
 from markdown_it import MarkdownIt
 from mdit_py_plugins.dollarmath import dollarmath_plugin
 from pydantic import BaseModel, ConfigDict, PositiveInt, ValidationError
@@ -155,6 +156,7 @@ async def lifespan(_app):
 
 
 app = FastAPI(lifespan=lifespan)
+_agent_bearer = HTTPBearer(auto_error=False)
 app.state.machine_auth_configured = False
 app.state.machine_auth_config = MachineAuthConfig({}, None, None, False)
 app.state.media_config = MediaConfig()

@@ -31,6 +31,7 @@ from sqlalchemy import (
     delete,
     func,
     insert,
+    not_,
     select,
     text,
     update,
@@ -42,7 +43,12 @@ from client_identity import rate_limit_key
 from timeline import database_engine, metadata
 
 NAMESPACE = "neenerweener.ca/cli-auth/v1"
+AGENT_EVENT_PREFIX = "agent_"
 SUPPORTED_SCOPES = frozenset({"timeline:create", "timeline:read"})
+
+
+def retry_after_seconds(remaining: timedelta | float) -> int:
+    return max(1, math.ceil(remaining.total_seconds() if isinstance(remaining, timedelta) else remaining))
 CHALLENGE_SECONDS = 300
 TOKEN_SECONDS = 600
 RATE_WINDOW_MINUTES = 15
@@ -127,6 +133,11 @@ class AuthorizedKey:
     fingerprint: str
     scopes: frozenset[str]
 
+    def __post_init__(self) -> None:
+        canonical, fingerprint = parse_ed25519_public_key(self.public_key)
+        if canonical != self.public_key or fingerprint != self.fingerprint:
+            raise ValueError("authorized key must be canonical")
+
 
 @dataclass(frozen=True)
 class MachineAuthConfig:
@@ -202,6 +213,17 @@ def _parse_keys(raw: str | None) -> dict[str, AuthorizedKey]:
     return keys
 
 
+def parse_ed25519_public_key(public_key: str) -> tuple[str, str]:
+    """Return the canonical two-field Ed25519 key and its fingerprint."""
+    if not isinstance(public_key, str) or len(public_key) > 1024 or not public_key.isascii() or public_key.count(" ") != 1:
+        raise ValueError
+    algorithm, encoded = public_key.split(" ")
+    if algorithm != "ssh-ed25519" or any(ord(char) < 0x20 or ord(char) == 0x7f for char in public_key):
+        raise ValueError
+    canonical = f"{algorithm} {encoded}"
+    return canonical, _ed25519_fingerprint(canonical)
+
+
 def _parse_key(item: Any) -> AuthorizedKey:
     if not isinstance(item, dict) or set(item) != {"name", "public_key", "scopes"}:
         raise ValueError
@@ -214,18 +236,30 @@ def _parse_key(item: Any) -> AuthorizedKey:
         or not isinstance(public_key, str)
     ):
         raise ValueError
-    if (
-        len(public_key) > 1024
-        or len(public_key.split()) != 2
-        or not public_key.startswith("ssh-ed25519 ")
-    ):
+    # Keep the existing CLI configuration grammar: split() accepts harmless
+    # whitespace, while a comment remains a third field and is rejected.
+    if len(public_key) > 1024 or len(public_key.split()) != 2 or not public_key.startswith("ssh-ed25519 "):
         raise ValueError
+    canonical = " ".join(public_key.split())
+    canonical, fingerprint = parse_ed25519_public_key(canonical)
     if not isinstance(scopes, list) or any(type(scope) is not str for scope in scopes):
         raise ValueError
     if len(scopes) != len(set(scopes)) or set(scopes) != SUPPORTED_SCOPES:
         raise ValueError
-    fingerprint = _ed25519_fingerprint(public_key)
-    return AuthorizedKey(name, public_key, fingerprint, frozenset(scopes))
+    return AuthorizedKey(name, canonical, fingerprint, frozenset(scopes))
+
+
+def parse_agent_ed25519_public_key(public_key: str) -> tuple[str, str]:
+    """Parse an ssh-keygen .pub line and discard its optional comment."""
+    if not isinstance(public_key, str) or len(public_key) > 1024 or not public_key.isascii():
+        raise ValueError
+    if any(ord(char) < 0x20 or ord(char) == 0x7f for char in public_key):
+        raise ValueError
+    fields = public_key.split(" ")
+    if len(fields) not in (2, 3) or any(not field for field in fields):
+        raise ValueError
+    canonical = f"{fields[0]} {fields[1]}"
+    return parse_ed25519_public_key(canonical)
 
 
 def _ed25519_fingerprint(public_key: str) -> str:
@@ -255,7 +289,7 @@ def _ed25519_fingerprint(public_key: str) -> str:
     return f"SHA256:{encoded}"
 
 
-def _verify_signature(message: bytes, signature: str, key: AuthorizedKey) -> bool:
+def _verify_signature(message: bytes, signature: str, key: AuthorizedKey, namespace: str = NAMESPACE) -> bool:
     try:
         with tempfile.TemporaryDirectory() as directory:
             allowed_signers = os.path.join(directory, "allowed_signers")
@@ -274,7 +308,7 @@ def _verify_signature(message: bytes, signature: str, key: AuthorizedKey) -> boo
                     "-I",
                     "cli",
                     "-n",
-                    NAMESPACE,
+                    namespace,
                     "-s",
                     signature_path,
                 ],
@@ -285,12 +319,24 @@ def _verify_signature(message: bytes, signature: str, key: AuthorizedKey) -> boo
                 check=False,
             )
         return result.returncode == 0
-    except (OSError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired, ValueError):
         return False
+
+
+def auth_digest(value: str) -> bytes:
+    return hashlib.sha256(value.encode("utf-8")).digest()
 
 
 def _digest(value: str) -> bytes:
     return hashlib.sha256(value.encode("utf-8")).digest()
+
+
+def auth_message(challenge_id, fingerprint, nonce, audience, expires_at) -> str:
+    return _message(challenge_id, fingerprint, nonce, audience, expires_at)
+
+
+def verify_auth_signature(message: bytes, signature: str, key: AuthorizedKey, namespace: str = NAMESPACE) -> bool:
+    return _verify_signature(message, signature, key, namespace)
 
 
 def _rfc3339(value: datetime) -> str:
@@ -625,12 +671,7 @@ class MachineAuthStore:
                 relevant = max(relevant, oldest) if relevant else oldest
         if relevant is None:
             return None
-        return max(
-            1,
-            math.ceil(
-                (relevant + timedelta(minutes=window_minutes) - now).total_seconds()
-            ),
-        )
+        return retry_after_seconds(relevant + timedelta(minutes=window_minutes) - now)
 
     @staticmethod
     def _cleanup(connection, now: datetime) -> None:
@@ -639,7 +680,10 @@ class MachineAuthStore:
             (machine_auth_tokens, machine_auth_tokens.c.expires_at < now),
             (
                 machine_auth_events,
-                machine_auth_events.c.occurred_at < now - timedelta(hours=1),
+                and_(
+                    machine_auth_events.c.occurred_at < now - timedelta(hours=1),
+                    not_(machine_auth_events.c.event.startswith(AGENT_EVENT_PREFIX, autoescape=True)),
+                ),
             ),
         ):
             ids = select(*(table.primary_key.columns)).where(condition).limit(100)

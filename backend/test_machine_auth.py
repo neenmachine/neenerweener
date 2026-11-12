@@ -111,6 +111,30 @@ def challenge_and_token(client, private, fingerprint=None):
     return challenge, token
 
 
+@pytest.mark.parametrize("form", ["canonical", "trailing_space", "trailing_lf", "trailing_tab", "doubled_separator"])
+def test_main_accepted_key_forms_complete_cli_exchange(machine_app, monkeypatch, form):
+    private, public, _store, _secret = machine_app
+    encoded = public.split()[1]
+    forms = {
+        "canonical": public,
+        "trailing_space": public + " ",
+        "trailing_lf": public + "\n",
+        "trailing_tab": public + "\t",
+        "doubled_separator": "ssh-ed25519  " + encoded,
+    }
+    monkeypatch.setenv("ADMIN_SSH_KEYS", json.dumps([{"name": "fixture-key", "public_key": forms[form], "scopes": SCOPES}]))
+    with TestClient(app.app) as client:
+        app.app.state.machine_auth_config = MachineAuthConfig(
+            machine_auth._parse_keys(json.dumps([{"name": "fixture-key", "public_key": forms[form], "scopes": SCOPES}])),
+            "http://127.0.0.1",
+            b"r" * 32,
+            True,
+        )
+        challenge, token = challenge_and_token(client, private)
+    assert challenge.status_code == 201
+    assert token.status_code == 200
+
+
 def test_strict_key_config_and_safe_helper(machine_app, monkeypatch, tmp_path):
     _private, public, _store, _secret = machine_app
     second_private = tmp_path / "second-key"

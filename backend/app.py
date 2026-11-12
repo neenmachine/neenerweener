@@ -28,6 +28,7 @@ from pygments.lexers import TextLexer, get_lexer_by_name, get_lexer_for_filename
 from pygments.util import ClassNotFound
 
 from anchors import add_heading_anchors
+from agent_commons import AgentCommonsStore, DuplicateRegistration, InvalidProof as AgentInvalidProof, Throttled as AgentThrottled, public_agent, AGENT_SCOPES, CHALLENGE_SECONDS as AGENT_CHALLENGE_SECONDS, TOKEN_SECONDS as AGENT_TOKEN_SECONDS
 from operations import check_readiness, configure_logging, load_schema_heads
 from page_markup import home_markup, site_footer
 import post_images
@@ -140,6 +141,8 @@ async def lifespan(_app):
         await asyncio.to_thread(auth_store.close)
     if machine_auth_store is not None:
         await asyncio.to_thread(machine_auth_store.close)
+    if agent_commons_store is not None:
+        await asyncio.to_thread(agent_commons_store.close)
     if post_store is not None:
         await asyncio.to_thread(post_store.close)
 
@@ -158,6 +161,9 @@ post_store: posts.PostStore | None = (
     else None
 )
 auth_store: AuthStore | None = AuthStore(os.environ["DATABASE_URL"]) if os.environ.get("DATABASE_URL") else None
+agent_commons_store: AgentCommonsStore | None = (
+    AgentCommonsStore(os.environ["DATABASE_URL"]) if os.environ.get("DATABASE_URL") else None
+)
 machine_auth_store: MachineAuthStore | None = (
     MachineAuthStore(os.environ["DATABASE_URL"]) if os.environ.get("DATABASE_URL") else None
 )
@@ -526,6 +532,103 @@ def _machine_store() -> MachineAuthStore:
     if machine_auth_store is None:
         raise HTTPException(503, "machine authentication unavailable")
     return machine_auth_store
+
+
+class AgentRegisterRequest(BaseModel):
+    handle: str
+    public_key: str
+
+class AgentChallengeRequest(BaseModel):
+    key_fingerprint: str
+
+class AgentProofRequest(BaseModel):
+    challenge_id: uuid.UUID
+    signature: str
+
+
+def _agent_store() -> AgentCommonsStore:
+    if agent_commons_store is None:
+        raise HTTPException(503, "agent authentication unavailable")
+    return agent_commons_store
+
+
+def _agent_json(request: Request, model, **kwargs):
+    return _bounded_json(request, model, **kwargs)
+
+
+def _agent_challenge_response(challenge):
+    return {"challenge_id": str(challenge.challenge_id), "message": challenge.message, "namespace": "neenerweener-agent-v1", "expires_at": challenge.expires_at.isoformat(timespec="seconds").replace("+00:00", "Z")}
+
+
+@app.post("/api/agents/auth/register/challenge", status_code=201)
+async def agent_register_challenge(request: Request):
+    payload = await _agent_json(request, AgentRegisterRequest)
+    try:
+        challenge = await asyncio.to_thread(_agent_store().registration_challenge, payload.handle, payload.public_key, trusted_client_ip(request))
+    except AgentThrottled as exc:
+        raise HTTPException(429, "too many requests", headers={"Retry-After": str(exc.retry_after)}) from exc
+    except DuplicateRegistration as exc:
+        raise HTTPException(409, "handle or key already registered") from exc
+    except (ValueError, TypeError):
+        raise HTTPException(422, "invalid request")
+    except Exception as exc:
+        logger.warning("agent_auth.registration_challenge.failed")
+        raise HTTPException(503, "agent authentication unavailable") from exc
+    return _agent_challenge_response(challenge)
+
+
+@app.post("/api/agents/auth/register", status_code=201)
+async def agent_register(request: Request):
+    payload = await _agent_json(request, AgentProofRequest, invalid_status=401, invalid_detail="invalid key proof")
+    try:
+        principal = await asyncio.to_thread(_agent_store().register, payload.challenge_id, payload.signature, trusted_client_ip(request))
+    except AgentInvalidProof as exc:
+        raise HTTPException(401, "invalid key proof") from exc
+    except Exception as exc:
+        if isinstance(exc, ValueError): raise HTTPException(409, "handle or key already registered") from exc
+        logger.warning("agent_auth.registration.failed")
+        raise HTTPException(503, "agent authentication unavailable") from exc
+    return {"agent_id": str(principal.agent_id), "handle": principal.handle, "fingerprint": principal.fingerprint, "scopes": sorted(principal.scopes)}
+
+
+@app.post("/api/agents/auth/challenge", status_code=201)
+async def agent_challenge(request: Request):
+    payload = await _agent_json(request, AgentChallengeRequest)
+    try:
+        challenge = await asyncio.to_thread(_agent_store().challenge, payload.key_fingerprint, trusted_client_ip(request))
+    except AgentThrottled as exc:
+        raise HTTPException(429, "too many requests", headers={"Retry-After": str(exc.retry_after)}) from exc
+    except AgentInvalidProof as exc:
+        raise HTTPException(401, "invalid key proof") from exc
+    except Exception as exc:
+        logger.warning("agent_auth.challenge.failed")
+        raise HTTPException(503, "agent authentication unavailable") from exc
+    return _agent_challenge_response(challenge)
+
+
+@app.post("/api/agents/auth/token")
+async def agent_token(request: Request):
+    payload = await _agent_json(request, AgentProofRequest, invalid_status=401, invalid_detail="invalid key proof")
+    try:
+        token, principal = await asyncio.to_thread(_agent_store().token, payload.challenge_id, payload.signature, trusted_client_ip(request))
+    except AgentThrottled as exc:
+        raise HTTPException(429, "too many requests", headers={"Retry-After": str(exc.retry_after)}) from exc
+    except AgentInvalidProof as exc:
+        raise HTTPException(401, "invalid key proof") from exc
+    except Exception as exc:
+        logger.warning("agent_auth.token.failed")
+        raise HTTPException(503, "agent authentication unavailable") from exc
+    return {"access_token": token, "token_type": "Bearer", "expires_in": AGENT_TOKEN_SECONDS, "scopes": sorted(principal.scopes)}
+
+
+@app.get("/api/agents/me")
+async def agent_me(request: Request):
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer ") or auth.count(" ") != 1:
+        raise HTTPException(401, "authentication required")
+    principal = await asyncio.to_thread(_agent_store()._token_principal, auth[7:])
+    if principal is None: raise HTTPException(401, "authentication required")
+    return {"agent_id": str(principal.agent_id), **public_agent(principal.handle, principal.fingerprint), "scopes": sorted(principal.scopes), "banned": False}
 
 
 @app.post("/api/cli/auth/challenge", status_code=201)

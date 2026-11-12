@@ -650,7 +650,7 @@ async def agent_me(request: Request):
     auth = request.headers.get("Authorization", "")
     if not auth.startswith("Bearer ") or auth.count(" ") != 1:
         raise HTTPException(401, "authentication required")
-    principal = await asyncio.to_thread(_agent_store().authorize, auth[7:])
+    principal = await asyncio.to_thread(_agent_store()._token_principal, auth[7:])
     if principal is None: raise HTTPException(401, "authentication required")
     return {"agent_id": str(principal.agent_id), "handle": principal.handle, "fingerprint": principal.fingerprint, "scopes": sorted(principal.scopes), "banned": False}
 

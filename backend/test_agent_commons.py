@@ -1,7 +1,9 @@
+import asyncio
 import concurrent.futures
 import hashlib
 import os
 import subprocess
+import threading
 import uuid
 
 import pytest
@@ -30,7 +32,7 @@ from machine_auth import AuthorizedKey, Throttled, machine_auth_events, parse_ed
 def test_handle_rule_is_normalized_in_one_place():
     assert AgentCommonsStore.normalize_handle("  Agent_01 ") == "agent_01"
     assert HANDLE_PATTERN.fullmatch("a-b_c2")
-    for value in ("ab", "-agent", "agent!", "éagent", "a" * 33, *RESERVED_HANDLES):
+    for value in ("ab", "-agent", "agent!", "éagent", "Key", "a" * 33, *RESERVED_HANDLES):
         with pytest.raises(ValueError):
             AgentCommonsStore.normalize_handle(value)
 
@@ -101,7 +103,7 @@ def test_http_registration_challenge_token_and_policy_end_to_end(agent_app):
     identity = register(client, private, public)
     token = authenticate(client, store, private, identity["fingerprint"])
     assert client.get("/api/agents/me", headers={"Authorization": f"Bearer {token}"}).status_code == 200
-    assert store.authorize_mutation(token, "canvas:write").handle == "agent_one"
+    assert asyncio.run(store.authorize_mutation(token, "canvas:write", "10.0.0.1")).handle == "agent_one"
     with store.engine.connect() as connection:
         digest = connection.execute(select(agent_tokens.c.token_digest)).scalar_one()
     assert digest == hashlib.sha256(token.encode()).digest()
@@ -140,11 +142,11 @@ def test_scope_limit_is_enforced_by_single_mutation_gate(agent_app):
     identity = register(client, private, public, "scope_limit_agent")
     token = authenticate(client, store, private, identity["fingerprint"])
     original = SCOPE_LIMITS["forum:write"]
-    SCOPE_LIMITS["forum:write"] = ("agent_forum_write_test", 1, 3600)
+    SCOPE_LIMITS["forum:write"] = ("agent_forum_write_test", 1, 20, 200, 3600)
     try:
-        assert store.authorize_mutation(token, "forum:write") is not None
+        assert asyncio.run(store.authorize_mutation(token, "forum:write", "10.0.0.1")) is not None
         with pytest.raises(Throttled) as raised:
-            store.authorize_mutation(token, "forum:write")
+            asyncio.run(store.authorize_mutation(token, "forum:write", "10.0.0.1"))
         assert raised.value.args[0] > 0
     finally:
         SCOPE_LIMITS["forum:write"] = original
@@ -157,12 +159,39 @@ def test_pause_and_hard_off_deny_mutation(agent_app, monkeypatch):
     with store.engine.begin() as connection:
         connection.execute(agent_settings.update().where(agent_settings.c.id == "global").values(writes_enabled=False))
     with pytest.raises(Exception):
-        store.authorize_mutation(token, "canvas:write")
+        asyncio.run(store.authorize_mutation(token, "canvas:write", "10.0.0.1"))
     with store.engine.begin() as connection:
         connection.execute(agent_settings.update().where(agent_settings.c.id == "global").values(writes_enabled=True))
     monkeypatch.setenv("AGENT_COMMONS_WRITES_ENABLED", "0")
     with pytest.raises(Exception):
-        store.authorize_mutation(token, "canvas:write")
+        asyncio.run(store.authorize_mutation(token, "canvas:write", "10.0.0.1"))
+
+
+def test_pause_blocks_all_agent_state_routes(agent_app, monkeypatch):
+    client, store, private, public = agent_app
+    identity = register(client, private, public, "pause_routes_agent")
+    registration_private = private.with_name("pause-registration")
+    subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(registration_private)], check=True)
+    registration_public = " ".join(registration_private.with_suffix(".pub").read_text().split()[:2])
+    registration = client.post("/api/agents/auth/register/challenge", json={"handle": "pause_routes_new", "public_key": registration_public})
+    auth_challenge = client.post("/api/agents/auth/challenge", json={"key_fingerprint": identity["fingerprint"]})
+    assert registration.status_code == auth_challenge.status_code == 201
+    sources = ("database", "environment")
+    for source in sources:
+        if source == "database":
+            with store.engine.begin() as connection:
+                connection.execute(agent_settings.update().where(agent_settings.c.id == "global").values(writes_enabled=False))
+        else:
+            monkeypatch.setenv("AGENT_COMMONS_WRITES_ENABLED", "0")
+        assert client.post("/api/agents/auth/register/challenge", json={"handle": "paused_new", "public_key": public}).status_code == 503
+        assert client.post("/api/agents/auth/register", json={"challenge_id": registration.json()["challenge_id"], "signature": sign(registration_private, registration.json()["message"])}).status_code == 503
+        assert client.post("/api/agents/auth/challenge", json={"key_fingerprint": identity["fingerprint"]}).status_code == 503
+        assert client.post("/api/agents/auth/token", json={"challenge_id": auth_challenge.json()["challenge_id"], "signature": sign(private, auth_challenge.json()["message"])}).status_code == 503
+        if source == "database":
+            with store.engine.begin() as connection:
+                connection.execute(agent_settings.update().where(agent_settings.c.id == "global").values(writes_enabled=True))
+        else:
+            monkeypatch.delenv("AGENT_COMMONS_WRITES_ENABLED")
 
 
 def test_request_byte_limit_and_retry_after(agent_app):
@@ -195,10 +224,57 @@ def test_expiry_revocation_and_ban_are_denials(agent_app):
     token = authenticate(client, store, private, identity["fingerprint"])
     agent_id = uuid.UUID(identity["agent_id"])
     store.revoke(agent_id)
-    assert store.authorize_mutation(token, "canvas:write") is None
+    assert asyncio.run(store.authorize_mutation(token, "canvas:write", "10.0.0.1")) is None
     token = authenticate(client, store, private, identity["fingerprint"])
     store.ban(agent_id)
-    assert store.authorize_mutation(token, "canvas:write") is None
+    assert asyncio.run(store.authorize_mutation(token, "canvas:write", "10.0.0.1")) is None
+
+
+def test_scope_gate_enforces_ip_and_global_dimensions(agent_app):
+    client, store, private, public = agent_app
+    first = register(client, private, public, "ip_limit_one")
+    second_private = private.with_name("agent-two")
+    subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(second_private)], check=True)
+    second_public = " ".join(second_private.with_suffix(".pub").read_text().split()[:2])
+    second = register(client, second_private, second_public, "ip_limit_two")
+    token_one = authenticate(client, store, private, first["fingerprint"])
+    token_two = authenticate(client, store, second_private, second["fingerprint"])
+    original = SCOPE_LIMITS["forum:write"]
+    SCOPE_LIMITS["forum:write"] = ("agent_forum_write_test", 100, 1, 2, 3600)
+    try:
+        assert asyncio.run(store.authorize_mutation(token_one, "forum:write", "10.0.0.9"))
+        with pytest.raises(Throttled):
+            asyncio.run(store.authorize_mutation(token_two, "forum:write", "10.0.0.9"))
+        assert asyncio.run(store.authorize_mutation(token_two, "forum:write", "10.0.0.10"))
+        with pytest.raises(Throttled):
+            asyncio.run(store.authorize_mutation(token_two, "forum:write", "10.0.0.11"))
+    finally:
+        SCOPE_LIMITS["forum:write"] = original
+
+
+def test_async_mutation_gate_does_not_block_event_loop(monkeypatch):
+    store = AgentCommonsStore.__new__(AgentCommonsStore)
+    started = threading.Event()
+    release = threading.Event()
+
+    def blocked(token, scope, client_ip):
+        import time
+        started.set()
+        while not release.is_set():
+            time.sleep(0.001)
+        return "ok"
+
+    monkeypatch.setattr(store, "_authorize_mutation", blocked)
+
+    async def exercise():
+        task = asyncio.create_task(store.authorize_mutation("token", "canvas:write", "127.0.0.1"))
+        await asyncio.wait_for(asyncio.to_thread(started.wait, 2), 2)
+        await asyncio.sleep(0)
+        assert not task.done()
+        release.set()
+        assert await asyncio.wait_for(task, 2) == "ok"
+
+    asyncio.run(exercise())
 
 
 def test_failed_proofs_hit_key_limit_with_retry_after(agent_app):

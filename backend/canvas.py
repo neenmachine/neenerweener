@@ -3,8 +3,7 @@ from __future__ import annotations
 
 import base64
 import io
-import math
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from PIL import Image
 from sqlalchemy import BigInteger, Column, DateTime, ForeignKey, SmallInteger, Table, Text, delete, select, text
@@ -18,23 +17,16 @@ from timeline import database_engine, metadata
 WIDTH = HEIGHT = 64
 EMPTY = 255
 PALETTE = ("#000000", "#ffffff", "#e6194b", "#3cb44b", "#ffe119", "#4363d8", "#f58231", "#911eb4", "#46f0f0", "#f032e6", "#bcf60c", "#fabebe", "#008080", "#e6beff", "#9a6324", "#808000")
-COOLDOWN = timedelta(seconds=30)
 canvas_events = Table("canvas_events", metadata, Column("revision", BigInteger), Column("x", SmallInteger), Column("y", SmallInteger), Column("color", SmallInteger), Column("agent_id", UUID(as_uuid=True)), Column("event_kind", Text), Column("created_at", DateTime(timezone=True)), Column("clear_bounds", JSONB))
 canvas_cells = Table("canvas_cells", metadata, Column("x", SmallInteger), Column("y", SmallInteger), Column("color", SmallInteger), Column("revision", BigInteger), Column("agent_id", UUID(as_uuid=True)), Column("updated_at", DateTime(timezone=True)))
-canvas_cooldowns = Table("canvas_cooldowns", metadata, Column("fingerprint", Text), Column("placed_at", DateTime(timezone=True)))
 
 
 async def authorize_canvas_write(store: AgentCommonsStore, token: str, client_ip: str | None) -> AgentPrincipal:
     """The sole canvas caller of the shared agent mutation policy."""
-    principal = await store.authorize_mutation(token, "canvas:write", client_ip)
+    principal = await store.authorize_mutation(token, "canvas:pixel", client_ip)
     if principal is None:
         raise PermissionError
     return principal
-
-
-class CanvasCooldown(Exception):
-    def __init__(self, retry_after: int):
-        self.retry_after = retry_after
 
 
 class CanvasStore:
@@ -49,13 +41,9 @@ class CanvasStore:
         now = datetime.now(timezone.utc)
         with self.engine.begin() as c:
             self._lock(c)
-            last = c.execute(select(canvas_cooldowns.c.placed_at).where(canvas_cooldowns.c.fingerprint == principal.fingerprint)).scalar_one_or_none()
-            if last is not None and last + COOLDOWN > now:
-                raise CanvasCooldown(max(1, math.ceil((last + COOLDOWN - now).total_seconds())))
             revision = c.execute(insert(canvas_events).values(x=x, y=y, color=color, agent_id=principal.agent_id, event_kind="place", created_at=now).returning(canvas_events.c.revision)).scalar_one()
             c.execute(insert(canvas_cells).values(x=x, y=y, color=color, revision=revision, agent_id=principal.agent_id, updated_at=now).on_conflict_do_update(index_elements=[canvas_cells.c.x, canvas_cells.c.y], set_=dict(color=color, revision=revision, agent_id=principal.agent_id, updated_at=now)))
-            c.execute(text("INSERT INTO canvas_cooldowns (fingerprint, placed_at) VALUES (:f, :t) ON CONFLICT (fingerprint) DO UPDATE SET placed_at=:t"), {"f": principal.fingerprint, "t": now})
-        return {"revision": revision, "x": x, "y": y, "color": color, **public_agent(principal.handle, principal.fingerprint), "next_allowed_at": (now + COOLDOWN).isoformat().replace("+00:00", "Z")}
+        return {"revision": revision, "x": x, "y": y, "color": color, **public_agent(principal.handle, principal.fingerprint)}
 
     def snapshot(self) -> tuple[int, bytes]:
         with self.engine.begin() as c:

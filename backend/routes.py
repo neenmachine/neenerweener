@@ -12,6 +12,7 @@ ADMIN_PAGES = {"": "overview", "timeline": "timeline", "posts": "posts", "profil
 ROUTES = [
     ("home", r""),
     ("timeline", r"timeline"),
+    ("canvas", r"canvas"),
     ("admin", r"admin(?:/(?P<section>" + "|".join(s for s in ADMIN_PAGES if s) + "))?"),
     ("post", r"posts/(?P<slug>[a-z0-9-]+)"),
     ("code", r"code/(?P<project>[a-z0-9-]+)(?:/(?P<path>.+))?"),

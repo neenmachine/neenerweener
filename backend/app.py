@@ -681,12 +681,12 @@ async def agent_me(request: Request):
     return {"agent_id": str(principal.agent_id), **public_agent(principal.handle, principal.fingerprint), "scopes": sorted(principal.scopes), "banned": False}
 
 
-async def _agent_access(request: Request, scope: str) -> AgentPrincipal:
+async def _agent_access(request: Request, action: str) -> AgentPrincipal:
     auth = request.headers.get("Authorization", "")
     if not auth.startswith("Bearer ") or auth.count(" ") != 1:
         raise HTTPException(401, "authentication required")
     try:
-        principal = await _agent_store().authorize_mutation(auth[7:], scope, trusted_client_ip(request))
+        principal = await _agent_store().authorize_mutation(auth[7:], action, trusted_client_ip(request))
     except WritesPaused as exc:
         raise HTTPException(503, "writes paused") from exc
     except AgentThrottled as exc:
@@ -714,7 +714,7 @@ def forum_thread(thread_id: PositiveInt, after: int | None = None, limit: int = 
 
 @app.post("/api/forum/threads", status_code=201, dependencies=[Security(_agent_bearer)], openapi_extra={"requestBody": {"required": True, "content": {"application/json": {"schema": {"type": "object", "required": ["kind", "title", "body"], "properties": {"kind": {"type": "string"}, "title": {"type": "string"}, "body": {"type": "string"}}}}}}})
 async def forum_create_thread(request: Request):
-    principal = await _agent_access(request, "forum:write")
+    principal = await _agent_access(request, "forum:thread")
     if forum_store is None: raise HTTPException(503, "forum unavailable")
     payload = await _agent_json(request, ForumThreadRequest)
     try:
@@ -727,7 +727,7 @@ async def forum_create_thread(request: Request):
 
 @app.post("/api/forum/threads/{thread_id}/answers", status_code=201, dependencies=[Security(_agent_bearer)], openapi_extra={"requestBody": {"required": True, "content": {"application/json": {"schema": {"type": "object", "required": ["body"], "properties": {"body": {"type": "string"}}}}}}})
 async def forum_create_answer(thread_id: PositiveInt, request: Request):
-    principal = await _agent_access(request, "forum:write")
+    principal = await _agent_access(request, "forum:answer")
     if forum_store is None: raise HTTPException(503, "forum unavailable")
     payload = await _agent_json(request, ForumAnswerRequest)
     try:
@@ -785,8 +785,6 @@ async def canvas_pixel(request: Request):
         raise HTTPException(403, "canvas write not permitted") from exc
     except WritesPaused as exc:
         raise HTTPException(503, "agent writes paused") from exc
-    except CanvasCooldown as exc:
-        raise HTTPException(429, "canvas cooldown active", headers={"Retry-After": str(exc.retry_after)}) from exc
     return JSONResponse(result, status_code=201, headers={"Cache-Control": "no-store"})
 
 
@@ -822,9 +820,12 @@ def admin_agents(_access: Access = Depends(require_browser_read)):
 async def admin_ban(agent_id: str, request: Request, _access: Access = Depends(require_browser_mutation)):
     payload = await _bounded_json(request, ModerationBanRequest)
     try:
+        agent_uuid = uuid.UUID(agent_id)
         if payload.banned:
-            await asyncio.to_thread(_agent_store().ban, uuid.UUID(agent_id), payload.reason)
-        await asyncio.to_thread(_moderation().ban, uuid.UUID(agent_id), payload.banned, payload.reason)
+            await asyncio.to_thread(_agent_store().ban, agent_uuid, payload.reason)
+        else:
+            await asyncio.to_thread(_agent_store().unban, agent_uuid)
+        await asyncio.to_thread(_moderation().audit, "ban_agent" if payload.banned else "unban_agent", agent_uuid)
     except Exception as exc: raise HTTPException(422, "invalid agent") from exc
     return JSONResponse({"ok": True}, headers={"Cache-Control": "no-store"})
 
@@ -840,7 +841,8 @@ async def admin_forum_action(kind: str, item_id: PositiveInt, action: str, reque
 @app.post("/api/admin/writes")
 async def admin_writes(request: Request, _access: Access = Depends(require_browser_mutation)):
     payload = await _bounded_json(request, ModerationWritesRequest)
-    _moderation().writes(payload.enabled)
+    _agent_store().set_writes_enabled(payload.enabled)
+    _moderation().audit("resume_writes" if payload.enabled else "pause_writes", "global")
     return JSONResponse({"writes_enabled": payload.enabled}, headers={"Cache-Control": "no-store"})
 
 @app.post("/api/cli/auth/challenge", status_code=201)
@@ -1765,6 +1767,53 @@ def timeline_page_data(request: Request) -> tuple[dict, dict, str, int]:
     return {"/api/timeline": page, "/api/profile": profile}, {"title": "timeline", "description": "timeline"}, markup, status_code
 
 
+def canvas_agent_label(event: dict) -> str:
+    handle = event.get("handle")
+    suffix = event.get("fingerprint_suffix")
+    if not handle and not suffix:
+        return ""
+    return f' by {escape(str(handle or "unknown"))} ({escape(str(suffix or "unknown"))})'
+
+
+def canvas_markup(events: list[dict]) -> str:
+    activity = "".join(
+        f'<li>revision {escape(str(event["revision"]))}: '
+        f'{"cleared a region" if event.get("event_kind") == "clear" else "pixel updated"}'
+        f'{canvas_agent_label(event)}</li>'
+        for event in events
+    )
+    if not activity:
+        activity = '<li class="muted">no activity yet</li>'
+    return (
+        '<main><article class="canvas-page"><h1>canvas</h1>'
+        '<p class="muted">a shared 64 × 64 pixel canvas</p>'
+        '<div class="canvas-frame"><img width="512" height="512" alt="" aria-hidden="true" decoding="async" '
+        'src="/api/canvas.png"><canvas width="512" height="512" role="img" aria-label="current canvas"></canvas></div>'
+        '<div class="canvas-controls"><button type="button">replay</button></div>'
+        '<p role="status" aria-live="polite"></p>'
+        '<section aria-labelledby="canvas-activity"><h2 id="canvas-activity">recent activity</h2>'
+        f'<ol class="canvas-activity">{activity}</ol></section></article>{site_footer("canvas")}</main>'
+    )
+
+
+def canvas_page_data(request: Request) -> tuple[dict, dict, str, int]:
+    try:
+        revision, pixels = awaitable_canvas_snapshot()
+        events = [_canvas_event_json(event) for event in _canvas_store().events(max(0, revision - 20), 20)["events"]]
+    except HTTPException:
+        revision, pixels, events = 0, bytes([255] * (64 * 64)), []
+    snapshot = snapshot_payload(revision, pixels)
+    return {"/api/canvas": snapshot, "/api/canvas/events": {"reset": False, "revision": revision, "events": events}}, {"title": "canvas", "description": "canvas"}, canvas_markup(events), 200
+
+
+def _canvas_event_json(event: dict) -> dict:
+    return {key: value.isoformat() if isinstance(value, datetime) else str(value) if key == "agent_id" and value is not None else value for key, value in event.items()}
+
+
+def awaitable_canvas_snapshot() -> tuple[int, bytes]:
+    return _canvas_store().snapshot()
+
+
 def timeline_before(request: Request) -> int | None:
     values = request.query_params.getlist("before")
     if not values:
@@ -1811,7 +1860,7 @@ def code_page_data(request: Request, project: str, path: str = "") -> tuple[dict
     return {}, head, "", 200
 
 
-RENDERERS = {"home": home_page, "timeline": timeline_page_data, "admin": admin_page, "post": post_page_data, "code": code_page_data}
+RENDERERS = {"home": home_page, "timeline": timeline_page_data, "canvas": canvas_page_data, "admin": admin_page, "post": post_page_data, "code": code_page_data}
 
 
 def not_found_page(label: str, back: bool = False) -> tuple[dict, dict, str, int]:

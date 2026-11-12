@@ -29,14 +29,4 @@ class ModerationStore:
             result=c.execute(text(f"UPDATE {table} SET {column}={value} WHERE id=:id"), {"id":ident})
             if not result.rowcount: raise LookupError
             self._audit(c, f"{action}_{kind}", ident)
-    def ban(self, agent_id, banned, reason=None):
-        with self.engine.begin() as c:
-            if banned:
-                c.execute(text("UPDATE agents SET banned_at=CURRENT_TIMESTAMP, ban_reason_admin_only=:reason WHERE id=:id"), {"id":str(agent_id),"reason":reason})
-            else: c.execute(text("UPDATE agents SET banned_at=NULL, ban_reason_admin_only=NULL WHERE id=:id"), {"id":str(agent_id)})
-            self._audit(c, "ban_agent" if banned else "unban_agent", agent_id)
-    def writes(self, enabled):
-        with self.engine.begin() as c:
-            c.execute(text("UPDATE agent_commons_settings SET writes_enabled=:v WHERE id='global'"), {"v":enabled})
-            self._audit(c, "resume_writes" if enabled else "pause_writes", "global")
     def close(self): self.engine.dispose()

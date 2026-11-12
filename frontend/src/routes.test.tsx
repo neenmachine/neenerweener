@@ -57,7 +57,7 @@ test.each(pages.map((row) => [row.path, row] as const))("%s has one footer rss l
   expect(footer.querySelectorAll('a[href="/feed.xml"]')).toHaveLength(1);
   expect(footer.querySelector('a[href="/feed.xml"]')!.outerHTML).toBe('<a href="/feed.xml">rss</a>');
   const current = [...footer.querySelectorAll('a[aria-current="page"]')].map((a) => a.getAttribute("href"));
-  expect(current).toEqual(({ "/": ["/"], "/timeline": ["/timeline"] } as Record<string, string[]>)[row.path] ?? []);
+  expect(current).toEqual(({ "/": ["/"], "/timeline": ["/timeline"], "/canvas": ["/canvas"] } as Record<string, string[]>)[row.path] ?? []);
 });
 
 test("rendering a code page keeps the server document title", async () => {

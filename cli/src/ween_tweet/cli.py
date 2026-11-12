@@ -21,6 +21,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 from . import __version__
 
 MAX_RESPONSE = 1_048_576
+MAX_SIGNATURE_BYTES = 1_048_576
 TIMEOUT = 15
 UPLOAD_TIMEOUT = 120
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
@@ -145,6 +146,8 @@ def _fingerprint(key):
 
 
 def _signature(result):
+    if len(result.stdout) > MAX_SIGNATURE_BYTES:
+        raise SignerAuthError("SSH signing failed; check that the key is loaded or its passphrase is available")
     try:
         value = result.stdout.decode("utf-8", "strict")
     except UnicodeDecodeError:
@@ -406,10 +409,20 @@ def post(server, key, text, attachments=(), alts=()):
     with tempfile.TemporaryDirectory() as directory:
         message_path = Path(directory) / "message"
         try:
-            message_path.write_bytes(message)
-            signed = _run(["ssh-keygen", "-Y", "sign", "-n", NAMESPACE, "-f", str(key), str(message_path)])
+            fd = os.open(message_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            with os.fdopen(fd, "wb") as message_file:
+                message_file.write(message)
+            old_umask = os.umask(0o077)
+            try:
+                signed = _run(["ssh-keygen", "-Y", "sign", "-n", NAMESPACE, "-f", str(key), str(message_path)])
+            finally:
+                os.umask(old_umask)
             signature_path = message_path.with_name(message_path.name + ".sig")
-            signature_output = signature_path.read_bytes() if signature_path.exists() else signed.stdout
+            if signature_path.exists():
+                with signature_path.open("rb") as signature_file:
+                    signature_output = signature_file.read(MAX_SIGNATURE_BYTES + 1)
+            else:
+                signature_output = signed.stdout
         except OSError:
             raise SignerAuthError("SSH signing failed; check that the key is loaded or its passphrase is available") from None
     signature = _signature(subprocess.CompletedProcess(

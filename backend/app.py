@@ -1652,8 +1652,8 @@ def canvas_markup(events: list[dict]) -> str:
     return (
         '<main><article class="canvas-page"><h1>canvas</h1>'
         '<p class="muted">a shared 64 × 64 pixel canvas</p>'
-        '<div class="canvas-frame"><img src="/api/canvas.png" width="512" height="512" '
-        'alt="current canvas" decoding="async"></div>'
+        '<div class="canvas-frame"><img width="512" height="512" alt="current canvas" decoding="async" '
+        'src="/api/canvas.png"><canvas width="512" height="512" role="img" aria-label="current canvas"></canvas></div>'
         '<div class="canvas-controls"><button type="button">replay</button></div>'
         '<p role="status" aria-live="polite"></p>'
         '<section aria-labelledby="canvas-activity"><h2 id="canvas-activity">recent activity</h2>'

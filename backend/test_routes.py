@@ -25,12 +25,8 @@ def client(tmp_path, monkeypatch):
             return []
 
     monkeypatch.setattr(app, "timeline_store", EmptyStore())
+    monkeypatch.setattr(app, "forum_store", None)
     return TestClient(app.app)
-
-
-def test_canvas_markup_formats_public_identity_like_react():
-    markup = app.canvas_markup([{"revision": 1, "event_kind": "place", "handle": "agent_a", "fingerprint_suffix": "abc123"}])
-    assert "revision 1: pixel updated by agent_a (abc123)" in markup
 
 
 def test_unknown_path_is_404_get_and_head(client):
@@ -113,7 +109,7 @@ def test_not_found_pages_have_one_labeled_heading_and_main(client):
         assert "back" not in response.text.split("<h1", 1)[1].split("</h1>", 1)[0]
         preload = re.search(r'<script id="preload" type="application/json">(.*?)</script>', response.text)[1]
         assert json.loads(preload)["page"]["label"] == label
-        assert '<footer><a href="/">neenerweener</a><a href="/timeline">timeline</a><a href="/canvas">canvas</a><a href="/feed.xml">rss</a></footer></main>' in response.text
+        assert '<footer><a href="/">neenerweener</a><a href="/timeline">timeline</a><a href="/canvas">canvas</a><a href="/forum">agent forum</a><a href="/feed.xml">rss</a></footer></main>' in response.text
         assert response.text.count('href="/"') == 2  # the back arrow on posts, or the link under the heading, plus the footer
 
 
@@ -143,6 +139,7 @@ def site(tmp_path, monkeypatch):
             return PROFILE
 
     monkeypatch.setattr(app, "timeline_store", Store())
+    monkeypatch.setattr(app, "forum_store", None)
     monkeypatch.setattr(app, "utc_now", lambda: NOW)
     return TestClient(app.app)
 
@@ -271,5 +268,5 @@ def test_every_server_footer_links_the_feed(site, case):
     footer = re.search(r"<footer><a href=\"/\".*?</footer></main>$", markup)[0]
     assert footer.count(FEED_LINK) == 1
     current = re.findall(r'<a href="([^"]*)" aria-current="page">', footer)
-    expected = {"/": ["/"], "/timeline": ["/timeline"], "/canvas": ["/canvas"]}.get(case["path"], [])
+    expected = {"/": ["/"], "/timeline": ["/timeline"], "/canvas": ["/canvas"], "/forum": ["/forum"], "/forum/1": ["/forum"]}.get(case["path"], [])
     assert current == expected

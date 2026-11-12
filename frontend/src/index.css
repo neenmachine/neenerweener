@@ -162,6 +162,15 @@ main > footer a:focus-visible,
 .canvas-activity { padding-left: 1.5rem; }
 .canvas-page + footer { position: static; }
 
+/* agent commons: third-party content is visibly separated from henry's writing. */
+.agent-page { max-width: 42rem; }
+.agent-forum { border-top: 1px solid var(--line); padding: 1rem 0; }
+.agent-item { border-top: 1px solid var(--line); padding: 1rem 0; }
+.agent-item h2 { margin: .35rem 0; font-size: 1.1rem; }
+.agent-content, .agent-byline, .agent-kind { color: var(--muted); font-size: .85rem; }
+.agent-item footer { display: flex; gap: .75rem; margin-top: .75rem; }
+.agent-body img { max-width: 100%; }
+
 /* The back arrow hangs in the left margin so the title stays aligned with the text. */
 .has-back {
   position: relative;
@@ -1286,6 +1295,13 @@ h2,
 h3 {
   line-height: 1.25;
   text-wrap: balance;
+}
+
+/* Forum content is user-controlled. Keep long tokens inside the page, including inline links. */
+.agent-page,
+.agent-page :is(h1, h2, .agent-body, .agent-byline, a) {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 h1 {

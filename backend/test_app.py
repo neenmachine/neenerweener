@@ -109,7 +109,7 @@ def test_only_admin_page_has_no_javascript_notice(tmp_path, monkeypatch):
             visible = re.sub(r"<noscript>.*?</noscript>", "", page, flags=re.S)
             assert visible.count("<h1") == page.count("<h1") == 1
             assert '<article class="admin"><div class="admin-head"><h1>admin</h1></div>' in visible
-            assert '<footer><a href="/">neenerweener</a><a href="/timeline">timeline</a><a href="/canvas">canvas</a><a href="/feed.xml">rss</a></footer>' in visible
+            assert '<footer><a href="/">neenerweener</a><a href="/timeline">timeline</a><a href="/canvas">canvas</a><a href="/forum">agent forum</a><a href="/feed.xml">rss</a></footer>' in visible
         for path in ("/", "/timeline", "/posts/hello"):
             page = client.get(path)
             assert page.status_code in (200, 503)  # 503: /timeline has no database in tests
@@ -586,7 +586,7 @@ def test_server_rendered_pages(tmp_path, monkeypatch):
     assert page.count("<title>") == 1
     assert '<meta property="og:description" content="First para here." />' in page
     assert '<div id="root"><main><article><div class="has-back post-head">' in page
-    assert '<footer><a href="/">neenerweener</a><a href="/timeline">timeline</a><a href="/canvas">canvas</a><a href="/feed.xml">rss</a></footer>' in page
+    assert '<footer><a href="/">neenerweener</a><a href="/timeline">timeline</a><a href="/canvas">canvas</a><a href="/forum">agent forum</a><a href="/feed.xml">rss</a></footer>' in page
     assert '<a href="/?tag=a">#a</a>' in page
     preload = page.split('<script id="preload" type="application/json">')[1].split("</script>")[0]
     assert "<" not in preload  # post text cannot close the script tag
@@ -606,7 +606,7 @@ def test_server_rendered_pages(tmp_path, monkeypatch):
     assert '>jan 1<' in timeline
     # this store has no profile, so the page shows the migration's defaults instead of failing
     assert '<div class="avatar" aria-hidden="true">N</div><div class="entry-main"><header><span class="name">neenerweener</span><span class="when">' in timeline
-    assert '<footer><a href="/">neenerweener</a><a href="/timeline" aria-current="page">timeline</a><a href="/canvas">canvas</a><a href="/feed.xml">rss</a></footer>' in timeline
+    assert '<footer><a href="/">neenerweener</a><a href="/timeline" aria-current="page">timeline</a><a href="/canvas">canvas</a><a href="/forum">agent forum</a><a href="/feed.xml">rss</a></footer>' in timeline
     assert "first &amp; &lt;safe&gt;" in timeline
     assert '"/api/timeline"' in timeline
     assert "<" not in timeline.split('<script id="preload" type="application/json">')[1].split("</script>")[0]

@@ -15,12 +15,12 @@ from urllib.parse import quote
 
 import yaml
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, Response, Security
-from fastapi.security import HTTPBearer
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.security import HTTPBearer
 from markdown_it import MarkdownIt
 from mdit_py_plugins.dollarmath import dollarmath_plugin
 from pydantic import BaseModel, ConfigDict, PositiveInt, ValidationError
@@ -30,11 +30,11 @@ from pygments.lexers import TextLexer, get_lexer_by_name, get_lexer_for_filename
 from pygments.util import ClassNotFound
 
 from anchors import add_heading_anchors
-from agent_commons import AgentCommonsStore, AgentPrincipal, DuplicateRegistration, InvalidProof as AgentInvalidProof, Throttled as AgentThrottled, public_agent, WritesPaused, AGENT_SCOPES, CHALLENGE_SECONDS as AGENT_CHALLENGE_SECONDS, TOKEN_SECONDS as AGENT_TOKEN_SECONDS
+from agent_commons import AgentCommonsStore, AgentPrincipal, DuplicateRegistration, InvalidProof as AgentInvalidProof, Throttled as AgentThrottled, public_agent, AGENT_SCOPES, CHALLENGE_SECONDS as AGENT_CHALLENGE_SECONDS, TOKEN_SECONDS as AGENT_TOKEN_SECONDS, WritesPaused
 from canvas import CanvasStore, authorize_canvas_write, png_bytes, snapshot_payload
 from forum import ForumStore
 from operations import check_readiness, configure_logging, load_schema_heads
-from page_markup import home_markup, site_footer
+from page_markup import home_markup, site_footer, forum_markup, forum_thread_markup
 import post_images
 from post_catalog import CatalogUnavailable, PostCatalog, PostRedirect
 import posts
@@ -147,10 +147,10 @@ async def lifespan(_app):
         await asyncio.to_thread(machine_auth_store.close)
     if agent_commons_store is not None:
         await asyncio.to_thread(agent_commons_store.close)
-    if forum_store is not None:
-        await asyncio.to_thread(forum_store.close)
     if canvas_store is not None:
         await asyncio.to_thread(canvas_store.close)
+    if forum_store is not None:
+        await asyncio.to_thread(forum_store.close)
     if post_store is not None:
         await asyncio.to_thread(post_store.close)
 
@@ -173,10 +173,10 @@ auth_store: AuthStore | None = AuthStore(os.environ["DATABASE_URL"]) if os.envir
 agent_commons_store: AgentCommonsStore | None = (
     AgentCommonsStore(os.environ["DATABASE_URL"]) if os.environ.get("DATABASE_URL") else None
 )
-forum_store: ForumStore | None = ForumStore(os.environ["DATABASE_URL"]) if os.environ.get("DATABASE_URL") else None
 canvas_store: CanvasStore | None = (
     CanvasStore(os.environ["DATABASE_URL"]) if os.environ.get("DATABASE_URL") else None
 )
+forum_store: ForumStore | None = ForumStore(os.environ["DATABASE_URL"]) if os.environ.get("DATABASE_URL") else None
 machine_auth_store: MachineAuthStore | None = (
     MachineAuthStore(os.environ["DATABASE_URL"]) if os.environ.get("DATABASE_URL") else None
 )
@@ -667,64 +667,6 @@ async def agent_me(request: Request):
     return {"agent_id": str(principal.agent_id), **public_agent(principal.handle, principal.fingerprint), "scopes": sorted(principal.scopes), "banned": False}
 
 
-async def _agent_access(request: Request, action: str) -> AgentPrincipal:
-    auth = request.headers.get("Authorization", "")
-    if not auth.startswith("Bearer ") or auth.count(" ") != 1:
-        raise HTTPException(401, "authentication required")
-    try:
-        principal = await _agent_store().authorize_mutation(auth[7:], action, trusted_client_ip(request))
-    except WritesPaused as exc:
-        raise HTTPException(503, "writes paused") from exc
-    except AgentThrottled as exc:
-        raise HTTPException(429, "too many requests", headers={"Retry-After": str(exc.retry_after)}) from exc
-    if principal is None: raise HTTPException(401, "authentication required")
-    return principal
-
-
-def _forum_payload(row: dict) -> dict:
-    payload = {k: v for k, v in row.items() if k not in {"body_markdown", "body_html", "agent_id", "handle", "fingerprint"}} | {"body": row["body_html"]}
-    return payload | {"agent": public_agent(row.get("handle") or "", row.get("fingerprint") or "")}
-
-@app.get("/api/forum")
-def forum_list(before: int | None = None, limit: int = Query(20, ge=1, le=100)):
-    if forum_store is None: raise HTTPException(503, "forum unavailable")
-    return {"threads": [_forum_payload(r) for r in forum_store.list_threads(before, limit)]}
-
-@app.get("/api/forum/threads/{thread_id}")
-def forum_thread(thread_id: PositiveInt, after: int | None = None, limit: int = Query(100, ge=1, le=100)):
-    if forum_store is None: raise HTTPException(503, "forum unavailable")
-    row = forum_store.get_thread(thread_id, after=after, limit=limit)
-    if row is None: raise HTTPException(404, "thread not found")
-    result = _forum_payload(row); result["answers"] = [_forum_payload(a) for a in row["answers"]]
-    return result
-
-@app.post("/api/forum/threads", status_code=201, dependencies=[Security(_agent_bearer)], openapi_extra={"requestBody": {"required": True, "content": {"application/json": {"schema": {"type": "object", "required": ["kind", "title", "body"], "properties": {"kind": {"type": "string"}, "title": {"type": "string"}, "body": {"type": "string"}}}}}}})
-async def forum_create_thread(request: Request):
-    principal = await _agent_access(request, "forum:thread")
-    if forum_store is None: raise HTTPException(503, "forum unavailable")
-    payload = await _agent_json(request, ForumThreadRequest)
-    try:
-        def create():
-            return forum_store.create_thread(principal.agent_id, payload.kind, payload.title, payload.body)
-        created = await asyncio.to_thread(create)
-        created.update(handle=principal.handle, fingerprint=principal.fingerprint)
-        return _forum_payload(created)
-    except ValueError as exc: raise HTTPException(422, "content not allowed" if str(exc) == "content not allowed" else "invalid forum content") from exc
-
-@app.post("/api/forum/threads/{thread_id}/answers", status_code=201, dependencies=[Security(_agent_bearer)], openapi_extra={"requestBody": {"required": True, "content": {"application/json": {"schema": {"type": "object", "required": ["body"], "properties": {"body": {"type": "string"}}}}}}})
-async def forum_create_answer(thread_id: PositiveInt, request: Request):
-    principal = await _agent_access(request, "forum:answer")
-    if forum_store is None: raise HTTPException(503, "forum unavailable")
-    payload = await _agent_json(request, ForumAnswerRequest)
-    try:
-        def create():
-            return forum_store.create_answer(principal.agent_id, thread_id, payload.body)
-        created = await asyncio.to_thread(create)
-        created.update(handle=principal.handle, fingerprint=principal.fingerprint)
-        return _forum_payload(created)
-    except LookupError as exc: raise HTTPException(404, "thread not found") from exc
-    except ValueError as exc: raise HTTPException(422, "content not allowed" if str(exc) == "content not allowed" else "invalid forum content") from exc
-
 def _canvas_store() -> CanvasStore:
     if canvas_store is None:
         raise HTTPException(503, "canvas unavailable")
@@ -790,6 +732,68 @@ async def canvas_clear(request: Request, _access: Access = Depends(require_brows
     return JSONResponse({"revision": revision}, headers={"Cache-Control": "no-store"})
 
 
+async def _agent_access(request: Request, action: str) -> AgentPrincipal:
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer ") or auth.count(" ") != 1:
+        raise HTTPException(401, "authentication required")
+    try:
+        principal = await _agent_store().authorize_mutation(auth[7:], action, trusted_client_ip(request))
+    except WritesPaused as exc:
+        raise HTTPException(503, "writes paused") from exc
+    except AgentThrottled as exc:
+        raise HTTPException(429, "too many requests", headers={"Retry-After": str(exc.retry_after)}) from exc
+    if principal is None: raise HTTPException(401, "authentication required")
+    return principal
+
+
+def _forum_payload(row: dict) -> dict:
+    payload = {k: v for k, v in row.items() if k not in {"body_markdown", "body_html", "agent_id", "handle", "fingerprint", "answers"}} | {"body": row["body_html"]}
+    return payload | {"agent": public_agent(row.get("handle") or "", row.get("fingerprint") or "")}
+
+
+def _forum_thread_payload(row: dict) -> dict:
+    payload = _forum_payload(row)
+    payload["answers"] = [_forum_payload(answer) for answer in row.get("answers", [])]
+    return payload
+
+@app.get("/api/forum")
+def forum_list(request: Request, before: int | None = None, limit: int = Query(20, ge=1, le=100)):
+    if forum_store is None: raise HTTPException(503, "forum unavailable")
+    return _json_etag_response(request, {"threads": [_forum_payload(r) for r in forum_store.list_threads(before, limit)]})
+
+@app.get("/api/forum/threads/{thread_id}")
+def forum_thread(request: Request, thread_id: PositiveInt, after: int | None = None, limit: int = Query(100, ge=1, le=100)):
+    if forum_store is None: raise HTTPException(503, "forum unavailable")
+    row = forum_store.get_thread(thread_id, after=after, limit=limit)
+    if row is None: raise HTTPException(404, "thread not found")
+    return _json_etag_response(request, _forum_thread_payload(row))
+
+@app.post("/api/forum/threads", status_code=201, dependencies=[Security(_agent_bearer)], openapi_extra={"requestBody": {"required": True, "content": {"application/json": {"schema": {"type": "object", "required": ["kind", "title", "body"], "properties": {"kind": {"type": "string"}, "title": {"type": "string"}, "body": {"type": "string"}}}}}}})
+async def forum_create_thread(request: Request):
+    principal = await _agent_access(request, "forum:thread")
+    if forum_store is None: raise HTTPException(503, "forum unavailable")
+    payload = await _agent_json(request, ForumThreadRequest)
+    try:
+        def create():
+            return forum_store.create_thread(principal.agent_id, payload.kind, payload.title, payload.body)
+        created = await asyncio.to_thread(create)
+        created.update(handle=principal.handle, fingerprint=principal.fingerprint)
+        return _forum_payload(created)
+    except ValueError as exc: raise HTTPException(422, "content not allowed" if str(exc) == "content not allowed" else "invalid forum content") from exc
+
+@app.post("/api/forum/threads/{thread_id}/answers", status_code=201, dependencies=[Security(_agent_bearer)], openapi_extra={"requestBody": {"required": True, "content": {"application/json": {"schema": {"type": "object", "required": ["body"], "properties": {"body": {"type": "string"}}}}}}})
+async def forum_create_answer(thread_id: PositiveInt, request: Request):
+    principal = await _agent_access(request, "forum:answer")
+    if forum_store is None: raise HTTPException(503, "forum unavailable")
+    payload = await _agent_json(request, ForumAnswerRequest)
+    try:
+        def create():
+            return forum_store.create_answer(principal.agent_id, thread_id, payload.body)
+        created = await asyncio.to_thread(create)
+        created.update(handle=principal.handle, fingerprint=principal.fingerprint)
+        return _forum_payload(created)
+    except LookupError as exc: raise HTTPException(404, "thread not found") from exc
+    except ValueError as exc: raise HTTPException(422, "content not allowed" if str(exc) == "content not allowed" else "invalid forum content") from exc
 
 @app.post("/api/cli/auth/challenge", status_code=201)
 async def machine_challenge(request: Request):
@@ -1478,7 +1482,7 @@ def _get_post_data(slug: str) -> dict | PostRedirect | None:
 def _json_etag_response(request: Request, content) -> Response:
     return etag_response(
         request,
-        json.dumps(content, ensure_ascii=False, separators=(",", ":")).encode(),
+        json.dumps(jsonable_encoder(content), ensure_ascii=False, separators=(",", ":")).encode(),
         "application/json",
     )
 
@@ -1806,7 +1810,42 @@ def code_page_data(request: Request, project: str, path: str = "") -> tuple[dict
     return {}, head, "", 200
 
 
-RENDERERS = {"home": home_page, "timeline": timeline_page_data, "canvas": canvas_page_data, "admin": admin_page, "post": post_page_data, "code": code_page_data}
+def forum_page_data(request: Request) -> tuple[dict, dict, str, int]:
+    if forum_store is None:
+        data = None
+        status_code = 503
+    else:
+        try:
+            data = {"threads": [_forum_payload(row) for row in forum_store.list_threads()]}
+            status_code = 200
+        except Exception:
+            logger.warning("forum unavailable during page render")
+            data = None
+            status_code = 503
+    return {"/api/forum": data}, {"title": "agent forum", "description": "agent forum"}, forum_markup(data), status_code
+
+
+def forum_thread_page_data(request: Request, thread_id: str) -> tuple[dict, dict, str, int]:
+    key = f"/api/forum/threads/{thread_id}"
+    if forum_store is None:
+        return {key: None, "forum_status": "unavailable"}, {"title": "agent forum", "description": "agent forum"}, forum_thread_markup(None, "unavailable"), 503
+    try:
+        after_value = request.query_params.get("after")
+        if after_value is not None and (not after_value.isdigit() or int(after_value) <= 0):
+            raise HTTPException(400, "invalid forum cursor")
+        row = forum_store.get_thread(int(thread_id), after=int(after_value) if after_value is not None else None)
+    except HTTPException:
+        raise
+    except Exception:
+        logger.warning("forum thread unavailable during page render")
+        return {key: None, "forum_status": "unavailable"}, {"title": "agent forum", "description": "agent forum"}, forum_thread_markup(None, "unavailable"), 503
+    if row is None:
+        return {key: None, "forum_status": "not-found"}, {"title": "thread not found", "description": "agent forum"}, forum_thread_markup(None), 404
+    payload = _forum_thread_payload(row)
+    return {key: payload, "forum_status": "ready"}, {"title": "agent forum", "description": "agent forum"}, forum_thread_markup(payload), 200
+
+
+RENDERERS = {"home": home_page, "timeline": timeline_page_data, "forum": forum_page_data, "forum-thread": forum_thread_page_data, "canvas": canvas_page_data, "admin": admin_page, "post": post_page_data, "code": code_page_data}
 
 
 def not_found_page(label: str, back: bool = False) -> tuple[dict, dict, str, int]:
@@ -1973,7 +2012,7 @@ def fill_index(index: str, preload: dict, head: dict, markup: str, canonical_pat
     tags = head_tags(preload["page"]["kind"], head, canonical_path)
     tags += ['<link rel="alternate" type="application/atom+xml" href="/feed.xml" title="Atom feed" />']
     # "<" escaped so post text cannot close the script tag.
-    data = json.dumps(preload).replace("<", "\\u003c")
+    data = json.dumps(jsonable_encoder(preload)).replace("<", "\\u003c")
     tags.append(f'<script id="preload" type="application/json">{data}</script>')
     index = re.sub(r"<title>.*?</title>", "", index, count=1, flags=re.S)
     index = index.replace("</head>", "\n".join(tags) + "\n</head>", 1)

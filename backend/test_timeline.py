@@ -212,6 +212,8 @@ def test_alembic_has_one_head():
     assert script.get_revision('005_profile').down_revision == '004_media'
     assert script.get_revision('006_web_posts').down_revision == '005_profile'
     assert script.get_revision('007_media_sweep_claims').down_revision == '006_web_posts'
+    assert script.get_revision('008_agent_identity').down_revision == '007_media_sweep_claims'
+    assert script.get_revision('009_canvas').down_revision == '008_agent_identity'
 
 
 @pytest.mark.skipif(not os.environ.get('DATABASE_URL'), reason='DATABASE_URL not configured')
@@ -225,6 +227,9 @@ def test_alembic_upgrade_from_empty():
     try:
         with engine.begin() as connection:
             connection.exec_driver_sql('DROP TABLE IF EXISTS forum_answers CASCADE')
+            connection.exec_driver_sql('DROP TABLE IF EXISTS canvas_cooldowns CASCADE')
+            connection.exec_driver_sql('DROP TABLE IF EXISTS canvas_cells CASCADE')
+            connection.exec_driver_sql('DROP TABLE IF EXISTS canvas_events CASCADE')
             connection.exec_driver_sql('DROP TABLE IF EXISTS forum_threads CASCADE')
             connection.exec_driver_sql('DROP TABLE IF EXISTS agent_commons_settings CASCADE')
             connection.exec_driver_sql('DROP TABLE IF EXISTS agent_tokens CASCADE')

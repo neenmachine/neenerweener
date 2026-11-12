@@ -3,7 +3,7 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 revision = "010_forum"
-down_revision = "008_agent_identity"
+down_revision = "009_canvas"
 branch_labels = None
 depends_on = None
 

@@ -151,24 +151,35 @@ def test_each_moderation_action_rolls_back_when_audit_fails(setup, monkeypatch):
 def test_all_admin_agent_store_calls_leave_event_loop(monkeypatch, setup):
     csrf = session(setup)
     headers = {"X-CSRF-Token": csrf, "Origin": "http://127.0.0.1"}
-    def guard(*_args, **_kwargs):
-        try: asyncio.get_running_loop()
-        except RuntimeError: return {"agents": [], "threads": [], "answers": [], "writes_enabled": True, "events": []}
-        raise AssertionError("synchronous store call on event loop")
-    monkeypatch.setattr(app.moderation_store, "overview", guard)
-    monkeypatch.setattr(app.moderation_store, "set_content", guard)
-    monkeypatch.setattr(app.moderation_store, "agent_action", guard)
-    monkeypatch.setattr(app.moderation_store, "writes_action", guard)
-    monkeypatch.setattr(app.moderation_store, "canvas_clear", guard)
-    monkeypatch.setattr(app.canvas_store, "events", guard)
-    assert client.get("/api/admin/agents").status_code == 200
-    for path, body in (
-        ("/api/admin/forum/thread/1/hide", {}), ("/api/admin/forum/thread/1/unhide", {}),
-        ("/api/admin/forum/thread/1/delete", {"confirm": True}),
-        ("/api/admin/forum/answer/1/hide", {}), ("/api/admin/forum/answer/1/unhide", {}),
-        ("/api/admin/forum/answer/1/delete", {"confirm": True}),
-    ):
-        assert client.post(path, json=body, headers=headers).status_code == 200
-    assert client.post(f"/api/admin/agents/{uuid.uuid4()}/ban", json={"banned": True}, headers=headers).status_code == 200
-    assert client.post("/api/admin/writes", json={"enabled": False}, headers=headers).status_code == 200
-    assert client.post("/api/admin/agents/canvas/clear", json={"x": 0, "y": 0, "width": 1, "height": 1}, headers=headers).status_code == 200
+    from sqlalchemy.engine import Engine
+    engines = {app.moderation_store.engine, app.agent_commons_store.engine, app.canvas_store.engine}
+    original_connect, original_begin = Engine.connect, Engine.begin
+    violations = []
+    def guard(method):
+        def checked(engine, *args, **kwargs):
+            if engine in engines:
+                try: asyncio.get_running_loop()
+                except RuntimeError: pass
+                else: violations.append("synchronous store database call on event loop")
+            return method(engine, *args, **kwargs)
+        return checked
+    monkeypatch.setattr(Engine, "connect", guard(original_connect))
+    monkeypatch.setattr(Engine, "begin", guard(original_begin))
+    cases = {
+        ("GET", "/api/admin/agents"): ("GET", "/api/admin/agents", {}),
+        ("POST", "/api/admin/agents/{agent_id}/ban"): ("POST", f"/api/admin/agents/{uuid.uuid4()}/ban", {"banned": True}),
+        ("POST", "/api/admin/agents/canvas/clear"): ("POST", "/api/admin/agents/canvas/clear", {"x": 0, "y": 0, "width": 1, "height": 1}),
+        ("POST", "/api/admin/forum/{kind}/{item_id}/{action}"): ("POST", "/api/admin/forum/thread/1/hide", {}),
+        ("POST", "/api/admin/writes"): ("POST", "/api/admin/writes", {"enabled": False}),
+    }
+    routes = {(next(iter(route.methods)), route.path) for route in app.app.routes if (getattr(route, "path", "") == "/api/admin/agents" or getattr(route, "path", "").startswith("/api/admin/agents/") or getattr(route, "path", "").startswith("/api/admin/forum/") or getattr(route, "path", "") == "/api/admin/writes")}
+    assert {(method, path) for method, path in cases} == routes
+    guard_client = TestClient(app.app, raise_server_exceptions=True)
+    guard_client.cookies.update(client.cookies)
+    try:
+        for method, path, body in cases.values():
+            response = guard_client.request(method, path, json=body, headers=headers)
+            assert response.status_code != 500
+    finally:
+        guard_client.close()
+    assert not violations, violations

@@ -16,9 +16,10 @@ class ModerationStore:
             threads = c.execute(text("SELECT t.id,t.title,t.created_at,t.hidden_at,t.deleted_at,a.handle,k.fingerprint FROM forum_threads t JOIN agents a ON a.id=t.agent_id LEFT JOIN LATERAL (SELECT fingerprint FROM agent_keys WHERE agent_id=a.id ORDER BY created_at DESC LIMIT 1) k ON true ORDER BY t.id DESC LIMIT 100")).mappings().all()
             answers = c.execute(text("SELECT x.id,x.thread_id,x.created_at,x.hidden_at,x.deleted_at,a.handle,k.fingerprint FROM forum_answers x JOIN agents a ON a.id=x.agent_id LEFT JOIN LATERAL (SELECT fingerprint FROM agent_keys WHERE agent_id=a.id ORDER BY created_at DESC LIMIT 1) k ON true ORDER BY x.id DESC LIMIT 100")).mappings().all()
             writes = c.execute(text("SELECT writes_enabled FROM agent_commons_settings WHERE id='global'")).scalar_one_or_none()
+            audit = c.execute(text("SELECT action, target, created_at FROM agent_moderation_audit ORDER BY id DESC LIMIT 100")).mappings().all()
         def agent(r): return {"id":str(r["id"]), **public_agent(r["handle"], r["fingerprint"] or ""), "created_at":r["created_at"].isoformat(),"banned":r["banned_at"] is not None}
         def content(r): return {"id":r["id"],"thread_id":r.get("thread_id"),"created_at":r["created_at"].isoformat(),"hidden":r["hidden_at"] is not None,"deleted":r["deleted_at"] is not None, **public_agent(r["handle"], r["fingerprint"] or "")}
-        return {"agents":[agent(r) for r in agents],"threads":[content(r)|{"title":r["title"]} for r in threads],"answers":[content(r) for r in answers],"writes_enabled":True if writes is None else writes}
+        return {"agents":[agent(r) for r in agents],"threads":[content(r)|{"title":r["title"]} for r in threads],"answers":[content(r) for r in answers],"writes_enabled":True if writes is None else writes,"audit":[{"action":r["action"],"target":r["target"],"created_at":r["created_at"].isoformat()} for r in audit]}
     def audit(self, action, target):
         with self.engine.begin() as c: self._audit(c, action, target)
 

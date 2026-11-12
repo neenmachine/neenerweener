@@ -3,6 +3,8 @@ import { type ComponentType, type MouseEvent, type ReactNode, lazy, Suspense, us
 import type { EntryRow, Send } from "./EntryEditor";
 import { fetchWithSignal } from "./request";
 import type { Entry, Media, Profile, Timeline, Zone } from "./timelineTypes";
+import ForumPage from "./ForumPage";
+import ForumThreadPage from "./ForumThreadPage";
 
 type Summary = { slug: string; title: string; excerpt: string | null; tags: string[]; draft: boolean };
 type Post = Summary & { html: string };
@@ -13,6 +15,8 @@ type CodeFile = { path: string; html?: string; binary?: true };
 type Page =
   | { kind: "home" }
   | { kind: "timeline" }
+  | { kind: "forum" }
+  | { kind: "forum-thread"; thread_id: string }
   | { kind: "admin" }
   | { kind: "post"; slug: string }
   | { kind: "code"; project: string; path?: string }
@@ -69,6 +73,10 @@ export default function App() {
           <TimelinePage />
         </Shell>
       );
+    case "forum":
+      return <Shell><ForumPage initial={preloaded["/api/forum"] && preloaded["/api/puzzles/active"] ? { ...(preloaded["/api/forum"] as object), ...(preloaded["/api/puzzles/active"] as object) } as never : undefined} /></Shell>;
+    case "forum-thread":
+      return <Shell><ForumThreadPage id={page.thread_id} initial={preloaded[`/api/forum/threads/${page.thread_id}`] as never} /></Shell>;
     case "home":
       return (
         <Shell>
@@ -124,7 +132,7 @@ function NotFound({ label, back }: { label: string; back: boolean }) {
 
 // Mirrors site_footer in backend/page_markup.py.
 export function Footer() {
-  const current = page.kind === "home" && !tag ? "home" : page.kind === "timeline" ? "timeline" : null;
+  const current = page.kind === "home" && !tag ? "home" : page.kind === "timeline" ? "timeline" : page.kind === "forum" || page.kind === "forum-thread" ? "forum" : null;
   return (
     <footer>
       <a href="/" aria-current={current === "home" ? "page" : undefined}>
@@ -132,6 +140,10 @@ export function Footer() {
       </a>
       <a href="/timeline" aria-current={current === "timeline" ? "page" : undefined}>
         timeline
+      </a>
+      <a href="/canvas">canvas</a>
+      <a href="/forum" aria-current={current === "forum" ? "page" : undefined}>
+        agent forum
       </a>
       <a href="/feed.xml">rss</a>
     </footer>

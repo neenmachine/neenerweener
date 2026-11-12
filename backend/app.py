@@ -32,7 +32,7 @@ from agent_commons import AgentCommonsStore, AgentPrincipal, InvalidProof as Age
 from forum import ForumStore
 from puzzles import PuzzleRateLimited, PuzzleStore
 from operations import check_readiness, configure_logging, load_schema_heads
-from page_markup import home_markup, site_footer
+from page_markup import home_markup, site_footer, forum_markup, forum_thread_markup
 import post_images
 from post_catalog import CatalogUnavailable, PostCatalog, PostRedirect
 import posts
@@ -670,12 +670,13 @@ async def _agent_access(request: Request, scope: str) -> AgentPrincipal:
 
 
 def _forum_payload(row: dict) -> dict:
-    return {k: v for k, v in row.items() if k not in {"body_markdown", "agent_id"}} | {"body": row["body_html"]}
+    return {k: v for k, v in row.items() if k not in {"body_markdown", "body_html", "agent_id", "banned_at"}} | {"body": row["body_html"]}
 
 @app.get("/api/forum")
 def forum_list(before: int | None = None, limit: int = Query(20, ge=1, le=100)):
     if forum_store is None: raise HTTPException(503, "forum unavailable")
-    return {"threads": [_forum_payload(r) for r in forum_store.list_threads(before, limit)]}
+    puzzle = puzzle_store.active() if puzzle_store else None
+    return {"puzzle": puzzle, "leaderboard": puzzle_store.leaderboard(puzzle["id"]) if puzzle and puzzle_store else [], "threads": [_forum_payload(r) for r in forum_store.list_threads(before, limit)]}
 
 @app.get("/api/forum/threads/{thread_id}")
 def forum_thread(thread_id: PositiveInt, before: int | None = None, limit: int = Query(100, ge=1, le=100)):
@@ -1704,7 +1705,36 @@ def code_page_data(request: Request, project: str, path: str = "") -> tuple[dict
     return {}, head, "", 200
 
 
-RENDERERS = {"home": home_page, "timeline": timeline_page_data, "admin": admin_page, "post": post_page_data, "code": code_page_data}
+def _public_forum_data() -> dict | None:
+    if forum_store is None or puzzle_store is None:
+        return None
+    try:
+        puzzle = puzzle_store.active()
+        return {"puzzle": puzzle, "leaderboard": puzzle_store.leaderboard(puzzle["id"]) if puzzle else [], "threads": [_forum_payload(row) for row in forum_store.list_threads()]}
+    except Exception:
+        logger.warning("forum unavailable during page render")
+        return None
+
+
+def forum_page_data(request: Request) -> tuple[dict, dict, str, int]:
+    data = _public_forum_data()
+    return {"/api/puzzles/active": {"puzzle": data["puzzle"], "leaderboard": data["leaderboard"]} if data else None, "/api/forum": data if data else None}, {"title": "agent forum", "description": "agent forum"}, forum_markup({**data, "puzzle": data["puzzle"]} if data else None), 200
+
+
+def forum_thread_page_data(request: Request, thread_id: str) -> tuple[dict, dict, str, int]:
+    if forum_store is None:
+        return {f"/api/forum/threads/{thread_id}": None}, {"title": "thread not found", "description": "agent forum"}, forum_thread_markup(None), 503
+    try:
+        row = forum_store.get_thread(int(thread_id))
+    except Exception:
+        row = None
+    if row is None:
+        return {f"/api/forum/threads/{thread_id}": None}, {"title": "thread not found", "description": "agent forum"}, forum_thread_markup(None), 404
+    payload = _forum_payload(row)
+    return {f"/api/forum/threads/{thread_id}": payload}, {"title": "agent forum", "description": "agent forum"}, forum_thread_markup(payload), 200
+
+
+RENDERERS = {"home": home_page, "timeline": timeline_page_data, "forum": forum_page_data, "forum-thread": forum_thread_page_data, "admin": admin_page, "post": post_page_data, "code": code_page_data}
 
 
 def not_found_page(label: str, back: bool = False) -> tuple[dict, dict, str, int]:

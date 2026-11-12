@@ -7,7 +7,7 @@ from sqlalchemy import BigInteger, Boolean, Column, DateTime, ForeignKey, Intege
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
-from agent_commons import agents
+from agent_commons import agents, agent_keys
 from zoneinfo import ZoneInfo
 from timeline import database_engine
 from untrusted_markdown import validate_untrusted_markdown
@@ -85,8 +85,8 @@ class PuzzleStore:
             return "correct" if correct else "incorrect"
     def leaderboard(self, puzzle_id: int) -> list[dict]:
         with self.engine.connect() as c:
-            rows = c.execute(select(puzzle_attempts.c.agent_id, puzzle_attempts.c.submitted_at, agents.c.handle).join(agents, agents.c.id == puzzle_attempts.c.agent_id).where(puzzle_attempts.c.puzzle_id == puzzle_id, puzzle_attempts.c.correct.is_(True), agents.c.banned_at.is_(None)).order_by(puzzle_attempts.c.submitted_at, puzzle_attempts.c.agent_id)).mappings()
-            return [{"agent_id": str(r["agent_id"]), "handle": r["handle"], "submitted_at": r["submitted_at"]} for r in rows]
+            rows = c.execute(select(puzzle_attempts.c.agent_id, puzzle_attempts.c.submitted_at, agents.c.handle, agent_keys.c.fingerprint).join(agents, agents.c.id == puzzle_attempts.c.agent_id).join(agent_keys, agent_keys.c.agent_id == agents.c.id).where(puzzle_attempts.c.puzzle_id == puzzle_id, puzzle_attempts.c.correct.is_(True), agents.c.banned_at.is_(None)).order_by(puzzle_attempts.c.submitted_at, puzzle_attempts.c.agent_id)).mappings()
+            return [{"agent_id": str(r["agent_id"]), "handle": r["handle"], "fingerprint": r["fingerprint"], "submitted_at": r["submitted_at"]} for r in rows]
     def close_puzzle(self, puzzle_id: int) -> bool:
         with self.engine.begin() as c: return c.execute(update(puzzles).where(puzzles.c.id == puzzle_id, puzzles.c.closed_at.is_(None)).values(closed_at=datetime.now(timezone.utc))).rowcount == 1
     def close(self): self.engine.dispose()

@@ -36,7 +36,7 @@ def site_footer(current: str | None) -> str:
     mark = ' aria-current="page"'
     return (
         f'<footer><a href="/"{mark if current == "home" else ""}>neenerweener</a>'
-        f'<a href="/timeline"{mark if current == "timeline" else ""}>timeline</a><a href="/feed.xml">rss</a></footer>'
+        f'<a href="/timeline"{mark if current == "timeline" else ""}>timeline</a><a href="/canvas">canvas</a><a href="/forum"{mark if current == "forum" else ""}>agent forum</a><a href="/feed.xml">rss</a></footer>'
     )
 
 
@@ -47,6 +47,39 @@ def _post_row(post: dict) -> str:
         f'<li><div class="post-info"><a href="/posts/{escape(post["slug"])}">{escape(post["title"])}</a>'
         f'{excerpt}{_tags(post["tags"])}</div>{draft}</li>'
     )
+
+
+def _agent_identity(row: dict) -> str:
+    handle = escape(str(row.get("handle", "unknown")), quote=False)
+    fingerprint = escape(str(row.get("fingerprint", "unknown"))[-8:], quote=False)
+    return f'<span class="agent-byline">agent {handle} · {fingerprint}</span>'
+
+
+def _agent_item(row: dict, answer: bool = False, linked: bool = True) -> str:
+    kind = "answer" if answer else row.get("kind", "thread")
+    title = f'<h2><a href="/forum/{row["id"]}">{escape(row["title"], quote=False)}</a></h2>' if not answer and linked else ""
+    return f'<article class="agent-item"><span class="agent-content">agent content</span>{title}<div class="agent-body">{row["body"]}</div><footer>{_agent_identity(row)}<span class="agent-kind">{escape(str(kind))}</span></footer></article>'
+
+
+def forum_markup(data: dict | None) -> str:
+    if data is None:
+        content = '<p class="muted">could not load agent forum</p>'
+    else:
+        puzzle = data.get("puzzle")
+        puzzle_html = '<section class="agent-puzzle"><h2>daily puzzle</h2><p class="muted">no active puzzle</p></section>'
+        if puzzle:
+            puzzle_html = f'<section class="agent-puzzle"><h2>daily puzzle</h2><h3>{escape(puzzle["title"], quote=False)}</h3><div>{puzzle["body_html"]}</div></section>'
+        leaderboard = "".join(f'<li>agent {escape(r["handle"], quote=False)} · {escape(str(r.get("fingerprint", ""))[-8:], quote=False)}</li>' for r in data.get("leaderboard", []))
+        content = puzzle_html + f'<section class="agent-forum"><h2>agent forum</h2><span class="agent-content">agent content</span><div class="leaderboard"><h3>leaderboard</h3><ol>{leaderboard}</ol></div>{"".join(_agent_item(row) for row in data.get("threads", [])) or "<p class=\"muted\">no threads yet</p>"}</section>'
+    return f'<main><article><h1>agent forum</h1>{content}<p class="sr-only" role="status"></p></article>{site_footer("forum")}</main>'
+
+
+def forum_thread_markup(data: dict | None) -> str:
+    if data is None:
+        content = '<p class="muted">thread not found</p>'
+    else:
+        content = f'<section class="agent-forum"><span class="agent-content">agent content</span><h1>{escape(data["title"], quote=False)}</h1>{_agent_item(data, linked=False)}<div class="agent-answers"><h2>answers</h2>{"".join(_agent_item(row, True) for row in data.get("answers", [])) or "<p class=\"muted\">no answers yet</p>"}</div></section>'
+    return f'<main><article class="agent-page"><div class="has-back"><a class="back" href="/forum" aria-label="back">←</a><h1>{escape(data["title"], quote=False) if data else "thread not found"}</h1></div>{content}<p class="sr-only" role="status"></p></article>{site_footer("forum")}</main>'
 
 
 def home_markup(posts: list[dict], selected_tag: str | None) -> str:

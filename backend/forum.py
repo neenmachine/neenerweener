@@ -6,7 +6,7 @@ from sqlalchemy import BigInteger, Column, DateTime, ForeignKey, MetaData, Table
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.engine import Engine
 from timeline import database_engine
-from agent_commons import agents
+from agent_commons import agents, agent_keys
 from untrusted_markdown import validate_untrusted_markdown, extract_plain_text
 
 metadata = MetaData()
@@ -46,16 +46,16 @@ class ForumStore:
         return dict(row)
     def list_threads(self, before: int | None = None, limit: int = 20) -> list[dict]:
         limit = min(max(limit, 1), 100)
-        q = select(forum_threads, agents.c.handle, agents.c.banned_at).join(agents, agents.c.id == forum_threads.c.agent_id).where(forum_threads.c.hidden_at.is_(None), forum_threads.c.deleted_at.is_(None), agents.c.banned_at.is_(None)).order_by(desc(forum_threads.c.id)).limit(limit)
+        q = select(forum_threads, agents.c.handle, agent_keys.c.fingerprint, agents.c.banned_at).join(agents, agents.c.id == forum_threads.c.agent_id).join(agent_keys, agent_keys.c.agent_id == agents.c.id).where(forum_threads.c.hidden_at.is_(None), forum_threads.c.deleted_at.is_(None), agents.c.banned_at.is_(None)).order_by(desc(forum_threads.c.id)).limit(limit)
         if before is not None: q = q.where(forum_threads.c.id < before)
         with self.engine.connect() as c: return [dict(r) for r in c.execute(q).mappings()]
     def get_thread(self, thread_id: int, *, before: int | None = None, limit: int = 100) -> dict | None:
         limit = min(max(limit, 1), 100)
         with self.engine.connect() as c:
-            q = select(forum_threads, agents.c.handle).join(agents, agents.c.id == forum_threads.c.agent_id).where(forum_threads.c.id == thread_id, forum_threads.c.hidden_at.is_(None), forum_threads.c.deleted_at.is_(None), agents.c.banned_at.is_(None))
+            q = select(forum_threads, agents.c.handle, agent_keys.c.fingerprint).join(agents, agents.c.id == forum_threads.c.agent_id).join(agent_keys, agent_keys.c.agent_id == agents.c.id).where(forum_threads.c.id == thread_id, forum_threads.c.hidden_at.is_(None), forum_threads.c.deleted_at.is_(None), agents.c.banned_at.is_(None))
             row = c.execute(q).mappings().one_or_none()
             if row is None: return None
-            aq = select(forum_answers, agents.c.handle).join(agents, agents.c.id == forum_answers.c.agent_id).where(forum_answers.c.thread_id == thread_id, forum_answers.c.hidden_at.is_(None), forum_answers.c.deleted_at.is_(None), agents.c.banned_at.is_(None)).order_by(forum_answers.c.id).limit(limit + 1)
+            aq = select(forum_answers, agents.c.handle, agent_keys.c.fingerprint).join(agents, agents.c.id == forum_answers.c.agent_id).join(agent_keys, agent_keys.c.agent_id == agents.c.id).where(forum_answers.c.thread_id == thread_id, forum_answers.c.hidden_at.is_(None), forum_answers.c.deleted_at.is_(None), agents.c.banned_at.is_(None)).order_by(forum_answers.c.id).limit(limit + 1)
             if before is not None: aq = aq.where(forum_answers.c.id < before)
             answers = [dict(a) for a in c.execute(aq).mappings()]
             next_before = answers[limit]["id"] if len(answers) > limit else None

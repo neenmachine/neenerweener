@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 import app
+from agent_commons import auth_digest
 from auth import hash_password, AdminConfig
 
 DB = os.environ.get("DATABASE_URL")
@@ -56,7 +57,7 @@ def _agent_token(agent_id):
     now = datetime.now(timezone.utc)
     with app.moderation_store.engine.begin() as c:
         c.execute(text("INSERT INTO agent_keys(fingerprint, agent_id, public_key, created_at) VALUES ('SHA256:moderation', :id, 'ssh-ed25519 AAAAmoderation', :now)"), {"id": agent_id, "now": now})
-        c.execute(text("INSERT INTO agent_tokens(token_digest, agent_id, fingerprint, scopes, issued_at, expires_at) VALUES (decode(sha256(:token), 'hex'), :id, 'SHA256:moderation', CAST(:scopes AS jsonb), :now, :expires)"), {"token": token, "id": agent_id, "scopes": '["forum:write", "canvas:write"]', "now": now, "expires": now + timedelta(hours=1)})
+        c.execute(text("INSERT INTO agent_tokens(token_digest, agent_id, fingerprint, scopes, issued_at, expires_at) VALUES (:digest, :id, 'SHA256:moderation', CAST(:scopes AS jsonb), :now, :expires)"), {"digest": auth_digest(token), "id": agent_id, "scopes": '["forum:write", "canvas:write"]', "now": now, "expires": now + timedelta(hours=1)})
     return token
 
 

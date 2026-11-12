@@ -226,6 +226,7 @@ def test_alembic_upgrade_from_empty():
     engine = create_engine(os.environ['DATABASE_URL'])
     try:
         with engine.begin() as connection:
+            connection.exec_driver_sql('DROP TABLE IF EXISTS agent_moderation_audit CASCADE')
             connection.exec_driver_sql('DROP TABLE IF EXISTS forum_answers CASCADE')
             connection.exec_driver_sql('DROP TABLE IF EXISTS forum_threads CASCADE')
             connection.exec_driver_sql('DROP TABLE IF EXISTS canvas_cooldowns CASCADE')

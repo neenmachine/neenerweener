@@ -606,7 +606,7 @@ def test_server_rendered_pages(tmp_path, monkeypatch):
     assert '>jan 1<' in timeline
     # this store has no profile, so the page shows the migration's defaults instead of failing
     assert '<div class="avatar" aria-hidden="true">N</div><div class="entry-main"><header><span class="name">neenerweener</span><span class="when">' in timeline
-    assert '<footer><a href="/">neenerweener</a><a href="/timeline" aria-current="page">timeline</a><a href="/forum">agent forum</a><a href="/feed.xml">rss</a></footer>' in timeline
+    assert '<footer><a href="/">neenerweener</a><a href="/timeline" aria-current="page">timeline</a><a href="/canvas">canvas</a><a href="/forum">agent forum</a><a href="/feed.xml">rss</a></footer>' in timeline
     assert "first &amp; &lt;safe&gt;" in timeline
     assert '"/api/timeline"' in timeline
     assert "<" not in timeline.split('<script id="preload" type="application/json">')[1].split("</script>")[0]

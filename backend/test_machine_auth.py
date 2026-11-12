@@ -118,8 +118,8 @@ def test_main_accepted_key_forms_complete_cli_exchange(machine_app, monkeypatch,
     forms = {
         "canonical": public,
         "trailing_space": public + " ",
-        "trailing_lf": public + "\\n",
-        "trailing_tab": public + "\\t",
+        "trailing_lf": public + "\n",
+        "trailing_tab": public + "\t",
         "doubled_separator": "ssh-ed25519  " + encoded,
     }
     monkeypatch.setenv("ADMIN_SSH_KEYS", json.dumps([{"name": "fixture-key", "public_key": forms[form], "scopes": SCOPES}]))

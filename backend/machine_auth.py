@@ -240,7 +240,7 @@ def _parse_key(item: Any) -> AuthorizedKey:
         raise ValueError
     if len(scopes) != len(set(scopes)) or set(scopes) != SUPPORTED_SCOPES:
         raise ValueError
-    return AuthorizedKey(name, public_key, fingerprint, frozenset(scopes))
+    return AuthorizedKey(name, canonical, fingerprint, frozenset(scopes))
 
 
 def parse_agent_ed25519_public_key(public_key: str) -> tuple[str, str]:

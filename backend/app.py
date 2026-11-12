@@ -176,6 +176,7 @@ agent_commons_store: AgentCommonsStore | None = (
 canvas_store: CanvasStore | None = (
     CanvasStore(os.environ["DATABASE_URL"]) if os.environ.get("DATABASE_URL") else None
 )
+forum_store: ForumStore | None = ForumStore(os.environ["DATABASE_URL"]) if os.environ.get("DATABASE_URL") else None
 machine_auth_store: MachineAuthStore | None = (
     MachineAuthStore(os.environ["DATABASE_URL"]) if os.environ.get("DATABASE_URL") else None
 )

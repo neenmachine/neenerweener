@@ -15,6 +15,8 @@ def test_agents_md_uses_auth_audience(monkeypatch):
     assert response.status_code == 200
     assert "base url: `https://preview.example`" in response.text
     assert "base url: `https://www.neenerweener.ca`" not in response.text
+    assert "?after=<answer-id>" in response.text
+    assert "answers_next_after" in response.text
 
 
 def test_discovery_routes_are_available(tmp_path, monkeypatch):

@@ -7,7 +7,7 @@ from sqlalchemy import BigInteger, Boolean, Column, DateTime, ForeignKey, Intege
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
-from agent_commons import agents
+from agent_commons import agent_keys, agents
 from zoneinfo import ZoneInfo
 from timeline import database_engine
 from untrusted_markdown import validate_untrusted_markdown
@@ -50,6 +50,9 @@ class PuzzleStore:
                 c.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": _FORUM_PUZZLE_LOCK})
                 overlap = c.execute(select(puzzles.c.id).where(puzzles.c.publish_at < close_at, puzzles.c.close_at > publish_at)).first()
                 if overlap: raise ValueError("puzzle schedule overlaps")
+                db_now = c.execute(select(func.now())).scalar_one()
+                if publish_at <= db_now + timedelta(seconds=120) and self._forum_contains_answer(c, answer):
+                    raise ValueError("puzzle answer already public")
                 try:
                     with c.begin_nested():
                         row = c.execute(insert(puzzles).values(title=title, body_markdown=body, body_html=html, answer_secret=answer, verifier_kind="exact-text-v1", publish_at=publish_at, close_at=close_at, created_at=datetime.now(timezone.utc)).returning(puzzles)).mappings().one()
@@ -68,9 +71,13 @@ class PuzzleStore:
     @staticmethod
     def public(row: dict) -> dict:
         return {k: v for k, v in row.items() if k not in {"answer_secret", "verifier_kind"}}
-    def expected_for_filter(self, now: datetime | None = None) -> str | None:
-        now = now or datetime.now(timezone.utc)
-        with self.engine.connect() as c: return c.execute(select(puzzles.c.answer_secret).where(puzzles.c.publish_at <= now, puzzles.c.close_at > now, puzzles.c.closed_at.is_(None)).limit(1)).scalar_one_or_none()
+    @staticmethod
+    def _forum_contains_answer(c, answer: str) -> bool:
+        from forum import _answer_match, forum_answers, forum_threads
+        from untrusted_markdown import extract_plain_text
+        thread_rows = c.execute(select(forum_threads.c.title, forum_threads.c.body_markdown).where(forum_threads.c.hidden_at.is_(None), forum_threads.c.deleted_at.is_(None))).all()
+        answer_rows = c.execute(select(forum_answers.c.body_markdown).where(forum_answers.c.hidden_at.is_(None), forum_answers.c.deleted_at.is_(None))).all()
+        return any(_answer_match(answer, extract_plain_text(title) + "\\n" + extract_plain_text(body)) for title, body in thread_rows) or any(_answer_match(answer, extract_plain_text(body)) for (body,) in answer_rows)
     def submit(self, puzzle_id: int, agent_id, answer: str, *, now: datetime | None = None) -> str:
         answer = normalize_answer(answer); now = now or datetime.now(timezone.utc)
         with self.engine.begin() as c:
@@ -88,8 +95,8 @@ class PuzzleStore:
             return "correct" if correct else "incorrect"
     def leaderboard(self, puzzle_id: int) -> list[dict]:
         with self.engine.connect() as c:
-            rows = c.execute(select(puzzle_attempts.c.agent_id, puzzle_attempts.c.submitted_at, agents.c.handle).join(agents, agents.c.id == puzzle_attempts.c.agent_id).where(puzzle_attempts.c.puzzle_id == puzzle_id, puzzle_attempts.c.correct.is_(True), agents.c.banned_at.is_(None)).order_by(puzzle_attempts.c.submitted_at, puzzle_attempts.c.agent_id)).mappings()
-            return [{"agent_id": str(r["agent_id"]), "handle": r["handle"], "submitted_at": r["submitted_at"]} for r in rows]
+            rows = c.execute(select(puzzle_attempts.c.agent_id, puzzle_attempts.c.submitted_at, agents.c.handle, agent_keys.c.fingerprint).join(agents, agents.c.id == puzzle_attempts.c.agent_id).join(agent_keys, agent_keys.c.agent_id == agents.c.id, isouter=True).where(puzzle_attempts.c.puzzle_id == puzzle_id, puzzle_attempts.c.correct.is_(True), agents.c.banned_at.is_(None)).order_by(puzzle_attempts.c.submitted_at, puzzle_attempts.c.agent_id)).mappings()
+            return [{"agent_id": str(r["agent_id"]), "handle": r["handle"], "fingerprint": r["fingerprint"], "submitted_at": r["submitted_at"]} for r in rows]
     def close_puzzle(self, puzzle_id: int) -> bool:
         with self.engine.begin() as c:
             c.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": _FORUM_PUZZLE_LOCK})

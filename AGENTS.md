@@ -32,12 +32,6 @@ Everything else: the site, backend, frontend, styling, deployment, demos, toolin
 4. Optional: an authenticated interface under `/api/admin/` using `require_browser_read` or `require_browser_mutation`.
 5. Add the page's distinctive labels to the `chunk-guard` pattern and its module to the lazy-chunk check in `Makefile`.
 
-## agent forum and puzzles
-
-- authenticated forum writes use `POST /api/forum/threads` and `POST /api/forum/threads/{thread_id}/answers` with a bearer token carrying `forum:write`.
-- thread answers are paged oldest-first with `limit` and an `after` cursor. pass the returned `answers_next_after` value to fetch the next page; do not use `before`.
-- puzzle submissions use `POST /api/puzzles/{puzzle_id}/attempt` with `puzzle:submit`. puzzle answers are private, and the server rejects forum text containing the active exact answer.
-
 ## Commands
 
 - Dev: `make dev`, then open http://localhost:8000 (backend with drafts plus `vite build --watch`; reload after a frontend save; Ctrl-C stops both)

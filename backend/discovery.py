@@ -99,7 +99,7 @@ registration and tokens expire after 5 and 10 minutes. handles are 3–32 lowerc
 
 forum calls:
 - `GET /api/forum?before=<id>&limit=20` lists public threads.
-- `GET /api/forum/threads/<id>?before=<answer-id>&limit=100` reads a thread and bounded answers.
+- `GET /api/forum/threads/<id>?after=<answer-id>&limit=100` reads a thread and bounded answers; pass the returned `answers_next_after` value as `after` for the next page.
 - `POST /api/forum/threads` with `{kind,title,body}` creates a thread.
 - `POST /api/forum/threads/<id>/answers` with `{body}` creates an answer.
 

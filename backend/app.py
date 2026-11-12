@@ -172,8 +172,8 @@ auth_store: AuthStore | None = AuthStore(os.environ["DATABASE_URL"]) if os.envir
 agent_commons_store: AgentCommonsStore | None = (
     AgentCommonsStore(os.environ["DATABASE_URL"]) if os.environ.get("DATABASE_URL") else None
 )
-forum_store: ForumStore | None = ForumStore(os.environ["DATABASE_URL"]) if os.environ.get("DATABASE_URL") else None
 puzzle_store: PuzzleStore | None = PuzzleStore(os.environ["DATABASE_URL"]) if os.environ.get("DATABASE_URL") else None
+forum_store: ForumStore | None = ForumStore(os.environ["DATABASE_URL"], secret=puzzle_store.secret) if puzzle_store is not None else None
 machine_auth_store: MachineAuthStore | None = (
     MachineAuthStore(os.environ["DATABASE_URL"]) if os.environ.get("DATABASE_URL") else None
 )
@@ -671,8 +671,15 @@ async def _agent_access(request: Request, scope: str) -> AgentPrincipal:
     return principal
 
 
+def _public_agent(handle: str | None, fingerprint: str | None) -> dict:
+    # TODO(pr1 identity): replace this local suffix with agent_commons.public_agent.
+    suffix = fingerprint.rsplit(":", 1)[-1][-8:] if fingerprint else None
+    return {"handle": handle, "fingerprint_suffix": suffix}
+
+
 def _forum_payload(row: dict) -> dict:
-    return {k: v for k, v in row.items() if k not in {"body_markdown", "agent_id"}} | {"body": row["body_html"]}
+    payload = {k: v for k, v in row.items() if k not in {"body_markdown", "body_html", "agent_id", "handle", "fingerprint"}} | {"body": row["body_html"]}
+    return payload | {"agent": _public_agent(row.get("handle"), row.get("fingerprint"))}
 
 @app.get("/api/forum")
 def forum_list(before: int | None = None, limit: int = Query(20, ge=1, le=100)):
@@ -713,7 +720,9 @@ async def forum_create_answer(thread_id: PositiveInt, request: Request):
 @app.get("/api/puzzles/active")
 def puzzle_active():
     if puzzle_store is None: raise HTTPException(503, "puzzle unavailable")
-    puzzle = puzzle_store.active(); return {"puzzle": puzzle, "leaderboard": puzzle_store.leaderboard(puzzle["id"]) if puzzle else []}
+    puzzle = puzzle_store.active()
+    leaderboard = puzzle_store.leaderboard(puzzle["id"]) if puzzle else []
+    return {"puzzle": puzzle, "leaderboard": [{k: v for k, v in row.items() if k not in {"handle", "fingerprint"}} | {"agent": _public_agent(row.get("handle"), row.get("fingerprint"))} for row in leaderboard]}
 
 @app.post("/api/puzzles/{puzzle_id}/attempt", dependencies=[Security(_agent_bearer)], openapi_extra={"requestBody": {"required": True, "content": {"application/json": {"schema": {"type": "object", "required": ["answer"], "properties": {"answer": {"type": "string"}}}}}}})
 async def puzzle_attempt(puzzle_id: PositiveInt, request: Request):

@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 
 import app
 from agent_commons import AgentPrincipal, agent_settings, agents
@@ -66,6 +66,9 @@ def test_http_forum_routes_and_pagination_and_hidden(forum_app):
     assert client.get("/api/forum").status_code == 200
     got = client.get(f"/api/forum/threads/{thread_id}?limit=1")
     assert got.status_code == 200 and len(got.json()["answers"]) == 1
+    page = got.json()
+    next_page = client.get(f"/api/forum/threads/{thread_id}?after={page['answers'][0]['id']}&limit=1")
+    assert next_page.status_code == 200 and next_page.json()["answers"] == []
     assert client.get(f"/api/forum/threads/{thread_id}?limit=101").status_code == 422
     with app.forum_store.engine.begin() as c: c.execute(agents.update().where(agents.c.id == ids[0]).values(banned_at=datetime.now(timezone.utc)))
     assert client.get("/api/forum").json()["threads"] == []
@@ -85,7 +88,7 @@ def test_http_puzzle_routes_secret_privacy_headers_and_attempt_limits(forum_app,
         wrong = client.post(f"/api/puzzles/{pid}/attempt", json={"answer": "no"}, headers=headers)
         assert wrong.status_code == 200 and wrong.json()["result"] == "incorrect" and wrong.headers["cache-control"] == "no-store"
         assert client.post(f"/api/puzzles/{pid}/attempt", json={"answer": "é"}, headers=headers).status_code == 429
-        assert puzzle.submit(pid, ids[0], "é", now=now + timedelta(seconds=11)) == "correct"
+        assert puzzle.submit(pid, ids[0], "é", now=now + timedelta(seconds=21)) == "correct"
         assert "é" not in caplog.text
         assert client.post(f"/api/admin/agents/puzzles/{pid}/close").json() == {"closed": True}
     finally: app.app.dependency_overrides.pop(app.require_browser_mutation, None)
@@ -106,11 +109,13 @@ def test_answer_pagination_after_covers_all_rows(forum_app):
 
 def test_exact_filter_unicode_markdown_boundary_and_case(forum_app):
     _, forum, _, ids = forum_app
+    _add_active_filter_puzzle(forum, "é")
     for body in ("e\u0301", "**é**"):
-        with pytest.raises(ValueError, match="content not allowed"): forum.create_thread(ids[0], "question", "t", body, blocked_answer="é")
-    assert forum.create_thread(ids[0], "question", "t", "café", blocked_answer="é")
-    assert forum.create_thread(ids[0], "question", "t", "É", blocked_answer="é")
-    assert forum.create_thread(ids[0], "question", "t", "theory", blocked_answer="he")
+        with pytest.raises(ValueError, match="content not allowed"):
+            forum.create_thread(ids[0], "question", "t", body)
+    assert forum.create_thread(ids[0], "question", "t", "café")
+    assert forum.create_thread(ids[0], "question", "t", "É")
+    assert forum.create_thread(ids[0], "question", "t", "theory")
 
 
 def test_puzzle_db_exception_never_logs_or_returns_answer(caplog):
@@ -189,6 +194,14 @@ def test_thirty_attempt_cap(forum_app):
         puzzle.submit(row["id"], ids[0], "last", now=now + timedelta(seconds=330))
 
 
+def _add_active_filter_puzzle(forum, answer):
+    from sqlalchemy import insert
+    now = datetime.now(timezone.utc)
+    with forum.engine.begin() as c:
+        c.execute(insert(puzzles).values(title="filter", body_markdown="b", body_html="<p>b</p>", verifier_kind="exact-text-v1", answer_secret=answer, publish_at=now - timedelta(seconds=1), close_at=now + timedelta(hours=1), created_at=now))
+
+
+
 def test_forum_post_and_immediate_puzzle_creation_are_serialized(forum_app):
     _, forum, puzzle, ids = forum_app
     now = datetime.now(timezone.utc)
@@ -204,10 +217,21 @@ def test_forum_post_and_immediate_puzzle_creation_are_serialized(forum_app):
         return "puzzle", puzzle.create("race", "body", "secret", now, now + timedelta(hours=1))
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
         results = [future.result() for future in [pool.submit(post), pool.submit(create)]]
-    assert {result[0] for result in results} == {"puzzle", "post"} or {result[0] for result in results} == {"puzzle", "rejected"}
-    if any(result[0] == "post" for result in results):
-        with forum.engine.connect() as c:
-            assert c.execute(select(forum_threads.c.body_markdown).where(forum_threads.c.body_markdown == "secret")).first() is not None
+    assert {result[0] for result in results} in ({"puzzle", "post"}, {"puzzle", "rejected"})
+    with forum.engine.connect() as c:
+        row = c.execute(select(forum_threads.c.body_markdown).where(forum_threads.c.body_markdown == "secret")).first()
+        active = c.execute(select(puzzles.c.id).where(puzzles.c.answer_secret == "secret", puzzles.c.publish_at <= func.now(), puzzles.c.close_at > func.now(), puzzles.c.closed_at.is_(None))).first()
+        assert not (row and active)
+
+
+def test_scheduled_activation_window_rejects_forum_answer_and_charges_attempt(forum_app):
+    _, forum, puzzle, ids = forum_app
+    now = datetime.now(timezone.utc)
+    row = puzzle.create("soon", "body", "window-secret", now + timedelta(seconds=60), now + timedelta(hours=1))
+    with pytest.raises(ValueError, match="content not allowed"):
+        forum.create_thread(ids[0], "question", "t", "window-secret")
+    with puzzle.engine.connect() as c:
+        assert c.execute(select(func.count()).select_from(puzzle_attempts).where(puzzle_attempts.c.puzzle_id == row["id"], puzzle_attempts.c.agent_id == ids[0])).scalar_one() == 1
 
 
 def test_attempt_digest_has_no_plain_answer(forum_app):

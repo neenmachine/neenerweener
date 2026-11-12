@@ -204,9 +204,9 @@ def _parse_keys(raw: str | None) -> dict[str, AuthorizedKey]:
 
 def parse_ed25519_public_key(public_key: str) -> tuple[str, str]:
     """Return the canonical two-field Ed25519 key and its fingerprint."""
-    if not isinstance(public_key, str) or len(public_key) > 1024 or len(public_key.split()) != 2:
+    if not isinstance(public_key, str) or len(public_key) > 1024 or not public_key.isascii() or public_key.count(" ") != 1:
         raise ValueError
-    algorithm, encoded = public_key.split()
+    algorithm, encoded = public_key.split(" ")
     if algorithm != "ssh-ed25519" or any(ord(char) < 0x20 or ord(char) == 0x7f for char in public_key):
         raise ValueError
     canonical = f"{algorithm} {encoded}"
@@ -225,12 +225,29 @@ def _parse_key(item: Any) -> AuthorizedKey:
         or not isinstance(public_key, str)
     ):
         raise ValueError
-    public_key, fingerprint = parse_ed25519_public_key(public_key)
+    # Keep the existing CLI configuration grammar: split() accepts harmless
+    # whitespace, while a comment remains a third field and is rejected.
+    if len(public_key) > 1024 or len(public_key.split()) != 2 or not public_key.startswith("ssh-ed25519 "):
+        raise ValueError
+    fingerprint = _ed25519_fingerprint(public_key)
     if not isinstance(scopes, list) or any(type(scope) is not str for scope in scopes):
         raise ValueError
     if len(scopes) != len(set(scopes)) or set(scopes) != SUPPORTED_SCOPES:
         raise ValueError
     return AuthorizedKey(name, public_key, fingerprint, frozenset(scopes))
+
+
+def parse_agent_ed25519_public_key(public_key: str) -> tuple[str, str]:
+    """Parse an ssh-keygen .pub line and discard its optional comment."""
+    if not isinstance(public_key, str) or len(public_key) > 1024 or not public_key.isascii():
+        raise ValueError
+    if any(ord(char) < 0x20 or ord(char) == 0x7f for char in public_key):
+        raise ValueError
+    fields = public_key.split(" ")
+    if len(fields) not in (2, 3) or any(not field for field in fields):
+        raise ValueError
+    canonical = f"{fields[0]} {fields[1]}"
+    return parse_ed25519_public_key(canonical)
 
 
 def _ed25519_fingerprint(public_key: str) -> str:
@@ -657,7 +674,7 @@ class MachineAuthStore:
             (machine_auth_tokens, machine_auth_tokens.c.expires_at < now),
             (
                 machine_auth_events,
-                machine_auth_events.c.occurred_at < now - timedelta(hours=1),
+                machine_auth_events.c.occurred_at < now - timedelta(hours=24),
             ),
         ):
             ids = select(*(table.primary_key.columns)).where(condition).limit(100)

@@ -27,7 +27,7 @@ def etag_response(
 
 def cache_control(path: str, status: int, response_headers: Mapping[str, str], method: str = "GET") -> str | None:
     """Return the route policy, preserving response-specific directives where allowed."""
-    if method not in {"GET", "HEAD"} and path.startswith(("/api/forum/", "/api/puzzles/")):
+    if method not in {"GET", "HEAD"} and path.startswith("/api/forum/"):
         return "no-store"
     if path.startswith(NO_STORE_PREFIXES) or path == "/readyz" or path == "/healthz" or path == "/admin" or path.startswith("/admin/"):
         return "no-store"

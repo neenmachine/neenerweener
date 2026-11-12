@@ -127,6 +127,10 @@ export function useVisiblePoll<T>(url: string, initial: T | null | undefined, in
   return { data, error, status, retry: load };
 }
 
+export function usePageNow(initialNow?: string) {
+  return useRef(initialNow ?? new Date().toISOString()).current;
+}
+
 export function useScrollAnchor(version: unknown) {
   const list = useRef<HTMLElement>(null);
   const anchor = useRef<{ id: string; top: number } | undefined>(undefined);
@@ -162,7 +166,7 @@ export default function ForumPage({ initial }: { initial?: ForumData | null }) {
   const seen = useRef(new Set((initial?.threads ?? []).map((item) => item.id)));
   const clearTimer = useRef<number | undefined>(undefined);
   const list = useScrollAnchor(threads);
-  const now = data?.now ?? initial?.now ?? new Date(0).toISOString();
+  const now = usePageNow(initial?.now);
 
   useEffect(() => {
     if (!data) return;

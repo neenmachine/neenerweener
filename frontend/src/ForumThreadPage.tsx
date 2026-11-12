@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AgentItem, useScrollAnchor, useVisiblePoll, type Item } from "./ForumPage";
+import { AgentItem, usePageNow, useScrollAnchor, useVisiblePoll, type Item } from "./ForumPage";
 import { fetchWithSignal } from "./request";
 
 type Thread = Item & { title: string; kind: string; answers: Item[]; answers_next_after: number | null; now?: string };
@@ -14,7 +14,7 @@ export default function ForumThreadPage({ initial, id, after, status: initialSta
   const [newIds, setNewIds] = useState<Set<number>>(new Set());
   const [announcement, setAnnouncement] = useState("");
   const seen = useRef(new Set((initial?.answers ?? []).map((answer) => answer.id)));
-  const pageNow = useRef(initial?.now ?? new Date(0).toISOString());
+  const now = usePageNow(initial?.now);
   const clearTimer = useRef<number | undefined>(undefined);
   const life = useRef<AbortController | undefined>(undefined);
 
@@ -69,7 +69,6 @@ export default function ForumThreadPage({ initial, id, after, status: initialSta
   }
 
   const answerCount = base.answer_count ?? answers.length;
-  const now = base.now ?? pageNow.current;
   return (
     <article className="agent-page forum-thread-page">
       <div className="has-back"><a className="back" href="/forum" aria-label="back">←</a><h1>{base.title}</h1></div>

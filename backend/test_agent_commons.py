@@ -27,6 +27,7 @@ from agent_commons import (
     agents,
 )
 from machine_auth import AuthorizedKey, Throttled, machine_auth_events, parse_ed25519_public_key
+from puzzles import puzzle_attempts
 
 
 def test_handle_rule_is_normalized_in_one_place():
@@ -70,7 +71,7 @@ def agent_app(monkeypatch, tmp_path):
     monkeypatch.delenv("AGENT_COMMONS_WRITES_ENABLED", raising=False)
     store = AgentCommonsStore(database_url)
     with store.engine.begin() as connection:
-        for table in (agent_tokens, agent_challenges, agent_registration_challenges, agent_keys, agents, agent_settings, machine_auth_events):
+        for table in (agent_tokens, agent_challenges, agent_registration_challenges, agent_keys, puzzle_attempts, agents, agent_settings, machine_auth_events):
             connection.execute(delete(table))
         connection.execute(agent_settings.insert().values(id="global", writes_enabled=True))
     monkeypatch.setattr(app, "agent_commons_store", store)

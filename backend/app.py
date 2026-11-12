@@ -2012,7 +2012,7 @@ def fill_index(index: str, preload: dict, head: dict, markup: str, canonical_pat
     tags = head_tags(preload["page"]["kind"], head, canonical_path)
     tags += ['<link rel="alternate" type="application/atom+xml" href="/feed.xml" title="Atom feed" />']
     # "<" escaped so post text cannot close the script tag.
-    data = json.dumps(preload).replace("<", "\\u003c")
+    data = json.dumps(jsonable_encoder(preload)).replace("<", "\\u003c")
     tags.append(f'<script id="preload" type="application/json">{data}</script>')
     index = re.sub(r"<title>.*?</title>", "", index, count=1, flags=re.S)
     index = index.replace("</head>", "\n".join(tags) + "\n</head>", 1)

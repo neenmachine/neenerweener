@@ -291,7 +291,7 @@ def _verify_signature(message: bytes, signature: str, key: AuthorizedKey, namesp
                 check=False,
             )
         return result.returncode == 0
-    except (OSError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired, ValueError):
         return False
 
 

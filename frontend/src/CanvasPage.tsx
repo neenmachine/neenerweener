@@ -33,8 +33,7 @@ function draw(canvas: HTMLCanvasElement, snapshot: CanvasSnapshot, pixels: Uint8
   if (!sourceContext) return;
   const image = sourceContext.createImageData(snapshot.width, snapshot.height);
   for (let i = 0; i < pixels.length; i += 1) {
-    const color = snapshot.palette[pixels[i]] ?? "#000000";
-    const value = color.slice(1);
+    const value = (snapshot.palette[pixels[i]] ?? "#000000").slice(1);
     image.data.set([parseInt(value.slice(0, 2), 16), parseInt(value.slice(2, 4), 16), parseInt(value.slice(4, 6), 16), pixels[i] === 255 ? 0 : 255], i * 4);
   }
   sourceContext.putImageData(image, 0, 0);
@@ -45,16 +44,15 @@ function draw(canvas: HTMLCanvasElement, snapshot: CanvasSnapshot, pixels: Uint8
 
 export async function loadCanvasHistory(fetchPage: (after: number) => Promise<EventResponse>, signal: AbortSignal): Promise<Event[]> {
   let cursor = 0;
-  let target = 0;
   const history: Event[] = [];
-  do {
+  while (!signal.aborted) {
     const result = await fetchPage(cursor);
-    target = Math.max(target, result.revision);
     if (result.reset) return history;
     history.push(...result.events);
     if (!result.events.length) break;
     cursor = result.events[result.events.length - 1].revision;
-  } while (!signal.aborted && cursor < target);
+    if (cursor >= result.revision) break;
+  }
   return history;
 }
 
@@ -74,57 +72,96 @@ export default function CanvasPage({ snapshot, initialEvents = [] }: { snapshot:
   const [replaying, setReplaying] = useState(false);
   const replayingRef = useRef(false);
   const replayController = useRef<AbortController | undefined>(undefined);
+  const restoreController = useRef<AbortController | undefined>(undefined);
   const pollNow = useRef<(() => void) | undefined>(undefined);
+  const needsSnapshot = useRef(false);
   const reduced = useRef(false);
   const mounted = useRef(true);
 
   useEffect(() => {
+    mounted.current = true;
     reduced.current = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
     if (canvas.current) draw(canvas.current, snapshot, pixels.current);
-    return () => { mounted.current = false; };
+    return () => {
+      mounted.current = false;
+      replayController.current?.abort();
+      restoreController.current?.abort();
+    };
   }, [snapshot]);
 
   useEffect(() => {
     let controller: AbortController | undefined;
     let timer: number | undefined;
     let stopped = false;
+    const schedule = (milliseconds: number) => { timer = window.setTimeout(poll, milliseconds); };
     const poll = async () => {
       if (stopped || replayingRef.current) return;
       controller?.abort();
       controller = new AbortController();
       try {
-        const response = await fetchWithSignal(`/api/canvas/events?after=${revision.current}`, controller.signal);
-        if (!response.ok) throw new Error("poll failed");
-        const result = (await response.json()) as EventResponse;
-        if (replayingRef.current || stopped) return;
-        if (result.reset || (result.events.length > 0 && result.events[0].revision > revision.current + 1)) {
-          const snapshotResponse = await fetchWithSignal("/api/canvas", controller.signal);
-          const next = (await snapshotResponse.json()) as CanvasSnapshot;
-          if (replayingRef.current || stopped) return;
+        let catchUp = false;
+        if (needsSnapshot.current) {
+          const response = await fetchWithSignal("/api/canvas", controller.signal);
+          if (!response.ok) throw new Error("snapshot failed");
+          const next = (await response.json()) as CanvasSnapshot;
+          if (stopped || replayingRef.current) return;
           pixels.current = decode(next.pixels);
           revision.current = next.revision;
+          needsSnapshot.current = false;
           if (canvas.current) draw(canvas.current, next, pixels.current);
-        } else if (result.events.length) {
-          pixels.current = applyCanvasEvents(pixels.current, result.events);
-          revision.current = result.events[result.events.length - 1].revision;
-          if (mounted.current) setEvents((current) => [...current, ...result.events].slice(-20));
-          if (canvas.current) draw(canvas.current, snapshot, pixels.current);
+        } else {
+          const response = await fetchWithSignal(`/api/canvas/events?after=${revision.current}`, controller.signal);
+          if (!response.ok) throw new Error("poll failed");
+          const result = (await response.json()) as EventResponse;
+          if (replayingRef.current || stopped) return;
+          if (result.reset || (result.events.length > 0 && result.events[0].revision > revision.current + 1)) {
+            needsSnapshot.current = true;
+          } else if (result.events.length) {
+            catchUp = revision.current < result.revision;
+            pixels.current = applyCanvasEvents(pixels.current, result.events);
+            revision.current = result.events[result.events.length - 1].revision;
+            if (mounted.current) setEvents((current) => [...current, ...result.events].slice(-20));
+            if (canvas.current) draw(canvas.current, snapshot, pixels.current);
+          }
         }
         if (mounted.current) setStatus("");
-        timer = result.events.length && revision.current < result.revision ? window.setTimeout(poll, 0) : window.setTimeout(poll, 3000);
+        schedule(needsSnapshot.current || catchUp ? 0 : 3000);
       } catch (error) {
         if (!stopped && !replayingRef.current && (error as Error).name !== "AbortError") {
-          if (mounted.current) setStatus("live updates are unavailable");
-          timer = window.setTimeout(poll, 3000);
+          needsSnapshot.current = true;
+          if (mounted.current) setStatus("live updates are unavailable; retrying");
+          schedule(3000);
         }
       }
     };
-    pollNow.current = poll;
-    const visibility = () => { if (document.visibilityState === "visible") poll(); else { controller?.abort(); if (timer) window.clearTimeout(timer); } };
+    pollNow.current = () => { if (timer) window.clearTimeout(timer); void poll(); };
+    const visibility = () => { if (document.visibilityState === "visible") pollNow.current?.(); else { controller?.abort(); if (timer) window.clearTimeout(timer); } };
     if (document.visibilityState === "visible") timer = window.setTimeout(poll, 3000);
     document.addEventListener("visibilitychange", visibility);
     return () => { stopped = true; controller?.abort(); if (timer) window.clearTimeout(timer); pollNow.current = undefined; document.removeEventListener("visibilitychange", visibility); };
   }, [snapshot]);
+
+  const restoreLive = async (controller: AbortController) => {
+    for (let attempt = 0; attempt < 3 && !controller.signal.aborted; attempt += 1) {
+      try {
+        const response = await fetchWithSignal("/api/canvas", controller.signal);
+        if (!response.ok) throw new Error("restore failed");
+        const live = (await response.json()) as CanvasSnapshot;
+        if (controller.signal.aborted || !mounted.current) return false;
+        pixels.current = decode(live.pixels);
+        revision.current = live.revision;
+        needsSnapshot.current = false;
+        if (canvas.current) draw(canvas.current, live, pixels.current);
+        return true;
+      } catch (error) {
+        if ((error as Error).name === "AbortError") return false;
+        if (mounted.current) setStatus("live canvas restore failed; retrying");
+        await delay(controller.signal, 250 * (attempt + 1));
+      }
+    }
+    needsSnapshot.current = true;
+    return false;
+  };
 
   const replay = async () => {
     if (replayingRef.current) { replayController.current?.abort(); return; }
@@ -135,14 +172,11 @@ export default function CanvasPage({ snapshot, initialEvents = [] }: { snapshot:
     try {
       let replayPixels: Uint8Array = new Uint8Array(snapshot.width * snapshot.height).fill(255);
       if (canvas.current) draw(canvas.current, snapshot, replayPixels);
-      const history = await loadCanvasHistory(
-        async (after) => {
-          const response = await fetchWithSignal(`/api/canvas/history?after=${after}&limit=500`, controller.signal);
-          if (!response.ok) throw new Error("history failed");
-          return (await response.json()) as EventResponse;
-        },
-        controller.signal,
-      );
+      const history = await loadCanvasHistory(async (after) => {
+        const response = await fetchWithSignal(`/api/canvas/history?after=${after}&limit=500`, controller.signal);
+        if (!response.ok) throw new Error("history failed");
+        return (await response.json()) as EventResponse;
+      }, controller.signal);
       for (const event of history) {
         if (controller.signal.aborted) return;
         replayPixels = applyCanvasEvents(replayPixels, [event]);
@@ -150,25 +184,19 @@ export default function CanvasPage({ snapshot, initialEvents = [] }: { snapshot:
       }
       if (!controller.signal.aborted && reduced.current && canvas.current) draw(canvas.current, snapshot, replayPixels);
     } finally {
-      controller.abort();
+      if (mounted.current) {
+        const restore = new AbortController();
+        restoreController.current = restore;
+        await restoreLive(restore);
+        restoreController.current = undefined;
+      }
       replayController.current = undefined;
       replayingRef.current = false;
-      if (mounted.current) {
-        try {
-          const response = await fetchWithSignal("/api/canvas", new AbortController().signal);
-          if (response.ok) {
-            const live = (await response.json()) as CanvasSnapshot;
-            pixels.current = decode(live.pixels);
-            revision.current = live.revision;
-            if (canvas.current) draw(canvas.current, live, pixels.current);
-          }
-        } catch { /* restore is best effort; the next poll will retry */ }
-        if (mounted.current) { setReplaying(false); pollNow.current?.(); }
-      }
+      if (mounted.current) { setReplaying(false); pollNow.current?.(); }
     }
   };
 
-  return <main><article className="canvas-page"><h1>canvas</h1><p className="muted">a shared 64 × 64 pixel canvas</p><div className="canvas-frame"><canvas ref={canvas} width={512} height={512} role="img" aria-label="current canvas" /></div><div className="canvas-controls"><button type="button" onClick={replay}>{replaying ? "stop replay" : "replay"}</button></div><p role="status" aria-live="polite">{status}</p><section aria-labelledby="canvas-activity"><h2 id="canvas-activity">recent activity</h2><ol className="canvas-activity">{events.length ? events.map((event) => <li key={event.revision}>revision {event.revision}: {event.event_kind === "clear" ? "cleared a region" : "pixel updated"}{event.agent ? ` by ${event.agent}` : event.fingerprint_suffix ? ` by ${event.fingerprint_suffix}` : ""}</li>) : <li className="muted">no activity yet</li>}</ol></section></article><Footer /></main>;
+  return <main><article className="canvas-page"><h1>canvas</h1><p className="muted">a shared 64 × 64 pixel canvas</p><div className="canvas-frame"><canvas ref={canvas} width={512} height={512} role="img" aria-label="current canvas" /></div><div className="canvas-controls"><button type="button" onClick={replay}>{replaying ? "stop replay" : "replay"}</button></div><p role="status" aria-live="polite">{status}</p><section aria-labelledby="canvas-activity"><h2 id="canvas-activity">recent activity</h2><ol className="canvas-activity">{events.length ? events.map((event) => <li key={event.revision}>revision {event.revision}: {event.event_kind === "clear" ? "cleared a region" : "pixel updated"}{event.agent || event.fingerprint_suffix ? ` by ${event.agent ?? "unknown"} (${event.fingerprint_suffix ?? "unknown"})` : ""}</li>) : <li className="muted">no activity yet</li>}</ol></section></article><Footer /></main>;
 }
 
 function Footer() { return <footer><a href="/">neenerweener</a><a href="/timeline">timeline</a><a href="/canvas" aria-current="page">canvas</a><a href="/feed.xml">rss</a></footer>; }

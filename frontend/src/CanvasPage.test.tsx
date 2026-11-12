@@ -1,5 +1,18 @@
-import { expect, test } from "vitest";
-import { applyCanvasEvents, loadCanvasHistory } from "./CanvasPage";
+// @vitest-environment jsdom
+import { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, expect, test, vi } from "vitest";
+import CanvasPage, { applyCanvasEvents, loadCanvasHistory, type CanvasSnapshot } from "./CanvasPage";
+
+const snapshot: CanvasSnapshot = { width: 64, height: 64, palette: ["#000000", "#ffffff"], revision: 0, pixels: "" };
+let root: Root | undefined;
+
+afterEach(() => {
+  act(() => root?.unmount());
+  root = undefined;
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+});
 
 test("canvas events apply placements and clear regions in order", () => {
   const pixels = new Uint8Array([255, 1, 2, 3, 4, 5, 6, 7, 8]);
@@ -17,16 +30,30 @@ test("history follows every page instead of stopping at the first 500 events", a
   const calls: number[] = [];
   const history = await loadCanvasHistory(async (after) => {
     calls.push(after);
-    const page = after === 0 ? pages[0] : pages[1];
-    return { reset: false, revision: 501, events: page };
+    return { reset: false, revision: 501, events: after === 0 ? pages[0] : pages[1] };
   }, new AbortController().signal);
   expect(history).toHaveLength(501);
   expect(calls).toEqual([0, 500]);
 });
 
-test("history starts from the empty canvas rather than the live snapshot", () => {
+test("replay starts with an empty canvas", () => {
   const live = new Uint8Array([7, 255, 255, 255]);
   const empty = new Uint8Array(live.length).fill(255);
   expect([...applyCanvasEvents(empty, [{ revision: 1, event_kind: "place", x: 0, y: 0, color: 2 }], 2)]).toEqual([2, 255, 255, 255]);
   expect(live[0]).toBe(7);
+});
+
+test("unmount aborts pending replay history", async () => {
+  const context = { imageSmoothingEnabled: false, clearRect: vi.fn(), drawImage: vi.fn(), createImageData: () => ({ data: new Uint8ClampedArray(64 * 64 * 4) }), putImageData: vi.fn() };
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(context as never);
+  let historySignal: AbortSignal | undefined;
+  vi.stubGlobal("fetch", vi.fn((_url: string, options?: RequestInit) => {
+    historySignal = options?.signal ?? undefined;
+    return new Promise(() => {});
+  }));
+  document.body.innerHTML = '<div id="root"></div>';
+  await act(async () => { root = createRoot(document.getElementById("root")!); root.render(<CanvasPage snapshot={snapshot} />); });
+  await act(async () => { document.querySelector("button")?.click(); });
+  act(() => root?.unmount());
+  expect(historySignal?.aborted).toBe(true);
 });

@@ -79,7 +79,7 @@ class CanvasStore:
             ).mappings().all()
         events = []
         for row in rows:
-            event = {"revision": row["revision"], "x": row["x"], "y": row["y"], "color": row["color"], "event_kind": row["event_kind"], "created_at": row["created_at"], "clear_bounds": row["clear_bounds"], "agent": row["handle"], "fingerprint": row["fingerprint"][-8:] if row["fingerprint"] else None}
+            event = {"revision": row["revision"], "x": row["x"], "y": row["y"], "color": row["color"], "event_kind": row["event_kind"], "created_at": row["created_at"], "clear_bounds": row["clear_bounds"], "agent": row["handle"], "fingerprint_suffix": row["fingerprint"][-8:] if row["fingerprint"] else None}
             events.append(event)
         return {"reset": False, "revision": latest, "events": events}
 

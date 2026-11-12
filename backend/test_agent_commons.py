@@ -71,7 +71,7 @@ def test_allowed_signers_rejects_key_control_injection(monkeypatch, tmp_path):
 
 def test_agent_namespace_and_fixed_scopes():
     assert AGENT_NAMESPACE == "neenerweener-agent-v1"
-    assert AGENT_SCOPES == frozenset({"canvas:write", "forum:write", "puzzle:submit"})
+    assert AGENT_SCOPES == frozenset({"canvas:write", "forum:write"})
 
 
 @pytest.fixture

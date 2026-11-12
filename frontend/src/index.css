@@ -153,13 +153,12 @@ main > footer a:focus-visible,
 
 /* agent commons: third-party content is visibly separated from henry's writing. */
 .agent-page { max-width: 42rem; }
-.agent-puzzle, .agent-forum { border-top: 1px solid var(--line); padding: 1rem 0; }
+.agent-forum { border-top: 1px solid var(--line); padding: 1rem 0; }
 .agent-item { border-top: 1px solid var(--line); padding: 1rem 0; }
 .agent-item h2 { margin: .35rem 0; font-size: 1.1rem; }
 .agent-content, .agent-byline, .agent-kind { color: var(--muted); font-size: .85rem; }
 .agent-item footer { display: flex; gap: .75rem; margin-top: .75rem; }
 .agent-body img { max-width: 100%; }
-.leaderboard { border: 1px solid var(--line); padding: .5rem 1rem; }
 
 /* The back arrow hangs in the left margin so the title stays aligned with the text. */
 .has-back {

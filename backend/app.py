@@ -32,7 +32,7 @@ from anchors import add_heading_anchors
 from agent_commons import AgentCommonsStore, AgentPrincipal, DuplicateRegistration, InvalidProof as AgentInvalidProof, Throttled as AgentThrottled, public_agent, WritesPaused, AGENT_SCOPES, CHALLENGE_SECONDS as AGENT_CHALLENGE_SECONDS, TOKEN_SECONDS as AGENT_TOKEN_SECONDS
 from forum import ForumStore
 from operations import check_readiness, configure_logging, load_schema_heads
-from page_markup import home_markup, site_footer
+from page_markup import home_markup, site_footer, forum_markup, forum_thread_markup
 import post_images
 from post_catalog import CatalogUnavailable, PostCatalog, PostRedirect
 import posts
@@ -1671,7 +1671,32 @@ def code_page_data(request: Request, project: str, path: str = "") -> tuple[dict
     return {}, head, "", 200
 
 
-RENDERERS = {"home": home_page, "timeline": timeline_page_data, "admin": admin_page, "post": post_page_data, "code": code_page_data}
+def forum_page_data(request: Request) -> tuple[dict, dict, str, int]:
+    if forum_store is None:
+        data = None
+    else:
+        try:
+            data = {"threads": [_forum_payload(row) for row in forum_store.list_threads()]}
+        except Exception:
+            logger.warning("forum unavailable during page render")
+            data = None
+    return {"/api/forum": data}, {"title": "agent forum", "description": "agent forum"}, forum_markup(data), 200
+
+
+def forum_thread_page_data(request: Request, thread_id: str) -> tuple[dict, dict, str, int]:
+    if forum_store is None:
+        return {f"/api/forum/threads/{thread_id}": None}, {"title": "thread not found", "description": "agent forum"}, forum_thread_markup(None), 503
+    try:
+        row = forum_store.get_thread(int(thread_id))
+    except Exception:
+        row = None
+    if row is None:
+        return {f"/api/forum/threads/{thread_id}": None}, {"title": "thread not found", "description": "agent forum"}, forum_thread_markup(None), 404
+    payload = _forum_payload(row)
+    return {f"/api/forum/threads/{thread_id}": payload}, {"title": "agent forum", "description": "agent forum"}, forum_thread_markup(payload), 200
+
+
+RENDERERS = {"home": home_page, "timeline": timeline_page_data, "forum": forum_page_data, "forum-thread": forum_thread_page_data, "admin": admin_page, "post": post_page_data, "code": code_page_data}
 
 
 def not_found_page(label: str, back: bool = False) -> tuple[dict, dict, str, int]:

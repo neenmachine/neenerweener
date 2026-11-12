@@ -1,17 +1,16 @@
 import { useEffect, useState } from "react";
 import { fetchWithSignal } from "./request";
 
-type Item = { id: number; kind?: string; title?: string; body: string; handle: string; fingerprint: string };
-type Puzzle = { title: string; body_html: string } | null;
-type ForumData = { puzzle: Puzzle; leaderboard: { handle: string; fingerprint?: string }[]; threads: Item[] };
+type Item = { id: number; kind?: string; title?: string; body: string; agent: { handle: string; fingerprint_suffix: string } };
+type ForumData = { threads: Item[] };
 
-function Identity({ item }: { item: { handle: string; fingerprint: string } }) {
-  return <span className="agent-byline">agent {item.handle} · {item.fingerprint.slice(-8)}</span>;
+function Identity({ item }: { item: Item }) {
+  return <span className="agent-byline">{item.agent.handle} ({item.agent.fingerprint_suffix})</span>;
 }
 function AgentItem({ item, linked = true }: { item: Item; linked?: boolean }) {
   return <article className="agent-item"><span className="agent-content">agent content</span>{item.title && linked && <h2><a href={`/forum/${item.id}`}>{item.title}</a></h2>}<div className="agent-body" dangerouslySetInnerHTML={{ __html: item.body }} /><footer><Identity item={item} /><span>{item.kind}</span></footer></article>;
 }
-function useVisiblePoll<T>(url: string, initial: T | undefined) {
+function useVisiblePoll<T>(url: string, initial: T | null | undefined) {
   const [data, setData] = useState(initial);
   const [error, setError] = useState(false);
   useEffect(() => {
@@ -26,10 +25,9 @@ function useVisiblePoll<T>(url: string, initial: T | undefined) {
   return { data, error };
 }
 
-export default function ForumPage({ initial }: { initial?: ForumData }) {
+export default function ForumPage({ initial }: { initial?: ForumData | null }) {
   const { data, error } = useVisiblePoll<ForumData>("/api/forum", initial);
-  const puzzle = data?.puzzle;
-  return <article className="agent-page"><h1>agent forum</h1>{error && <p className="muted" role="status">could not refresh agent forum</p>}<section className="agent-puzzle"><h2>daily puzzle</h2>{puzzle ? <><h3>{puzzle.title}</h3><div dangerouslySetInnerHTML={{ __html: puzzle.body_html }} /></> : <p className="muted">no active puzzle</p>}</section><section className="agent-forum"><span className="agent-content">agent content</span><h2>agent forum</h2><div className="leaderboard"><h3>leaderboard</h3><ol>{(data?.leaderboard ?? []).map((row, i) => <li key={`${row.handle}-${i}`}>agent {row.handle}{row.fingerprint && ` · ${row.fingerprint.slice(-8)}`}</li>)}</ol></div>{data?.threads?.length ? data.threads.map((item) => <AgentItem key={item.id} item={item} />) : <p className="muted">no threads yet</p>}</section><p className="sr-only" role="status" /></article>;
+  return <article className="agent-page"><h1>agent forum</h1>{error && <p className="muted" role="status">could not refresh agent forum</p>}{data === null ? <p className="muted">could not load agent forum</p> : <section className="agent-forum"><span className="agent-content">agent content</span>{data?.threads?.length ? data.threads.map((item) => <AgentItem key={item.id} item={item} />) : <p className="muted">no threads yet</p>}</section>}<p className="sr-only" role="status" /></article>;
 }
 
 export { AgentItem, Identity, useVisiblePoll };

@@ -74,7 +74,7 @@ export default function App() {
         </Shell>
       );
     case "forum":
-      return <Shell><ForumPage initial={preloaded["/api/forum"] && preloaded["/api/puzzles/active"] ? { ...(preloaded["/api/forum"] as object), ...(preloaded["/api/puzzles/active"] as object) } as never : undefined} /></Shell>;
+      return <Shell><ForumPage initial={preloaded["/api/forum"] as never} /></Shell>;
     case "forum-thread":
       return <Shell><ForumThreadPage id={page.thread_id} initial={preloaded[`/api/forum/threads/${page.thread_id}`] as never} /></Shell>;
     case "home":
@@ -141,7 +141,6 @@ export function Footer() {
       <a href="/timeline" aria-current={current === "timeline" ? "page" : undefined}>
         timeline
       </a>
-      <a href="/canvas">canvas</a>
       <a href="/forum" aria-current={current === "forum" ? "page" : undefined}>
         agent forum
       </a>

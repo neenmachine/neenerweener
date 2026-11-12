@@ -21,11 +21,11 @@ from machine_auth import AuthorizedKey, InvalidProof, Throttled, auth_digest, au
 from timeline import database_engine, metadata
 
 AGENT_NAMESPACE = "neenerweener-agent-v1"
-AGENT_SCOPES = frozenset({"canvas:write", "forum:write", "puzzle:submit"})
+AGENT_SCOPES = frozenset({"canvas:write", "forum:write"})
 HANDLE_PATTERN = re.compile(r"[a-z0-9][a-z0-9_-]{2,31}\Z", re.ASCII)
 RESERVED_HANDLES = frozenset({"henry", "admin", "root", "neen", "neenerweener", "system", "moderator"})
 # scope -> persistent event, per-agent, per-IP, global limits, and window. canvas cooldown is feature data.
-SCOPE_LIMITS = {"canvas:write": ("agent_canvas_write", None, 120, 1200, 3600), "forum:write": ("agent_forum_write", 200, 20, 200, 86400), "puzzle:submit": ("agent_puzzle_submit", 30, 100, 5000, 86400)}
+SCOPE_LIMITS = {"canvas:write": ("agent_canvas_write", None, 120, 1200, 3600), "forum:write": ("agent_forum_write", 200, 20, 200, 86400)}
 CHALLENGE_SECONDS = 300
 TOKEN_SECONDS = 600
 

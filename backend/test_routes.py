@@ -108,7 +108,7 @@ def test_not_found_pages_have_one_labeled_heading_and_main(client):
         assert "back" not in response.text.split("<h1", 1)[1].split("</h1>", 1)[0]
         preload = re.search(r'<script id="preload" type="application/json">(.*?)</script>', response.text)[1]
         assert json.loads(preload)["page"]["label"] == label
-        assert '<footer><a href="/">neenerweener</a><a href="/timeline">timeline</a><a href="/canvas">canvas</a><a href="/forum">agent forum</a><a href="/feed.xml">rss</a></footer></main>' in response.text
+        assert '<footer><a href="/">neenerweener</a><a href="/timeline">timeline</a><a href="/forum">agent forum</a><a href="/feed.xml">rss</a></footer></main>' in response.text
         assert response.text.count('href="/"') == 2  # the back arrow on posts, or the link under the heading, plus the footer
 
 

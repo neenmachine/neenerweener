@@ -16,6 +16,7 @@ from urllib.parse import quote
 import yaml
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -28,7 +29,8 @@ from pygments.lexers import TextLexer, get_lexer_by_name, get_lexer_for_filename
 from pygments.util import ClassNotFound
 
 from anchors import add_heading_anchors
-from agent_commons import AgentCommonsStore, DuplicateRegistration, InvalidProof as AgentInvalidProof, Throttled as AgentThrottled, public_agent, AGENT_SCOPES, CHALLENGE_SECONDS as AGENT_CHALLENGE_SECONDS, TOKEN_SECONDS as AGENT_TOKEN_SECONDS
+from agent_commons import AgentCommonsStore, DuplicateRegistration, InvalidProof as AgentInvalidProof, Throttled as AgentThrottled, public_agent, AGENT_SCOPES, CHALLENGE_SECONDS as AGENT_CHALLENGE_SECONDS, TOKEN_SECONDS as AGENT_TOKEN_SECONDS, WritesPaused
+from canvas import CanvasStore, authorize_canvas_write, png_bytes, snapshot_payload
 from operations import check_readiness, configure_logging, load_schema_heads
 from page_markup import home_markup, site_footer
 import post_images
@@ -143,6 +145,8 @@ async def lifespan(_app):
         await asyncio.to_thread(machine_auth_store.close)
     if agent_commons_store is not None:
         await asyncio.to_thread(agent_commons_store.close)
+    if canvas_store is not None:
+        await asyncio.to_thread(canvas_store.close)
     if post_store is not None:
         await asyncio.to_thread(post_store.close)
 
@@ -163,6 +167,9 @@ post_store: posts.PostStore | None = (
 auth_store: AuthStore | None = AuthStore(os.environ["DATABASE_URL"]) if os.environ.get("DATABASE_URL") else None
 agent_commons_store: AgentCommonsStore | None = (
     AgentCommonsStore(os.environ["DATABASE_URL"]) if os.environ.get("DATABASE_URL") else None
+)
+canvas_store: CanvasStore | None = (
+    CanvasStore(os.environ["DATABASE_URL"]) if os.environ.get("DATABASE_URL") else None
 )
 machine_auth_store: MachineAuthStore | None = (
     MachineAuthStore(os.environ["DATABASE_URL"]) if os.environ.get("DATABASE_URL") else None
@@ -358,6 +365,21 @@ class TokenRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     challenge_id: uuid.UUID
     signature: str
+
+
+class CanvasPixelRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    x: int
+    y: int
+    color: int
+
+
+class CanvasClearRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    x: int
+    y: int
+    width: int
+    height: int
 
 
 # What /timeline shows when the profile cannot be read: the migration's defaults, so the feed still renders.
@@ -629,6 +651,71 @@ async def agent_me(request: Request):
     principal = await asyncio.to_thread(_agent_store()._token_principal, auth[7:])
     if principal is None: raise HTTPException(401, "authentication required")
     return {"agent_id": str(principal.agent_id), **public_agent(principal.handle, principal.fingerprint), "scopes": sorted(principal.scopes), "banned": False}
+
+
+def _canvas_store() -> CanvasStore:
+    if canvas_store is None:
+        raise HTTPException(503, "canvas unavailable")
+    return canvas_store
+
+
+def _canvas_token(request: Request) -> str:
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer ") or auth.count(" ") != 1 or not auth[7:]:
+        raise HTTPException(401, "authentication required")
+    return auth[7:]
+
+
+@app.get("/api/canvas")
+async def canvas_snapshot(request: Request):
+    revision, pixels = await asyncio.to_thread(_canvas_store().snapshot)
+    content = json.dumps(snapshot_payload(revision, pixels), separators=(",", ":")).encode()
+    return etag_response(request, content, "application/json", {"Cache-Control": "public, max-age=3, must-revalidate"})
+
+
+@app.get("/api/canvas/events")
+async def canvas_events(request: Request, after: int = Query(0, ge=0)):
+    value = await asyncio.to_thread(_canvas_store().events, after)
+    return etag_response(request, json.dumps(jsonable_encoder(value), separators=(",", ":")).encode(), "application/json", {"Cache-Control": "public, max-age=3, must-revalidate"})
+
+
+@app.get("/api/canvas/history")
+async def canvas_history(request: Request, after: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=500)):
+    value = await asyncio.to_thread(_canvas_store().events, after, limit)
+    return etag_response(request, json.dumps(jsonable_encoder(value), separators=(",", ":")).encode(), "application/json", {"Cache-Control": "public, max-age=3, must-revalidate"})
+
+
+@app.post("/api/canvas/pixels", status_code=201)
+async def canvas_pixel(request: Request):
+    payload = await _bounded_json(request, CanvasPixelRequest, limit=1024)
+    if not (0 <= payload.x < 64 and 0 <= payload.y < 64 and 0 <= payload.color < 16):
+        raise HTTPException(422, "invalid pixel")
+    try:
+        principal = await authorize_canvas_write(_agent_store(), _canvas_token(request), trusted_client_ip(request))
+        result = await asyncio.to_thread(_canvas_store().place, principal, payload.x, payload.y, payload.color)
+    except AgentThrottled as exc:
+        raise HTTPException(429, "too many requests", headers={"Retry-After": str(exc.retry_after)}) from exc
+    except PermissionError as exc:
+        raise HTTPException(403, "canvas write not permitted") from exc
+    except WritesPaused as exc:
+        raise HTTPException(503, "agent writes paused") from exc
+    return JSONResponse(result, status_code=201, headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/canvas.png")
+async def canvas_png(request: Request):
+    revision, pixels = await asyncio.to_thread(_canvas_store().snapshot)
+    data = await asyncio.to_thread(png_bytes, pixels)
+    return etag_response(request, data, "image/png", {"Cache-Control": "public, max-age=3, must-revalidate", "X-Canvas-Revision": str(revision)}, etag=f'"canvas-revision-{revision}"')
+
+
+@app.post("/api/admin/agents/canvas/clear")
+async def canvas_clear(request: Request, _access: Access = Depends(require_browser_mutation)):
+    payload = await _bounded_json(request, CanvasClearRequest, limit=1024)
+    if payload.width < 1 or payload.height < 1 or payload.x < 0 or payload.y < 0 or payload.x + payload.width > 64 or payload.y + payload.height > 64:
+        raise HTTPException(422, "invalid canvas region")
+    revision = await asyncio.to_thread(_canvas_store().clear, payload.x, payload.y, payload.width, payload.height)
+    return JSONResponse({"revision": revision}, headers={"Cache-Control": "no-store"})
 
 
 @app.post("/api/cli/auth/challenge", status_code=201)

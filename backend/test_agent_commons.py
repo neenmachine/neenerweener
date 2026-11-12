@@ -468,6 +468,27 @@ def test_async_mutation_gate_does_not_block_event_loop(monkeypatch):
     asyncio.run(exercise())
 
 
+def test_concurrent_canvas_pixel_cooldown_has_one_winner(agent_app):
+    client, store, private, public = agent_app
+    identity = register(client, private, public, "canvas_race_agent")
+    token = authenticate(client, store, private, identity["fingerprint"])
+    original = ACTION_LIMITS["canvas:pixel"]
+    ACTION_LIMITS["canvas:pixel"] = {"scope": "canvas:write", "windows": ((30, 1, None, None),)}
+    try:
+        def claim():
+            try:
+                asyncio.run(store.authorize_mutation(token, "canvas:pixel", "127.0.0.1"))
+                return "won"
+            except Throttled:
+                return "lost"
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda _: claim(), (None, None)))
+        assert sorted(results) == ["lost", "won"]
+    finally:
+        ACTION_LIMITS["canvas:pixel"] = original
+
+
 def test_failed_proofs_hit_key_limit_with_retry_after(agent_app):
     client, store, private, public = agent_app
     identity = register(client, private, public, "failed_limit_agent")

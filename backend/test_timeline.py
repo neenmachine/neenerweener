@@ -224,6 +224,10 @@ def test_alembic_upgrade_from_empty():
     engine = create_engine(os.environ['DATABASE_URL'])
     try:
         with engine.begin() as connection:
+            connection.exec_driver_sql('DROP TABLE IF EXISTS puzzle_attempts CASCADE')
+            connection.exec_driver_sql('DROP TABLE IF EXISTS puzzles CASCADE')
+            connection.exec_driver_sql('DROP TABLE IF EXISTS forum_answers CASCADE')
+            connection.exec_driver_sql('DROP TABLE IF EXISTS forum_threads CASCADE')
             connection.exec_driver_sql('DROP TABLE IF EXISTS agent_commons_settings CASCADE')
             connection.exec_driver_sql('DROP TABLE IF EXISTS agent_tokens CASCADE')
             connection.exec_driver_sql('DROP TABLE IF EXISTS agent_challenges CASCADE')
@@ -268,7 +272,7 @@ def test_alembic_upgrade_down_up_is_repeatable():
     engine = create_engine(os.environ['DATABASE_URL'])
     try:
         with engine.connect() as connection:
-            assert connection.execute(text('select version_num from alembic_version')).scalar() == '008_agent_identity'
+            assert connection.execute(text('select version_num from alembic_version')).scalar() == '010_forum_puzzles'
     finally:
         engine.dispose()
         app.configure_logging()

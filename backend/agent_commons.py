@@ -1,4 +1,7 @@
-"""agent identity and the single policy seam used by agent mutations."""
+"""agent identity and the single policy seam used by agent mutations.
+
+``public_agent`` owns the public handle and fingerprint-suffix display shape.
+"""
 from __future__ import annotations
 
 import asyncio
@@ -14,7 +17,7 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.engine import Engine
 
 from client_identity import rate_limit_key
-from machine_auth import AuthorizedKey, InvalidProof, Throttled, auth_digest, auth_message, machine_auth_events, parse_ed25519_public_key, verify_auth_signature
+from machine_auth import AuthorizedKey, InvalidProof, Throttled, auth_digest, auth_message, machine_auth_events, parse_agent_ed25519_public_key, verify_auth_signature
 from timeline import database_engine, metadata
 
 AGENT_NAMESPACE = "neenerweener-agent-v1"
@@ -47,6 +50,12 @@ class AgentChallenge:
     expires_at: datetime
 
 class WritesPaused(Exception): pass
+class DuplicateRegistration(ValueError): pass
+
+
+def public_agent(handle: str, fingerprint: str) -> dict[str, str]:
+    """Return the stable public identity display for an agent."""
+    return {"handle": handle, "fingerprint_suffix": fingerprint.removeprefix("SHA256:")[-8:]}
 
 class AgentCommonsStore:
     """One policy operation for pr 2 canvas and pr 3 forum callers.
@@ -100,7 +109,7 @@ class AgentCommonsStore:
     def registration_challenge(self, handle: str, public_key: str, client_ip: str | None) -> AgentChallenge:
         self._assert_writes_enabled()
         handle = self.normalize_handle(handle)
-        canonical, fingerprint = parse_ed25519_public_key(public_key)
+        canonical, fingerprint = parse_agent_ed25519_public_key(public_key)
         audience = self._audience(); secret = self._secret()
         if audience is None or secret is None: raise RuntimeError("agent authentication unavailable")
         now = datetime.now(timezone.utc); cid = uuid.uuid4(); nonce = secrets.token_bytes(32); expires = now + timedelta(seconds=CHALLENGE_SECONDS)
@@ -110,7 +119,7 @@ class AgentCommonsStore:
             if retry: raise Throttled(retry)
             self._event(c, "registration", client_ip, None)
             duplicate = c.execute(select(agents.c.id).where(agents.c.handle == handle)).first() or c.execute(select(agent_keys.c.fingerprint).where(agent_keys.c.fingerprint == fingerprint)).first()
-        if duplicate: raise ValueError("handle or key already registered")
+        if duplicate: raise DuplicateRegistration("handle or key already registered")
         with self.engine.begin() as c:
             self._assert_writes_enabled()
             c.execute(insert(agent_registration_challenges).values(challenge_id=cid, handle=handle, fingerprint=fingerprint, public_key=canonical, nonce=nonce, audience=audience, expires_at=expires))
@@ -154,6 +163,7 @@ class AgentCommonsStore:
         self._assert_writes_enabled()
         with self.engine.begin() as c:
             c.execute(insert(agent_challenges).values(challenge_id=cid, fingerprint=fingerprint, nonce=nonce, audience=audience, expires_at=expires))
+            self._cleanup(c, now)
         return AgentChallenge(cid, self._message(cid, fingerprint, nonce, audience, expires), expires)
 
     def token(self, challenge_id: uuid.UUID, signature: str, client_ip: str | None = None) -> tuple[str, AgentPrincipal]:

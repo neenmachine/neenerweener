@@ -5,12 +5,14 @@ import os
 import subprocess
 import threading
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import delete, select
 
 import app
+import agent_commons
 import machine_auth
 from agent_commons import (
     AGENT_NAMESPACE,
@@ -25,9 +27,14 @@ from agent_commons import (
     agent_settings,
     agent_tokens,
     agents,
+    public_agent,
 )
-from machine_auth import AuthorizedKey, Throttled, machine_auth_events, parse_ed25519_public_key
+from machine_auth import AuthorizedKey, Throttled, machine_auth_events, parse_agent_ed25519_public_key, parse_ed25519_public_key
 from puzzles import puzzle_attempts
+
+
+def test_public_agent_owns_fingerprint_suffix_display():
+    assert public_agent("agent_one", "SHA256:0123456789abcdef") == {"handle": "agent_one", "fingerprint_suffix": "89abcdef"}
 
 
 def test_handle_rule_is_normalized_in_one_place():
@@ -36,6 +43,16 @@ def test_handle_rule_is_normalized_in_one_place():
     for value in ("ab", "-agent", "agent!", "éagent", "Key", "a" * 33, *RESERVED_HANDLES):
         with pytest.raises(ValueError):
             AgentCommonsStore.normalize_handle(value)
+
+
+def test_agent_key_parser_accepts_one_pub_comment_and_canonicalizes():
+    valid = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFh"
+    canonical, fingerprint = parse_agent_ed25519_public_key(valid + " henry@host")
+    assert canonical == valid
+    assert fingerprint.startswith("SHA256:")
+    for value in (valid + "  comment", valid + " comment extra", valid + "\tcomment", valid + "\ncomment"):
+        with pytest.raises(ValueError):
+            parse_agent_ed25519_public_key(value)
 
 
 def test_strict_key_parser_rejects_comments_controls_and_wrong_algorithms():
@@ -103,7 +120,9 @@ def test_http_registration_challenge_token_and_policy_end_to_end(agent_app):
     client, store, private, public = agent_app
     identity = register(client, private, public)
     token = authenticate(client, store, private, identity["fingerprint"])
-    assert client.get("/api/agents/me", headers={"Authorization": f"Bearer {token}"}).status_code == 200
+    me = client.get("/api/agents/me", headers={"Authorization": f"Bearer {token}"})
+    assert me.status_code == 200
+    assert me.json()["fingerprint_suffix"] == identity["fingerprint"].removeprefix("SHA256:")[-8:]
     assert asyncio.run(store.authorize_mutation(token, "canvas:write", "10.0.0.1")).handle == "agent_one"
     with store.engine.connect() as connection:
         digest = connection.execute(select(agent_tokens.c.token_digest)).scalar_one()
@@ -123,6 +142,14 @@ def test_namespace_replay_and_failed_proofs_are_counted(agent_app):
     assert client.post("/api/agents/auth/token", json={"challenge_id": challenge["challenge_id"], "signature": sign(private, challenge["message"])}).status_code in (401, 429)
     with store.engine.connect() as connection:
         assert connection.execute(select(machine_auth_events).where(machine_auth_events.c.event == "agent_exchange")).fetchall()
+
+
+def test_duplicate_registration_challenge_returns_conflict(agent_app):
+    client, _store, private, public = agent_app
+    register(client, private, public, "duplicate_agent")
+    response = client.post("/api/agents/auth/register/challenge", json={"handle": "duplicate_agent", "public_key": public})
+    assert response.status_code == 409
+    assert response.json() == {"detail": "handle or key already registered"}
 
 
 def test_duplicate_registration_race_same_handle_and_key(agent_app):
@@ -195,6 +222,13 @@ def test_pause_blocks_all_agent_state_routes(agent_app, monkeypatch):
             monkeypatch.delenv("AGENT_COMMONS_WRITES_ENABLED")
 
 
+def test_registration_accepts_ssh_keygen_pub_line(agent_app):
+    client, _store, private, public = agent_app
+    pub_line = private.with_suffix(".pub").read_text().strip()
+    identity = register(client, private, pub_line, "pub_line_agent")
+    assert identity["fingerprint"].startswith("SHA256:")
+
+
 def test_request_byte_limit_and_retry_after(agent_app):
     client, store, private, public = agent_app
     too_large = client.post("/api/agents/auth/register", content=b"x" * 20_000, headers={"content-type": "application/json"})
@@ -203,6 +237,37 @@ def test_request_byte_limit_and_retry_after(agent_app):
         response = client.post("/api/agents/auth/register/challenge", json={"handle": f"limit_{index}", "public_key": public}, headers={"x-forwarded-for": "10.0.0.1"})
     assert response.status_code == 429
     assert int(response.headers["retry-after"]) > 0
+
+
+def test_registration_limit_last_24_hours_only(agent_app, monkeypatch):
+    client, _store, _private, public = agent_app
+    class FixedDateTime(agent_commons.datetime):
+        current = datetime.now(timezone.utc)
+
+        @classmethod
+        def now(cls, tz=None):
+            return cls.current
+
+    monkeypatch.setattr(agent_commons, "datetime", FixedDateTime)
+    for index in range(3):
+        assert client.post("/api/agents/auth/register/challenge", json={"handle": f"window_{index}", "public_key": public}, headers={"x-forwarded-for": "10.0.0.2"}).status_code == 201
+    FixedDateTime.current += timedelta(minutes=16)
+    assert client.post("/api/agents/auth/register/challenge", json={"handle": "window_16m", "public_key": public}, headers={"x-forwarded-for": "10.0.0.2"}).status_code == 429
+    FixedDateTime.current += timedelta(hours=23, minutes=44, seconds=1)
+    assert client.post("/api/agents/auth/register/challenge", json={"handle": "window_24h", "public_key": public}, headers={"x-forwarded-for": "10.0.0.2"}).status_code == 201
+
+
+def test_auth_challenge_runs_bounded_expiry_cleanup(agent_app):
+    client, store, _private, public = agent_app
+    identity = register(client, _private, public, "cleanup_agent")
+    expired = datetime.now(timezone.utc) - timedelta(hours=1)
+    with store.engine.begin() as connection:
+        connection.execute(agent_challenges.insert().values(challenge_id=uuid.uuid4(), fingerprint=identity["fingerprint"], nonce=b"x" * 32, audience="http://127.0.0.1", expires_at=expired))
+        connection.execute(agent_tokens.insert().values(token_digest=b"y" * 32, agent_id=uuid.UUID(identity["agent_id"]), fingerprint=identity["fingerprint"], scopes=sorted(AGENT_SCOPES), issued_at=expired, expires_at=expired))
+    assert client.post("/api/agents/auth/challenge", json={"key_fingerprint": identity["fingerprint"]}).status_code == 201
+    with store.engine.connect() as connection:
+        assert connection.execute(select(agent_challenges).where(agent_challenges.c.expires_at == expired)).first() is None
+        assert connection.execute(select(agent_tokens).where(agent_tokens.c.expires_at == expired)).first() is None
 
 
 def test_challenge_expiry_and_wrong_audience_are_denials(agent_app):

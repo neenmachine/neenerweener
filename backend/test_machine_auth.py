@@ -164,6 +164,14 @@ def test_strict_key_config_and_safe_helper(machine_app, monkeypatch, tmp_path):
         assert not MachineAuthConfig.from_env().valid
 
 
+def test_cli_key_parser_keeps_main_whitespace_compatibility(machine_app, monkeypatch):
+    _private, public, _store, _secret = machine_app
+    accepted = (public, public + "\n", public + " ", public + "\t", public.replace(" ", "  "))
+    for value in accepted:
+        monkeypatch.setenv("ADMIN_SSH_KEYS", json.dumps([{"name": "fixture-key", "public_key": value, "scopes": SCOPES}]))
+        assert MachineAuthConfig.from_env().valid, repr(value)
+
+
 def test_config_helper_prints_only_safe_fields(machine_app, capsys):
     _private, public, _store, _secret = machine_app
     assert auth_main(["validate-ssh-keys"]) == 0

@@ -29,7 +29,7 @@ from pygments.lexers import TextLexer, get_lexer_by_name, get_lexer_for_filename
 from pygments.util import ClassNotFound
 
 from anchors import add_heading_anchors
-from agent_commons import AgentCommonsStore, AgentPrincipal, InvalidProof as AgentInvalidProof, Throttled as AgentThrottled, WritesPaused, AGENT_SCOPES, CHALLENGE_SECONDS as AGENT_CHALLENGE_SECONDS, TOKEN_SECONDS as AGENT_TOKEN_SECONDS
+from agent_commons import AgentCommonsStore, AgentPrincipal, DuplicateRegistration, InvalidProof as AgentInvalidProof, Throttled as AgentThrottled, public_agent, WritesPaused, AGENT_SCOPES, CHALLENGE_SECONDS as AGENT_CHALLENGE_SECONDS, TOKEN_SECONDS as AGENT_TOKEN_SECONDS
 from forum import ForumStore
 from puzzles import PuzzleRateLimited, PuzzleStore
 from operations import check_readiness, configure_logging, load_schema_heads
@@ -595,6 +595,8 @@ async def agent_register_challenge(request: Request):
         challenge = await asyncio.to_thread(_agent_store().registration_challenge, payload.handle, payload.public_key, trusted_client_ip(request))
     except AgentThrottled as exc:
         raise HTTPException(429, "too many requests", headers={"Retry-After": str(exc.retry_after)}) from exc
+    except DuplicateRegistration as exc:
+        raise HTTPException(409, "handle or key already registered") from exc
     except (ValueError, TypeError):
         raise HTTPException(422, "invalid request")
     except Exception as exc:
@@ -654,7 +656,7 @@ async def agent_me(request: Request):
         raise HTTPException(401, "authentication required")
     principal = await asyncio.to_thread(_agent_store()._token_principal, auth[7:])
     if principal is None: raise HTTPException(401, "authentication required")
-    return {"agent_id": str(principal.agent_id), "handle": principal.handle, "fingerprint": principal.fingerprint, "scopes": sorted(principal.scopes), "banned": False}
+    return {"agent_id": str(principal.agent_id), **public_agent(principal.handle, principal.fingerprint), "scopes": sorted(principal.scopes), "banned": False}
 
 
 async def _agent_access(request: Request, scope: str) -> AgentPrincipal:
@@ -671,15 +673,9 @@ async def _agent_access(request: Request, scope: str) -> AgentPrincipal:
     return principal
 
 
-def _public_agent(handle: str | None, fingerprint: str | None) -> dict:
-    # TODO(pr1 identity): replace this local suffix with agent_commons.public_agent.
-    suffix = fingerprint.rsplit(":", 1)[-1][-8:] if fingerprint else None
-    return {"handle": handle, "fingerprint_suffix": suffix}
-
-
 def _forum_payload(row: dict) -> dict:
     payload = {k: v for k, v in row.items() if k not in {"body_markdown", "body_html", "agent_id", "handle", "fingerprint"}} | {"body": row["body_html"]}
-    return payload | {"agent": _public_agent(row.get("handle"), row.get("fingerprint"))}
+    return payload | {"agent": public_agent(row.get("handle"), row.get("fingerprint"))}
 
 @app.get("/api/forum")
 def forum_list(before: int | None = None, limit: int = Query(20, ge=1, le=100)):
@@ -722,7 +718,7 @@ def puzzle_active():
     if puzzle_store is None: raise HTTPException(503, "puzzle unavailable")
     puzzle = puzzle_store.active()
     leaderboard = puzzle_store.leaderboard(puzzle["id"]) if puzzle else []
-    return {"puzzle": puzzle, "leaderboard": [{k: v for k, v in row.items() if k not in {"handle", "fingerprint"}} | {"agent": _public_agent(row.get("handle"), row.get("fingerprint"))} for row in leaderboard]}
+    return {"puzzle": puzzle, "leaderboard": [{k: v for k, v in row.items() if k not in {"handle", "fingerprint"}} | {"agent": public_agent(row.get("handle"), row.get("fingerprint"))} for row in leaderboard]}
 
 @app.post("/api/puzzles/{puzzle_id}/attempt", dependencies=[Security(_agent_bearer)], openapi_extra={"requestBody": {"required": True, "content": {"application/json": {"schema": {"type": "object", "required": ["answer"], "properties": {"answer": {"type": "string"}}}}}}})
 async def puzzle_attempt(puzzle_id: PositiveInt, request: Request):

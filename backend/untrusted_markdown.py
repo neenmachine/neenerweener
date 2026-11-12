@@ -22,10 +22,15 @@ def _validate_links(tokens, *, absolute_links: bool, max_links: int | None) -> N
     if max_links is not None and links > max_links:
         raise ValueError("too many links")
 
+def validate_untrusted_text(value: str, *, maximum: int, allow_empty: bool = False) -> str:
+    if len(value) > maximum or "\x00" in value or (not allow_empty and not value.strip()):
+        raise ValueError("invalid text")
+    try: value.encode("utf-8")
+    except UnicodeEncodeError as exc: raise ValueError("invalid text") from exc
+    return value
+
 def parse_untrusted_markdown(body: str, *, maximum: int, absolute_links: bool = False, max_links: int | None = None):
-    if len(body) > maximum or "\x00" in body or not body.strip(): raise ValueError("invalid body")
-    try: body.encode("utf-8")
-    except UnicodeEncodeError as exc: raise ValueError("invalid body") from exc
+    validate_untrusted_text(body, maximum=maximum)
     if _UNSAFE_MARKDOWN_LINK.search(body): raise ValueError("unsafe link")
     tokens = _markdown.parse(body)
     _validate_links(tokens, absolute_links=absolute_links, max_links=max_links)

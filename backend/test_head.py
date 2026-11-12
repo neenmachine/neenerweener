@@ -75,10 +75,10 @@ def test_each_head_tag_appears_once(site, case):
     page = case.get("page")
     expected = {
         r"<title>": int(page is not None),
-        r'<meta name="description"': int(page is not None and page["kind"] in {"timeline", "post", "forum", "forum-thread"}),
+        r'<meta name="description"': int(page is not None and page["kind"] in {"timeline", "post", "forum", "forum-thread", "canvas"}),
         r'<link rel="canonical"': int(page is not None and not case["noindex"]),
         r'<meta property="og:title"': int(page is not None),
-        r'<meta property="og:description"': int(page is not None and page["kind"] in {"timeline", "post", "forum", "forum-thread"}),
+        r'<meta property="og:description"': int(page is not None and page["kind"] in {"timeline", "post", "forum", "forum-thread", "canvas"}),
         r'<meta property="og:url"': int(page is not None and not case["noindex"]),
         r'<meta property="og:type"': int(page is not None and not case["noindex"]),
         r'<meta property="og:site_name"': int(page is not None),

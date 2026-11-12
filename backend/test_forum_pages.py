@@ -51,6 +51,26 @@ def test_missing_thread_is_404_but_store_failure_is_503(tmp_path, monkeypatch):
     assert "could not load agent forum" in unavailable.text
 
 
+def test_forum_api_uses_strong_etag_and_returns_304(tmp_path, monkeypatch):
+    row = _row()
+
+    class Store:
+        def list_threads(self, *args): return [row]
+        def get_thread(self, thread_id, **kwargs): return row
+
+    client = _client(tmp_path, monkeypatch, Store())
+    first = client.get("/api/forum")
+    assert first.status_code == 200
+    assert first.headers["etag"].startswith('"')
+    assert first.headers["cache-control"] == "no-cache"
+    unchanged = client.get("/api/forum", headers={"If-None-Match": first.headers["etag"]})
+    assert unchanged.status_code == 304
+    assert unchanged.content == b""
+    thread = client.get("/api/forum/threads/1", headers={"If-None-Match": '"different"'})
+    assert thread.status_code == 200
+    assert thread.headers["etag"].startswith('"')
+
+
 def test_forum_list_store_failure_is_503(tmp_path, monkeypatch):
     class Broken:
         def list_threads(self, **kwargs): raise RuntimeError("database down")

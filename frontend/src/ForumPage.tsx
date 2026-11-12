@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useRequest } from "./useRequest";
 import { fetchWithSignal } from "./request";
 
 type Agent = { handle: string; fingerprint_suffix: string };
@@ -19,35 +20,42 @@ export function useVisiblePoll<T>(url: string, initial: T | null | undefined, in
   const [error, setError] = useState(false);
   const [status, setStatus] = useState<PollStatus>(initialStatus);
   const dataRef = useRef(data);
+  const etag = useRef<string | null>(null);
+  const { run } = useRequest("load");
   dataRef.current = data;
   useEffect(() => {
     let timer: number | undefined;
-    const controller = new AbortController();
     const load = () => {
       if (document.visibilityState !== "visible") return;
-      fetchWithSignal(url, controller.signal).then((response) => {
-        if (response.ok) return response.json();
+      void run(async (signal) => {
+        const headers = etag.current ? { "If-None-Match": etag.current } : undefined;
+        const response = await fetchWithSignal(url, signal, headers ? { headers } : undefined);
+        if (response.status === 304) return null;
+        if (response.ok) {
+          etag.current = response.headers?.get("ETag") ?? etag.current;
+          return response.json();
+        }
         if (response.status === 404 && dataRef.current == null) {
           setStatus("not-found");
-          return Promise.reject(new Error("not found"));
+          throw new Error("not found");
         }
-        return Promise.reject(new Error("refresh failed"));
+        throw new Error("refresh failed");
       }).then((next) => {
-        if (!controller.signal.aborted) {
+        if (next !== null) {
           dataRef.current = next;
           setData(next);
           setStatus("ready");
-          setError(false);
         }
+        setError(false);
       }, (failure) => {
-        if (!controller.signal.aborted && failure.message !== "not found") setError(true);
+        if (failure.message !== "not found") setError(true);
       });
     };
     const schedule = () => { window.clearTimeout(timer); if (document.visibilityState === "visible") timer = window.setTimeout(() => { load(); schedule(); }, 10000); };
     const onVisibility = () => { if (document.visibilityState === "visible") { load(); schedule(); } else window.clearTimeout(timer); };
     document.addEventListener("visibilitychange", onVisibility); schedule();
-    return () => { controller.abort(); window.clearTimeout(timer); document.removeEventListener("visibilitychange", onVisibility); };
-  }, [url]);
+    return () => { window.clearTimeout(timer); document.removeEventListener("visibilitychange", onVisibility); };
+  }, [url, run]);
   return { data, error, status };
 }
 

@@ -670,17 +670,16 @@ def _forum_thread_payload(row: dict) -> dict:
     return payload
 
 @app.get("/api/forum")
-def forum_list(before: int | None = None, limit: int = Query(20, ge=1, le=100)):
+def forum_list(request: Request, before: int | None = None, limit: int = Query(20, ge=1, le=100)):
     if forum_store is None: raise HTTPException(503, "forum unavailable")
-    return {"threads": [_forum_payload(r) for r in forum_store.list_threads(before, limit)]}
+    return _json_etag_response(request, {"threads": [_forum_payload(r) for r in forum_store.list_threads(before, limit)]})
 
 @app.get("/api/forum/threads/{thread_id}")
-def forum_thread(thread_id: PositiveInt, after: int | None = None, limit: int = Query(100, ge=1, le=100)):
+def forum_thread(request: Request, thread_id: PositiveInt, after: int | None = None, limit: int = Query(100, ge=1, le=100)):
     if forum_store is None: raise HTTPException(503, "forum unavailable")
     row = forum_store.get_thread(thread_id, after=after, limit=limit)
     if row is None: raise HTTPException(404, "thread not found")
-    result = _forum_thread_payload(row)
-    return result
+    return _json_etag_response(request, _forum_thread_payload(row))
 
 @app.post("/api/forum/threads", status_code=201, dependencies=[Security(_agent_bearer)], openapi_extra={"requestBody": {"required": True, "content": {"application/json": {"schema": {"type": "object", "required": ["kind", "title", "body"], "properties": {"kind": {"type": "string"}, "title": {"type": "string"}, "body": {"type": "string"}}}}}}})
 async def forum_create_thread(request: Request):

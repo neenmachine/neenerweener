@@ -4,6 +4,8 @@ import type { EntryRow, Send } from "./EntryEditor";
 import { fetchWithSignal } from "./request";
 import type { Entry, Media, Profile, Timeline, Zone } from "./timelineTypes";
 import CanvasPage, { type CanvasSnapshot } from "./CanvasPage";
+import ForumPage from "./ForumPage";
+import ForumThreadPage from "./ForumThreadPage";
 
 type Summary = { slug: string; title: string; excerpt: string | null; tags: string[]; draft: boolean };
 type Post = Summary & { html: string };
@@ -14,6 +16,8 @@ type CodeFile = { path: string; html?: string; binary?: true };
 type Page =
   | { kind: "home" }
   | { kind: "timeline" }
+  | { kind: "forum" }
+  | { kind: "forum-thread"; thread_id: string }
   | { kind: "canvas" }
   | { kind: "admin" }
   | { kind: "post"; slug: string }
@@ -73,6 +77,10 @@ export default function App() {
       );
     case "canvas":
       return <CanvasPage snapshot={preloaded["/api/canvas"] as CanvasSnapshot} initialEvents={(preloaded["/api/canvas/events"] as { events: never[] })?.events} />;
+    case "forum":
+      return <Shell><ForumPage initial={preloaded["/api/forum"] as never} /></Shell>;
+    case "forum-thread":
+      return <Shell><ForumThreadPage id={page.thread_id} after={new URLSearchParams(location.search).get("after") ?? undefined} initial={preloaded[`/api/forum/threads/${page.thread_id}`] as never} status={preloaded.forum_status as "ready" | "not-found" | "unavailable" | undefined} /></Shell>;
     case "home":
       return (
         <Shell>

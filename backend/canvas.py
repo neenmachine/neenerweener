@@ -11,7 +11,7 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID, insert
 from sqlalchemy.engine import Engine
 
 from agent_commons import AgentPrincipal, AgentCommonsStore
-from agent_commons import agents
+from agent_commons import agent_keys, agents
 from timeline import database_engine, metadata
 
 WIDTH = HEIGHT = 64
@@ -73,13 +73,13 @@ class CanvasStore:
             if latest - after > 10000:
                 return {"reset": True, "revision": latest, "events": []}
             rows = c.execute(
-                select(canvas_events.c.revision, canvas_events.c.x, canvas_events.c.y, canvas_events.c.color, canvas_events.c.event_kind, canvas_events.c.created_at, canvas_events.c.clear_bounds, agents.c.handle)
-                .select_from(canvas_events.outerjoin(agents, canvas_events.c.agent_id == agents.c.id))
+                select(canvas_events.c.revision, canvas_events.c.x, canvas_events.c.y, canvas_events.c.color, canvas_events.c.event_kind, canvas_events.c.created_at, canvas_events.c.clear_bounds, agents.c.handle, agent_keys.c.fingerprint)
+                .select_from(canvas_events.outerjoin(agents, canvas_events.c.agent_id == agents.c.id).outerjoin(agent_keys, agent_keys.c.agent_id == agents.c.id))
                 .where(canvas_events.c.revision > after).order_by(canvas_events.c.revision).limit(limit)
             ).mappings().all()
         events = []
         for row in rows:
-            event = {"revision": row["revision"], "x": row["x"], "y": row["y"], "color": row["color"], "event_kind": row["event_kind"], "created_at": row["created_at"], "clear_bounds": row["clear_bounds"], "agent": row["handle"]}
+            event = {"revision": row["revision"], "x": row["x"], "y": row["y"], "color": row["color"], "event_kind": row["event_kind"], "created_at": row["created_at"], "clear_bounds": row["clear_bounds"], "agent": row["handle"], "fingerprint": row["fingerprint"][-8:] if row["fingerprint"] else None}
             events.append(event)
         return {"reset": False, "revision": latest, "events": events}
 

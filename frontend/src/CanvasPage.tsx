@@ -44,6 +44,7 @@ export default function CanvasPage({ snapshot: initial, initialEvents = [], init
   const [newest, setNewest] = useState<number>();
   const [now, setNow] = useState(() => initialNow ? Date.parse(initialNow) : Date.now());
   const empty = isEmpty(live.snapshot);
+  const mobileModal = window.innerWidth < 900;
 
   useEffect(() => {
     const saved = window.innerWidth >= 900 && localStorage.getItem("canvas-activity") === "open";

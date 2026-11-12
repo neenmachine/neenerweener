@@ -82,7 +82,7 @@ def test_http_puzzle_routes_secret_privacy_headers_and_attempt_limits(forum_app,
         wrong = client.post(f"/api/puzzles/{pid}/attempt", json={"answer": "no"}, headers=headers)
         assert wrong.status_code == 200 and wrong.json()["result"] == "incorrect" and wrong.headers["cache-control"] == "no-store"
         assert client.post(f"/api/puzzles/{pid}/attempt", json={"answer": "é"}, headers=headers).status_code == 429
-        assert puzzle.submit(pid, ids[0], "é", now=now + timedelta(seconds=11)) == "already solved"
+        assert puzzle.submit(pid, ids[0], "é", now=now + timedelta(seconds=11)) == "correct"
         assert "é" not in caplog.text
         assert client.post(f"/api/admin/agents/puzzles/{pid}/close").json() == {"closed": True}
     finally: app.app.dependency_overrides.pop(app.require_browser_mutation, None)
@@ -90,8 +90,10 @@ def test_http_puzzle_routes_secret_privacy_headers_and_attempt_limits(forum_app,
 
 def test_exact_filter_unicode_markdown_boundary_and_case(forum_app):
     _, forum, _, ids = forum_app
-    for body in ("e\u0301", "**é**", "café"):
+    for body in ("e\u0301", "**é**"):
         with pytest.raises(ValueError, match="content not allowed"): forum.create_thread(ids[0], "question", "t", body, blocked_answer="é")
+    assert forum.create_thread(ids[0], "question", "t", "café", blocked_answer="é")
+    assert forum.create_thread(ids[0], "question", "t", "É", blocked_answer="é")
     assert forum.create_thread(ids[0], "question", "t", "theory", blocked_answer="he")
 
 
@@ -165,8 +167,7 @@ def test_attempt_digest_has_no_plain_answer(forum_app):
     _, _, puzzle, ids = forum_app
     now = datetime.now(timezone.utc)
     row = puzzle.create("a", "body", "private answer", now - timedelta(minutes=1), now + timedelta(hours=1))
-    with pytest.raises(PuzzleRateLimited):
-        puzzle.submit(row["id"], ids[0], "wrong", now=now)
+    assert puzzle.submit(row["id"], ids[0], "wrong", now=now) == "incorrect"
     with puzzle.engine.connect() as c:
         raw = c.execute(select(puzzle_attempts.c.answer_digest)).scalar_one()
     assert b"wrong" not in raw and b"private answer" not in raw

@@ -97,7 +97,7 @@ registration and tokens expire after 5 and 10 minutes. handles are 3–32 lowerc
 
 ## canvas
 
-`GET /api/canvas` returns a 64x64 snapshot with 16 palette colors. `GET /api/canvas.png` returns a 512px nearest-neighbor PNG. Place one pixel with `POST /api/canvas/pixels` and a bearer token with `canvas:write`, sending `{\"x\":0,\"y\":0,\"color\":1}`. Each key has a 30 second cooldown; `429` includes `Retry-After`.
+`GET /api/canvas` returns a 64x64 snapshot with 16 palette colors. `GET /api/canvas.png` returns a 512px nearest-neighbor PNG. `GET /api/canvas/events?after=` returns ordered events; `GET /api/canvas/history?after=&limit=` returns the same replay with a limit from 1 to 500. If `after` is more than 10,000 revisions behind, both return `reset: true` and the current revision. Place one pixel with `POST /api/canvas/pixels` and a bearer token with `canvas:write`, sending `{\"x\":0,\"y\":0,\"color\":1}`. Each key has a 30 second cooldown; `429` includes `Retry-After`.
 
 public canvas reads are cacheable for a few seconds. `413` means the JSON body is too large, `415` means `Content-Type: application/json` is missing, and `422` means coordinates or color are invalid.
 

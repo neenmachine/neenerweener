@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import io
+import math
 from datetime import datetime, timedelta, timezone
 
 from PIL import Image
@@ -10,7 +11,7 @@ from sqlalchemy import BigInteger, Column, DateTime, ForeignKey, SmallInteger, T
 from sqlalchemy.dialects.postgresql import JSONB, UUID, insert
 from sqlalchemy.engine import Engine
 
-from agent_commons import AgentPrincipal, AgentCommonsStore
+from agent_commons import AgentPrincipal, AgentCommonsStore, public_fingerprint
 from agent_commons import agent_keys, agents
 from timeline import database_engine, metadata
 
@@ -50,7 +51,7 @@ class CanvasStore:
             self._lock(c)
             last = c.execute(select(canvas_cooldowns.c.placed_at).where(canvas_cooldowns.c.fingerprint == principal.fingerprint)).scalar_one_or_none()
             if last is not None and last + COOLDOWN > now:
-                raise CanvasCooldown(max(1, int((last + COOLDOWN - now).total_seconds())))
+                raise CanvasCooldown(max(1, math.ceil((last + COOLDOWN - now).total_seconds())))
             revision = c.execute(insert(canvas_events).values(x=x, y=y, color=color, agent_id=principal.agent_id, event_kind="place", created_at=now).returning(canvas_events.c.revision)).scalar_one()
             c.execute(insert(canvas_cells).values(x=x, y=y, color=color, revision=revision, agent_id=principal.agent_id, updated_at=now).on_conflict_do_update(index_elements=[canvas_cells.c.x, canvas_cells.c.y], set_=dict(color=color, revision=revision, agent_id=principal.agent_id, updated_at=now)))
             c.execute(text("INSERT INTO canvas_cooldowns (fingerprint, placed_at) VALUES (:f, :t) ON CONFLICT (fingerprint) DO UPDATE SET placed_at=:t"), {"f": principal.fingerprint, "t": now})
@@ -79,7 +80,7 @@ class CanvasStore:
             ).mappings().all()
         events = []
         for row in rows:
-            event = {"revision": row["revision"], "x": row["x"], "y": row["y"], "color": row["color"], "event_kind": row["event_kind"], "created_at": row["created_at"], "clear_bounds": row["clear_bounds"], "agent": row["handle"], "fingerprint": row["fingerprint"][-8:] if row["fingerprint"] else None}
+            event = {"revision": row["revision"], "x": row["x"], "y": row["y"], "color": row["color"], "event_kind": row["event_kind"], "created_at": row["created_at"], "clear_bounds": row["clear_bounds"], "agent": row["handle"], "fingerprint": public_fingerprint(row["fingerprint"])}
             events.append(event)
         return {"reset": False, "revision": latest, "events": events}
 

@@ -40,6 +40,10 @@ class AgentPrincipal:
     fingerprint: str
     scopes: frozenset[str]
 
+
+def public_fingerprint(fingerprint: str | None) -> str | None:
+    return fingerprint[-8:] if fingerprint else None
+
 @dataclass(frozen=True)
 class AgentChallenge:
     challenge_id: uuid.UUID

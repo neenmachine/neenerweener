@@ -1744,14 +1744,16 @@ def frontend(path: str, request: Request):
     return etag_response(request, content, "text/html", headers, status_code)
 
 
-def render_page(match: tuple[str, dict[str, str]] | None, request: Request) -> tuple[dict, dict, str, int]:
+def render_page(match: tuple[str, dict[str, str], bool] | None, request: Request) -> tuple[dict, dict, str, int]:
     """Preload data (with the page the React app renders), head tags, no-JS markup and status for a matched path."""
     if match is None:
         return not_found_page("not found")
-    kind, params = match
-    preload, head, markup, status_code = RENDERERS[kind](request, **params)
+    kind, params, chrome = match
+    renderer_params = params | ({"chrome": chrome} if kind == "canvas" else {})
+    preload, head, markup, status_code = RENDERERS[kind](request, **renderer_params)
     # A renderer that answers not-found sets its own page.
-    return {"page": {"kind": kind, **params}} | preload, head, markup, status_code
+    page = {"kind": kind, **params} | ({"chrome": False} if not chrome else {})
+    return {"page": page} | preload, head, markup, status_code
 
 
 def home_page(request: Request) -> tuple[dict, dict, str, int]:
@@ -1769,50 +1771,71 @@ def timeline_page_data(request: Request) -> tuple[dict, dict, str, int]:
     return {"/api/timeline": page, "/api/profile": profile}, {"title": "timeline", "description": "timeline"}, markup, status_code
 
 
-def canvas_agent_label(event: dict) -> str:
-    handle = event.get("handle")
-    suffix = event.get("fingerprint_suffix")
-    if not handle and not suffix:
-        return ""
-    return f' by {escape(str(handle or "unknown"))} ({escape(str(suffix or "unknown"))})'
+def canvas_relative_time(value: str | None, now: datetime) -> str:
+    if not value:
+        return "now"
+    moment = _utc_datetime(value)
+    seconds = max(0, (now - moment).total_seconds())
+    if seconds < 5:
+        return "now"
+    if seconds < 60:
+        return f"{int(seconds)}s"
+    if seconds < 3600:
+        return f"{int(seconds // 60)}m"
+    if seconds < 86400:
+        return f"{int(seconds // 3600)}h"
+    local = moment.astimezone(TORONTO)
+    return f"{local.strftime('%b').lower()} {local.day}"
 
 
-def canvas_markup(events: list[dict], revision: int, empty: bool) -> str:
+def canvas_markup(events: list[dict], snapshot: dict, empty: bool, now: datetime, chrome: bool) -> str:
     def rows() -> str:
         if not events:
             return '<li class="muted">no activity yet</li>'
         output = []
         for event in reversed(events[-20:]):
             clear = event.get("event_kind") == "clear"
-            handle = escape(str(event.get("handle") or "unknown"))
+            handle = escape(str(event.get("handle") or "unknown"), quote=True)
             fingerprint = escape(str(event.get("fingerprint_suffix") or ""))
-            where = (f"{event.get('clear_bounds', {}).get('width', 0)}×{event.get('clear_bounds', {}).get('height', 0)}" if clear else f"{event.get('x', 0)},{event.get('y', 0)}")
-            color = escape(str(event.get("color", "")))
-            output.append(f'<li><span class="activity-swatch" data-color="{color}"></span><span class="activity-who"><b title="{handle}">{"region cleared" if clear else handle}</b>{f"<code>{fingerprint}</code>" if not clear else ""}</span><code class="activity-where">{where}</code><time>{"now"}</time></li>')
+            where = f"{event.get('clear_bounds', {}).get('width', 0)}×{event.get('clear_bounds', {}).get('height', 0)}" if clear else f"{event.get('x', 0)},{event.get('y', 0)}"
+            color = snapshot["palette"][event.get("color", 0)] if not clear else None
+            rgb = tuple(int(color[index:index + 2], 16) for index in (1, 3, 5)) if color else ()
+            style = "" if clear else f' style="background-color: rgb({rgb[0]}, {rgb[1]}, {rgb[2]});"'
+            created = event.get("created_at")
+            title = _utc_datetime(created).astimezone(TORONTO).strftime("%B %-d, %Y at %-I:%M %p %Z") if created else ""
+            output.append(
+                f'<li><span class="activity-swatch"{style}></span><span class="activity-who"><b title="{handle}">'
+                f'{"region cleared" if clear else handle}</b>{f"<code>{fingerprint}</code>" if not clear else ""}</span>'
+                f'<code class="activity-where">{where}</code><time{f" datetime=\"{escape(str(created), quote=True)}\"" if created else ""}'
+                f'{f" title=\"{title}\"" if title else ""}>{canvas_relative_time(created, now)}</time></li>'
+            )
         return "".join(output)
+
     activity = rows()
-    disabled = ' aria-disabled="true"' if empty else ''
-    png = '<a class="canvas-pill-action" download="neenerweener-canvas.png" aria-label="download png"' + disabled + '><span class="download-icon"></span>png</a>' if empty else '<a class="canvas-pill-action" href="/api/canvas.png" download="neenerweener-canvas.png" aria-label="download png"><span class="download-icon"></span>png</a>'
-    return (
-        f'<main class="canvas-instrument" data-activity="closed"><a class="canvas-home" href="/">neenerweener</a>'
-        f'<div class="canvas-pill"><span class="canvas-live"><i></i> live · rev {revision:,}</span><span class="canvas-divider"></span>'
-        f'<button class="canvas-pill-action" type="button"{disabled}><span class="play-icon"></span>replay</button>{png}'
+    disabled = ' aria-disabled="true"' if empty else ""
+    png_href = "" if empty else ' href="/api/canvas.png"'
+    body = (
+        '<h1 class="sr-only">canvas</h1><div class="canvas-pill"><a class="canvas-home" href="/">neenerweener</a><span class="canvas-divider"></span>'
+        f'<span class="canvas-live"><i></i> live · rev {snapshot["revision"]:,}</span><span class="canvas-divider"></span>'
+        f'<button class="canvas-pill-action" type="button"{disabled}><span class="play-icon"></span>replay</button>'
+        f'<a class="canvas-pill-action"{png_href} download="neenerweener-canvas.png" aria-label="download png"{disabled}><span class="download-icon"></span>png</a>'
         '<span class="canvas-divider"></span><button class="canvas-pill-action" type="button" aria-expanded="false" aria-controls="canvas-activity" aria-label="show activity"><span class="activity-icon"></span> <span class="activity-label">activity</span></button></div>'
-        f'<div class="canvas-stage"><div class="canvas-frame"><img src="/api/canvas.png" width="512" height="512" alt="" aria-hidden="true" decoding="async"><canvas width="512" height="512" role="img" aria-label="current canvas"></canvas><span class="canvas-marker"></span></div>{"<span class=\"canvas-empty-label\">no pixels yet</span>" if empty else ""}<p class="canvas-status"><i></i>live · rev {revision:,}</p></div>'
-        '<aside id="canvas-activity" class="canvas-panel" aria-labelledby="canvas-activity-title" hidden><header><h2 id="canvas-activity-title">recent activity</h2><button type="button" aria-label="close activity">×</button></header><ol class="canvas-activity">' + activity + '</ol></aside>'
-        '<details class="canvas-nojs-activity"><summary>recent activity</summary><ol class="canvas-activity">' + activity + '</ol></details></main>'
+        f'<div class="canvas-stage"><div class="canvas-frame"><img width="512" height="512" alt="" aria-hidden="true" decoding="async" src="/api/canvas.png"><canvas width="512" height="512" role="img" aria-label="current canvas"></canvas><span class="canvas-marker" hidden=""></span></div>{"<span class=\"canvas-empty-label\">no pixels yet</span>" if empty else ""}<p class="canvas-status"><i></i>live · rev {snapshot["revision"]:,}</p></div>'
+        '<aside id="canvas-activity" class="canvas-panel" aria-labelledby="canvas-activity-title" hidden=""><header><h2 id="canvas-activity-title">recent activity</h2><button type="button" aria-label="close activity">×</button></header><ol class="canvas-activity">' + activity + '</ol></aside>'
+        '<details class="canvas-nojs-activity"><summary>recent activity</summary><ol class="canvas-activity">' + activity + '</ol></details>'
     )
+    return f'<main class="canvas-instrument" data-activity="closed">{body}</main>' if not chrome else f'<main>{body}{site_footer("canvas")}</main>'
 
 
-def canvas_page_data(request: Request) -> tuple[dict, dict, str, int]:
+def canvas_page_data(request: Request, chrome: bool = True) -> tuple[dict, dict, str, int]:
     try:
         revision, pixels = awaitable_canvas_snapshot()
         events = [_canvas_event_json(event) for event in _canvas_store().events(max(0, revision - 20), 20)["events"]]
     except HTTPException:
         revision, pixels, events = 0, bytes([255] * (64 * 64)), []
     snapshot = snapshot_payload(revision, pixels)
-    return {"/api/canvas": snapshot, "/api/canvas/events": {"reset": False, "revision": revision, "events": events}}, {"title": "canvas", "description": "canvas"}, canvas_markup(events, revision, all(pixel == 255 for pixel in pixels)), 200
-
+    now = utc_now()
+    return {"/api/canvas": snapshot, "/api/canvas/events": {"reset": False, "revision": revision, "events": events}, "canvas_now": now.isoformat()}, {"title": "canvas", "description": "canvas"}, canvas_markup(events, snapshot, all(pixel == 255 for pixel in pixels), now, chrome), 200
 
 def _canvas_event_json(event: dict) -> dict:
     return {key: value.isoformat() if isinstance(value, datetime) else str(value) if key == "agent_id" and value is not None else value for key, value in event.items()}

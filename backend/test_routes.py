@@ -1,6 +1,6 @@
 import json
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -138,7 +138,16 @@ def site(tmp_path, monkeypatch):
         def get_profile(self):
             return PROFILE
 
+    class CanvasStore:
+        def snapshot(self):
+            return 1, bytes([0, *([255] * 4095)])
+
+        def events(self, after, limit=100):
+            event = {"revision": 1, "x": 0, "y": 0, "color": 0, "event_kind": "place", "created_at": NOW - timedelta(seconds=10), "clear_bounds": None, "handle": "pixel-agent", "fingerprint": "SHA256:abcdefghijklmnopqrstuv"}
+            return {"reset": False, "revision": 1, "events": [event] if after < 1 else []}
+
     monkeypatch.setattr(app, "timeline_store", Store())
+    monkeypatch.setattr(app, "canvas_store", CanvasStore())
     monkeypatch.setattr(app, "forum_store", None)
     monkeypatch.setattr(app, "utc_now", lambda: NOW)
     return TestClient(app.app)
@@ -234,11 +243,11 @@ def test_admin_page_title_is_sign_in_without_the_hint_and_its_label_with_it(site
 
 
 def test_every_page_kind_has_a_renderer():
-    assert set(app.RENDERERS) == {kind for kind, _ in routes.ROUTES}
+    assert set(app.RENDERERS) == {kind for kind, _, _ in routes.ROUTES}
 
 
 def test_route_table_covers_every_page_kind():
-    assert {kind for kind, _ in routes.ROUTES} <= {case["page"]["kind"] for case in CASES if "page" in case}
+    assert {kind for kind, _, _ in routes.ROUTES} <= {case["page"]["kind"] for case in CASES if "page" in case}
 
 
 @pytest.mark.parametrize(

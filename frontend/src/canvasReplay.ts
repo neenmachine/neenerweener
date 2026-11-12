@@ -31,7 +31,7 @@ export function useCanvasMode(): CanvasMode {
 
 export function useCanvasReplay({ mode, live, canvas, reduced }: {
   mode: CanvasMode;
-  live: { snapshot: CanvasSnapshot; restore(controller: AbortController): Promise<boolean>; reportStatus(value: string): void };
+  live: { snapshot: CanvasSnapshot; enterReplay(): void; restore(): Promise<boolean>; reportStatus(value: string): void };
   canvas: RefObject<HTMLCanvasElement | null>;
   reduced: boolean;
 }) {
@@ -41,7 +41,6 @@ export function useCanvasReplay({ mode, live, canvas, reduced }: {
   const [position, setPosition] = useState(0);
   const [speed, setSpeed] = useState(1);
   const replayController = useRef<AbortController | undefined>(undefined);
-  const restoreController = useRef<AbortController | undefined>(undefined);
   const playButton = useRef<HTMLButtonElement>(null);
   const wasPlaying = useRef(false);
 
@@ -51,7 +50,7 @@ export function useCanvasReplay({ mode, live, canvas, reduced }: {
   };
 
   const start = async () => {
-    mode.current = "replay";
+    live.enterReplay();
     setActive(true);
     setPlaying(!reduced);
     setPosition(0);
@@ -79,17 +78,12 @@ export function useCanvasReplay({ mode, live, canvas, reduced }: {
 
   const stop = async () => {
     replayController.current?.abort();
-    mode.current = "live";
     setPlaying(false);
     setActive(false);
-    const controller = new AbortController();
-    restoreController.current?.abort();
-    restoreController.current = controller;
-    await live.restore(controller);
-    if (restoreController.current === controller) restoreController.current = undefined;
+    await live.restore();
   };
 
-  useEffect(() => () => { replayController.current?.abort(); restoreController.current?.abort(); }, []);
+  useEffect(() => () => { replayController.current?.abort(); }, []);
   useEffect(() => {
     if (!active || !playing || !history.length) return;
     const timer = window.setTimeout(() => setPosition((value) => {

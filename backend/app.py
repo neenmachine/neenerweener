@@ -250,7 +250,8 @@ async def security_middleware(request: Request, call_next):
     response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     response.headers["Content-Security-Policy-Report-Only"] = (
         # blob: for the local previews of images being attached in the admin compose form
-        "default-src 'self'; script-src 'self'; img-src 'self' blob:; connect-src 'self'; object-src 'none'; "
+        "default-src 'self'; script-src 'self' 'sha256-qOhFsq0QMV2REqNwk5hGH5bZE9SkX6gt6yeyKdYPv+U='; "
+        "img-src 'self' blob:; connect-src 'self'; object-src 'none'; "
         "base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
     )
     return response
@@ -1788,43 +1789,46 @@ def canvas_relative_time(value: str | None, now: datetime) -> str:
     return f"{local.strftime('%b').lower()} {local.day}"
 
 
-def canvas_markup(events: list[dict], snapshot: dict, empty: bool, now: datetime, chrome: bool) -> str:
-    def rows() -> str:
-        if not events:
-            return '<li class="muted">no activity yet</li>'
-        output = []
-        for event in reversed(events[-20:]):
-            clear = event.get("event_kind") == "clear"
-            handle = escape(str(event.get("handle") or "unknown"), quote=True)
-            fingerprint = escape(str(event.get("fingerprint_suffix") or ""))
-            where = f"{event.get('clear_bounds', {}).get('width', 0)}×{event.get('clear_bounds', {}).get('height', 0)}" if clear else f"{event.get('x', 0)},{event.get('y', 0)}"
-            color = snapshot["palette"][event.get("color", 0)] if not clear else None
-            rgb = tuple(int(color[index:index + 2], 16) for index in (1, 3, 5)) if color else ()
-            style = "" if clear else f' style="background-color: rgb({rgb[0]}, {rgb[1]}, {rgb[2]});"'
-            created = event.get("created_at")
-            title = _utc_datetime(created).astimezone(TORONTO).strftime("%B %-d, %Y at %-I:%M %p %Z") if created else ""
-            output.append(
-                f'<li><span class="activity-swatch"{style}></span><span class="activity-who"><b title="{handle}">'
-                f'{"region cleared" if clear else handle}</b>{f"<code>{fingerprint}</code>" if not clear else ""}</span>'
-                f'<code class="activity-where">{where}</code><time{f" datetime=\"{escape(str(created), quote=True)}\"" if created else ""}'
-                f'{f" title=\"{title}\"" if title else ""}>{canvas_relative_time(created, now)}</time></li>'
-            )
-        return "".join(output)
+def _canvas_activity_row(event: dict, palette: list[str], now: datetime) -> str:
+    clear = event.get("event_kind") == "clear"
+    handle = escape(str(event.get("handle") or "unknown"), quote=True)
+    fingerprint = escape(str(event.get("fingerprint_suffix") or ""))
+    bounds = event.get("clear_bounds", {})
+    where = f"{bounds.get('width', 0)}×{bounds.get('height', 0)}" if clear else f"{event.get('x', 0)},{event.get('y', 0)}"
+    color = None if clear else palette[event.get("color", 0)]
+    rgb = tuple(int(color[index:index + 2], 16) for index in (1, 3, 5)) if color else ()
+    style = "" if clear else f' style="background-color: rgb({rgb[0]}, {rgb[1]}, {rgb[2]});"'
+    created = event.get("created_at")
+    title = _utc_datetime(created).astimezone(TORONTO).strftime("%B %-d, %Y at %-I:%M %p %Z") if created else ""
+    return (
+        f'<li><span class="activity-swatch"{style}></span><span class="activity-who"><b title="{handle}">'
+        f'{"region cleared" if clear else handle}</b>{f"<code>{fingerprint}</code>" if not clear else ""}</span>'
+        f'<code class="activity-where">{where}</code><time{f" datetime=\"{escape(str(created), quote=True)}\"" if created else ""}'
+        f'{f" title=\"{title}\"" if title else ""}>{canvas_relative_time(created, now)}</time></li>'
+    )
 
-    activity = rows()
+
+def _canvas_activity_markup(events: list[dict], palette: list[str], now: datetime) -> str:
+    if not events:
+        return '<li class="muted">no activity yet</li>'
+    return "".join(_canvas_activity_row(event, palette, now) for event in reversed(events[-20:]))
+
+
+def canvas_markup(events: list[dict], snapshot: dict, empty: bool, now: datetime, chrome: bool) -> str:
+    activity = _canvas_activity_markup(events, snapshot["palette"], now)
     disabled = ' aria-disabled="true"' if empty else ""
     png_href = "" if empty else ' href="/api/canvas.png"'
-    body = (
+    instrument = (
         '<h1 class="sr-only">canvas</h1><div class="canvas-pill"><a class="canvas-home" href="/">neenerweener</a><span class="canvas-divider"></span>'
         f'<span class="canvas-live"><i></i> live · rev {snapshot["revision"]:,}</span><span class="canvas-divider"></span>'
         f'<button class="canvas-pill-action" type="button"{disabled}><span class="play-icon"></span>replay</button>'
         f'<a class="canvas-pill-action"{png_href} download="neenerweener-canvas.png" aria-label="download png"{disabled}><span class="download-icon"></span>png</a>'
         '<span class="canvas-divider"></span><button class="canvas-pill-action" type="button" aria-expanded="false" aria-controls="canvas-activity" aria-label="show activity"><span class="activity-icon"></span> <span class="activity-label">activity</span></button></div>'
         f'<div class="canvas-stage"><div class="canvas-frame"><img width="512" height="512" alt="" aria-hidden="true" decoding="async" src="/api/canvas.png"><canvas width="512" height="512" role="img" aria-label="current canvas"></canvas><span class="canvas-marker" hidden=""></span></div>{"<span class=\"canvas-empty-label\">no pixels yet</span>" if empty else ""}<p class="canvas-status"><i></i>live · rev {snapshot["revision"]:,}</p></div>'
-        '<aside id="canvas-activity" class="canvas-panel" aria-labelledby="canvas-activity-title" hidden=""><header><h2 id="canvas-activity-title">recent activity</h2><button type="button" aria-label="close activity">×</button></header><ol class="canvas-activity">' + activity + '</ol></aside>'
-        '<details class="canvas-nojs-activity"><summary>recent activity</summary><ol class="canvas-activity">' + activity + '</ol></details>'
     )
-    return f'<main class="canvas-instrument" data-activity="closed">{body}</main>' if not chrome else f'<main>{body}{site_footer("canvas")}</main>'
+    panel = '<aside id="canvas-activity" class="canvas-panel" aria-labelledby="canvas-activity-title" hidden=""><header><h2 id="canvas-activity-title">recent activity</h2><button type="button" aria-label="close activity">×</button></header><ol class="canvas-activity">' + activity + '</ol></aside>'
+    fallback = '<details class="canvas-nojs-activity"><summary>recent activity</summary><ol class="canvas-activity">' + activity + '</ol></details>'
+    return f'<main class="canvas-instrument" data-activity="closed">{instrument}</main>{panel}{fallback}' if not chrome else f'<main>{instrument}{panel}{fallback}{site_footer("canvas")}</main>'
 
 
 def canvas_page_data(request: Request, chrome: bool = True) -> tuple[dict, dict, str, int]:

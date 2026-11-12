@@ -2,8 +2,10 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, expect, test, vi } from "vitest";
-import CanvasPage, { applyCanvasEvents, replayDelay, replayPositionToRevision, replayStep, type CanvasSnapshot } from "./CanvasPage";
+import CanvasPage, { applyCanvasEvents, canvasSize, replayDelay, replayPositionToRevision, replayStep, type CanvasSnapshot } from "./CanvasPage";
 import { useCanvasMode, useCanvasReplay } from "./canvasReplay";
+
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const blank = new Uint8Array(64 * 64).fill(255);
 const encoded = (pixels = blank) => btoa(String.fromCharCode(...pixels));
@@ -36,12 +38,32 @@ test("replay position seeks revisions, steps within bounds, and scales speed", (
   expect(replayDelay(4)).toBe(8.75);
 });
 
+test("canvas size stays on whole 64-cell units", () => {
+  expect(canvasSize(900, 804)).toBe(768);
+  expect(canvasSize(384, 700)).toBe(384);
+});
+
 test("canvas events apply placements and clear regions in order", () => {
   const pixels = new Uint8Array([255, 1, 2, 3, 4, 5, 6, 7, 8]);
   expect([...applyCanvasEvents(pixels, [
     { revision: 1, event_kind: "place", x: 0, y: 0, color: 9 },
     { revision: 2, event_kind: "clear", clear_bounds: { x: 1, y: 0, width: 2, height: 2 } },
   ], 3)]).toEqual([9, 255, 255, 3, 255, 255, 6, 7, 8]);
+});
+
+test("the mobile activity modal traps the page and Escape returns focus", async () => {
+  mockCanvas();
+  vi.stubGlobal("innerWidth", 390);
+  document.body.innerHTML = '<div id="root"></div>';
+  await act(async () => { root = createRoot(document.getElementById("root")!); root.render(<CanvasPage snapshot={liveSnapshot} />); });
+  const toggle = document.querySelector<HTMLButtonElement>('[aria-label="show activity"]')!;
+  await act(async () => toggle.click());
+  expect(document.querySelector("main")?.hasAttribute("inert")).toBe(true);
+  expect(document.activeElement?.getAttribute("aria-label")).toBe("close activity");
+  await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  expect(document.querySelector("main")?.hasAttribute("inert")).toBe(false);
+  expect(document.querySelector("#canvas-activity")?.hasAttribute("hidden")).toBe(true);
+  expect(document.activeElement).toBe(toggle);
 });
 
 test("polling pages through a full response without skipping its tail", async () => {
@@ -114,6 +136,30 @@ test("a poll response that arrives after replay starts cannot overwrite replay",
   expect(document.querySelector(".canvas-position")?.textContent).toContain("rev 0");
 });
 
+test("an old poll cannot commit after replay restores and replaces it", async () => {
+  vi.useFakeTimers();
+  mockCanvas();
+  let resolveOldJson!: (value: unknown) => void;
+  let oldEvents = true;
+  const fetch = vi.fn((url: string) => {
+    if (url.startsWith("/api/canvas/events") && oldEvents) {
+      oldEvents = false;
+      return Promise.resolve({ ok: true, status: 200, json: () => new Promise((resolve) => { resolveOldJson = resolve; }) });
+    }
+    if (url.startsWith("/api/canvas/history")) return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ reset: false, revision: 0, events: [] }) });
+    if (url === "/api/canvas") return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ...liveSnapshot, revision: 3 }) });
+    return new Promise(() => {});
+  });
+  vi.stubGlobal("fetch", fetch);
+  document.body.innerHTML = '<div id="root"></div>';
+  await act(async () => { root = createRoot(document.getElementById("root")!); root.render(<CanvasPage snapshot={liveSnapshot} />); });
+  await act(async () => { vi.advanceTimersByTime(3000); await flush(); });
+  await act(async () => { document.querySelector<HTMLButtonElement>("button.canvas-pill-action")!.click(); await flush(); });
+  await act(async () => { document.querySelector<HTMLButtonElement>(".canvas-stop")!.click(); await flush(); });
+  await act(async () => { resolveOldJson({ reset: false, revision: 2, events: [{ revision: 2, event_kind: "place", x: 1, y: 1, color: 0, handle: "stale-old-poll" }] }); await flush(); });
+  expect(document.querySelector(".canvas-activity")?.textContent).not.toContain("stale-old-poll");
+});
+
 test("stopping replay commits the restored live revision and empty state", async () => {
   mockCanvas();
   const restored = { ...liveSnapshot, revision: 7, pixels: encoded() };
@@ -129,10 +175,10 @@ test("stopping replay commits the restored live revision and empty state", async
   expect(document.querySelector("button.canvas-pill-action")?.getAttribute("aria-disabled")).toBe("true");
 });
 
-function ReplayHarness({ restore }: { restore: (controller: AbortController) => Promise<boolean> }) {
+function ReplayHarness({ restore }: { restore: () => Promise<boolean> }) {
   const canvas = { current: document.createElement("canvas") };
   const mode = useCanvasMode();
-  const replay = useCanvasReplay({ mode, live: { snapshot: liveSnapshot, restore, reportStatus: vi.fn() }, canvas, reduced: true });
+  const replay = useCanvasReplay({ mode, live: { snapshot: liveSnapshot, enterReplay: () => { mode.current = "replay"; }, restore, reportStatus: vi.fn() }, canvas, reduced: true });
   return <div data-active={replay.active} data-playing={replay.playing} data-revision={replay.revision} data-position={replay.position}>
     <button onClick={() => void replay.start()}>start</button><button onClick={replay.togglePlaying}>play</button><button onClick={() => replay.seek(1)}>seek</button><button onClick={replay.beginSeek}>drag</button><button onClick={replay.endSeek}>release</button><button onClick={() => void replay.stop()}>stop</button>
   </div>;

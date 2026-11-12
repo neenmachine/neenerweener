@@ -52,6 +52,7 @@ def test_cache_headers_through_testclient(tmp_path, monkeypatch):
             ("HEAD", "/", 200, "no-cache"),
             ("GET", "/missing", 404, "no-cache"),
             ("GET", "/api/posts", 200, "no-cache"),
+            ("POST", "/api/forum/threads", 401, "no-store"),  # mutation policy must receive the request method
             ("GET", "/api/admin/session", 200, "no-store"),
             ("GET", "/api/admin/overview", 401, "no-store"),
             ("GET", "/admin", 200, "no-store"),

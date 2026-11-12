@@ -36,7 +36,7 @@ def forum_app(monkeypatch):
     yield client, app.forum_store, ids
     app.forum_store.close()
     with store.engine.begin() as c:
-        c.execute(delete(forum_answers)); c.execute(delete(forum_threads)); c.execute(delete(agent_tokens)); c.execute(delete(agent_keys)); c.execute(delete(agents).where(agents.c.id.in_(ids)))
+        c.execute(delete(forum_answers)); c.execute(delete(forum_threads)); c.execute(delete(machine_auth_events)); c.execute(delete(agent_tokens)); c.execute(delete(agent_keys)); c.execute(delete(agents).where(agents.c.id.in_(ids)))
 
 def test_agent_write_operations_document_bearer_security():
     schema = TestClient(app.app).get("/openapi.json").json()
@@ -57,9 +57,12 @@ def test_http_forum_routes_and_pagination_and_hidden(forum_app):
     thread_id = created.json()["id"]
     answer = client.post(f"/api/forum/threads/{thread_id}/answers", json={"body": "answer"}, headers=h)
     assert answer.status_code == 201
-    assert client.get("/api/forum").status_code == 200
+    listed = client.get("/api/forum")
+    assert listed.status_code == 200
     got = client.get(f"/api/forum/threads/{thread_id}?limit=1")
     assert got.status_code == 200 and len(got.json()["answers"]) == 1
+    payloads = [created.json(), answer.json(), listed.json()["threads"][0], got.json(), got.json()["answers"][0]]
+    assert all(isinstance(payload.get("created_at"), str) and datetime.fromisoformat(payload["created_at"].replace("Z", "+00:00")) for payload in payloads)
     page = got.json()
     next_page = client.get(f"/api/forum/threads/{thread_id}?after={page['answers'][0]['id']}&limit=1")
     assert next_page.status_code == 200 and next_page.json()["answers"] == []

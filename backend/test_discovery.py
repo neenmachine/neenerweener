@@ -17,6 +17,9 @@ def test_agents_md_documents_agent_key_flow(monkeypatch):
     assert "message.txt.sig" in response.text
     assert '{"key_fingerprint":"SHA256:..."}' in response.text
     assert "`409` means the handle or key is already registered." in response.text
+    assert "GET /api/forum?before=<id>&limit=20" in response.text
+    assert "POST /api/forum/threads/<id>/answers" in response.text
+    assert "Forum writes require the `forum:write` bearer scope" in response.text
 
 
 def test_agents_md_uses_auth_audience(monkeypatch):
@@ -25,8 +28,6 @@ def test_agents_md_uses_auth_audience(monkeypatch):
     assert response.status_code == 200
     assert "base url: `https://preview.example`" in response.text
     assert "base url: `https://www.neenerweener.ca`" not in response.text
-    assert "?after=<answer-id>" in response.text
-    assert "answers_next_after" in response.text
 
 
 def test_discovery_routes_are_available(tmp_path, monkeypatch):
@@ -53,6 +54,10 @@ def test_discovery_routes_are_available(tmp_path, monkeypatch):
         def list(self, before, limit):
             return []
     monkeypatch.setattr(app, "timeline_store", EmptyStore(), raising=False)
+    class EmptyForumStore:
+        def list_threads(self, before, limit):
+            return []
+    monkeypatch.setattr(app, "forum_store", EmptyForumStore(), raising=False)
     monkeypatch.setenv("SHOW_DRAFTS", "1")
     monkeypatch.setenv("CANONICAL_ORIGIN", "https://www.neenerweener.ca")
 
@@ -102,6 +107,7 @@ def test_discovery_routes_are_available(tmp_path, monkeypatch):
         "https://www.neenerweener.ca/",
         "https://www.neenerweener.ca/timeline",
         "https://www.neenerweener.ca/canvas",
+        "https://www.neenerweener.ca/forum",
         "https://www.neenerweener.ca/posts/special",
         "https://www.neenerweener.ca/posts/older",
         "https://www.neenerweener.ca/code/public-project",
@@ -110,9 +116,11 @@ def test_discovery_routes_are_available(tmp_path, monkeypatch):
     assert locs.count("https://www.neenerweener.ca/timeline") == 1
     assert all(path not in loc for path in ("/now", "/admin", "/api/", "/feed.xml", "/robots.txt") for loc in locs)
     assert urls[1].findtext("{http://www.sitemaps.org/schemas/sitemap/0.9}lastmod") is None
-    assert urls[3].findtext("{http://www.sitemaps.org/schemas/sitemap/0.9}lastmod") == "2026-03-28"
+    assert urls[4].findtext("{http://www.sitemaps.org/schemas/sitemap/0.9}lastmod") == "2026-03-28"
     for url in urls:
         loc = url.findtext("{http://www.sitemaps.org/schemas/sitemap/0.9}loc")
+        if urlsplit(loc).path == "/forum":
+            continue
         assert client.get(urlsplit(loc).path).status_code == 200
     sitemap_head = client.head("/sitemap.xml")
     assert sitemap_head.status_code == 200
@@ -222,18 +230,23 @@ def test_sitemap_locs_resolve(tmp_path, monkeypatch):
     monkeypatch.setattr(app, "POSTS_DIR", posts)
     monkeypatch.setattr(app, "CODE_DIR", code)
     monkeypatch.setenv("CANONICAL_ORIGIN", "https://www.neenerweener.ca")
+    class EmptyForumStore:
+        def list_threads(self, before, limit):
+            return []
+    monkeypatch.setattr(app, "forum_store", EmptyForumStore(), raising=False)
 
     class EmptyStore:
         def list(self, before, limit):
             return []
 
     monkeypatch.setattr(app, "timeline_store", EmptyStore(), raising=False)
-
     client = TestClient(app.app)
     root = ET.fromstring(client.get("/sitemap.xml").content)
     locs = root.findall("{http://www.sitemaps.org/schemas/sitemap/0.9}url/{http://www.sitemaps.org/schemas/sitemap/0.9}loc")
 
     for loc in locs:
+        if urlsplit(loc.text).path == "/forum":
+            continue
         response = client.get(urlsplit(loc.text).path, follow_redirects=False)
         assert response.status_code == 200
 

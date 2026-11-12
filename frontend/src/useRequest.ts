@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 // The one owner of a component's request lifecycle. run(fn) calls fn with an AbortSignal for its fetch.
 // - "submit": a call while one runs is dropped; busy is set by the running request and cleared only by its own settle.
@@ -16,7 +16,7 @@ export function useRequest(policy: "submit" | "load") {
     [],
   );
 
-  const run = async <T>(fn: (signal: AbortSignal) => Promise<T>): Promise<T> => {
+  const run = useCallback(async <T>(fn: (signal: AbortSignal) => Promise<T>): Promise<T> => {
     if (policy === "submit" && running.current) return never();
     running.current?.abort();
     const mine = (running.current = new AbortController());
@@ -30,7 +30,7 @@ export function useRequest(policy: "submit" | "load") {
         setBusy(false);
       }
     }
-  };
+  }, [policy]);
   return { run, busy };
 }
 

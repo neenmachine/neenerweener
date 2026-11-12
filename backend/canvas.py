@@ -11,7 +11,7 @@ from sqlalchemy import BigInteger, Column, DateTime, ForeignKey, SmallInteger, T
 from sqlalchemy.dialects.postgresql import JSONB, UUID, insert
 from sqlalchemy.engine import Engine
 
-from agent_commons import AgentPrincipal, AgentCommonsStore, public_fingerprint
+from agent_commons import AgentPrincipal, AgentCommonsStore, public_agent
 from agent_commons import agent_keys, agents
 from timeline import database_engine, metadata
 
@@ -55,7 +55,7 @@ class CanvasStore:
             revision = c.execute(insert(canvas_events).values(x=x, y=y, color=color, agent_id=principal.agent_id, event_kind="place", created_at=now).returning(canvas_events.c.revision)).scalar_one()
             c.execute(insert(canvas_cells).values(x=x, y=y, color=color, revision=revision, agent_id=principal.agent_id, updated_at=now).on_conflict_do_update(index_elements=[canvas_cells.c.x, canvas_cells.c.y], set_=dict(color=color, revision=revision, agent_id=principal.agent_id, updated_at=now)))
             c.execute(text("INSERT INTO canvas_cooldowns (fingerprint, placed_at) VALUES (:f, :t) ON CONFLICT (fingerprint) DO UPDATE SET placed_at=:t"), {"f": principal.fingerprint, "t": now})
-        return {"revision": revision, "x": x, "y": y, "color": color, "agent": principal.handle, "next_allowed_at": (now + COOLDOWN).isoformat().replace("+00:00", "Z")}
+        return {"revision": revision, "x": x, "y": y, "color": color, **public_agent(principal.handle, principal.fingerprint), "next_allowed_at": (now + COOLDOWN).isoformat().replace("+00:00", "Z")}
 
     def snapshot(self) -> tuple[int, bytes]:
         with self.engine.begin() as c:
@@ -80,7 +80,7 @@ class CanvasStore:
             ).mappings().all()
         events = []
         for row in rows:
-            event = {"revision": row["revision"], "x": row["x"], "y": row["y"], "color": row["color"], "event_kind": row["event_kind"], "created_at": row["created_at"], "clear_bounds": row["clear_bounds"], "handle": row["handle"], "fingerprint_suffix": public_fingerprint(row["fingerprint"])}
+            event = {"revision": row["revision"], "x": row["x"], "y": row["y"], "color": row["color"], "event_kind": row["event_kind"], "created_at": row["created_at"], "clear_bounds": row["clear_bounds"], **(public_agent(row["handle"], row["fingerprint"]) if row["handle"] and row["fingerprint"] else {"handle": row["handle"], "fingerprint_suffix": None})}
             events.append(event)
         return {"reset": False, "revision": latest, "events": events}
 

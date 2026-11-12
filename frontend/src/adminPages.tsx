@@ -27,4 +27,5 @@ export const adminPages: AdminPage[] = [
   { path: "/admin/timeline", label: "timeline", Page: lazy(() => import("./AdminTimeline")) },
   { path: "/admin/posts", label: "posts", Page: lazy(() => import("./AdminPosts")) },
   { path: "/admin/profile", label: "profile", Page: lazy(() => import("./AdminProfile")) },
+  { path: "/admin/agents", label: "agents", Page: lazy(() => import("./AdminAgents")) },
 ];

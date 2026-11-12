@@ -130,6 +130,11 @@ main > footer,
   font-size: 0.9em;
 }
 
+/* The admin page is the scroll column beside the rail; its footer must occupy document space, not cover rows. */
+.admin-content > footer {
+  position: static;
+}
+
 /* A 44px tap target with room for the inset focus ring; the negative margin keeps the footer looking the same. */
 main > footer a,
 .admin-content > footer a {

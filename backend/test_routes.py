@@ -139,6 +139,7 @@ def site(tmp_path, monkeypatch):
             return PROFILE
 
     monkeypatch.setattr(app, "timeline_store", Store())
+    monkeypatch.setattr(app, "forum_store", None)
     monkeypatch.setattr(app, "utc_now", lambda: NOW)
     return TestClient(app.app)
 

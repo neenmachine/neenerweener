@@ -31,6 +31,7 @@ from sqlalchemy import (
     delete,
     func,
     insert,
+    not_,
     select,
     text,
     update,
@@ -42,6 +43,7 @@ from client_identity import rate_limit_key
 from timeline import database_engine, metadata
 
 NAMESPACE = "neenerweener.ca/cli-auth/v1"
+AGENT_EVENT_PREFIX = "agent_"
 SUPPORTED_SCOPES = frozenset({"timeline:create", "timeline:read"})
 CHALLENGE_SECONDS = 300
 TOKEN_SECONDS = 600
@@ -679,7 +681,10 @@ class MachineAuthStore:
             (machine_auth_tokens, machine_auth_tokens.c.expires_at < now),
             (
                 machine_auth_events,
-                machine_auth_events.c.occurred_at < now - timedelta(hours=1),
+                and_(
+                    machine_auth_events.c.occurred_at < now - timedelta(hours=1),
+                    not_(machine_auth_events.c.event.startswith(AGENT_EVENT_PREFIX, autoescape=True)),
+                ),
             ),
         ):
             ids = select(*(table.primary_key.columns)).where(condition).limit(100)

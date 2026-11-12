@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import delete, select
+from sqlalchemy import delete, insert, select
 
 import app
 import agent_commons
@@ -29,7 +29,7 @@ from agent_commons import (
     agents,
     public_agent,
 )
-from machine_auth import AuthorizedKey, Throttled, machine_auth_events, parse_agent_ed25519_public_key, parse_ed25519_public_key
+from machine_auth import AuthorizedKey, MachineAuthStore, Throttled, machine_auth_events, parse_agent_ed25519_public_key, parse_ed25519_public_key
 
 
 def test_public_agent_owns_fingerprint_suffix_display():
@@ -129,6 +129,29 @@ def test_http_registration_challenge_token_and_policy_end_to_end(agent_app):
         assert client.post(path, json={}).headers["cache-control"] == "no-store"
 
 
+def test_token_scopes_are_intersected_with_current_scopes(agent_app):
+    client, store, _private, _public = agent_app
+    identity = register(client, _private, _public, "stale_scope_agent")
+    raw = "stale-scope-token"
+    issued = datetime.now(timezone.utc)
+    with store.engine.begin() as connection:
+        connection.execute(
+            agent_tokens.insert().values(
+                token_digest=agent_commons.auth_digest(raw),
+                agent_id=uuid.UUID(identity["agent_id"]),
+                fingerprint=identity["fingerprint"],
+                scopes=sorted((*AGENT_SCOPES, "puzzle:submit")),
+                issued_at=issued,
+                expires_at=issued + timedelta(minutes=5),
+            )
+        )
+    response = client.get("/api/agents/me", headers={"Authorization": f"Bearer {raw}"})
+    assert response.status_code == 200
+    assert response.json()["scopes"] == sorted(AGENT_SCOPES)
+    assert "puzzle:submit" not in response.json()["scopes"]
+    assert asyncio.run(store.authorize_mutation(raw, "canvas:pixel", "10.0.0.1")) is not None
+
+
 def test_namespace_replay_and_failed_proofs_are_counted(agent_app):
     client, store, private, public = agent_app
     identity = register(client, private, public, "agent_two")
@@ -173,6 +196,54 @@ def test_scope_limit_is_enforced_by_single_mutation_gate(agent_app):
         with pytest.raises(Throttled) as raised:
             asyncio.run(store.authorize_mutation(token, "forum:thread", "10.0.0.1"))
         assert raised.value.args[0] > 0
+    finally:
+        ACTION_LIMITS["forum:thread"] = original
+
+
+def test_action_retry_after_ceil_never_understates_wait(agent_app):
+    _client, store, _private, _public = agent_app
+    now = datetime.now(timezone.utc)
+    principal = agent_commons.AgentPrincipal(uuid.uuid4(), "retry_agent", "SHA256:test", AGENT_SCOPES)
+    original = ACTION_LIMITS["forum:thread"]
+    ACTION_LIMITS["forum:thread"] = {"scope": "forum:write", "windows": ((30, None, None, 1),)}
+    try:
+        with store.engine.begin() as connection:
+            connection.execute(
+                machine_auth_events.insert().values(
+                    event="agent_forum:thread", occurred_at=now - timedelta(seconds=0.2)
+                )
+            )
+        with pytest.raises(Throttled) as raised:
+            store._permit_action(principal, "forum:thread", None, now)
+        assert raised.value.args[0] == 30
+    finally:
+        ACTION_LIMITS["forum:thread"] = original
+
+
+def test_concurrent_final_slot_claim_has_one_winner(agent_app):
+    client, store, private, public = agent_app
+    first = register(client, private, public, "race_limit_one")
+    second_private = private.with_name("race-limit-two")
+    subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(second_private)], check=True)
+    second_public = " ".join(second_private.with_suffix(".pub").read_text().split()[:2])
+    second = register(client, second_private, second_public, "race_limit_two")
+    token_one = authenticate(client, store, private, first["fingerprint"])
+    token_two = authenticate(client, store, second_private, second["fingerprint"])
+    original = ACTION_LIMITS["forum:thread"]
+    ACTION_LIMITS["forum:thread"] = {"scope": "forum:write", "windows": ((3600, None, None, 1),)}
+    try:
+        def claim(token):
+            try:
+                asyncio.run(store.authorize_mutation(token, "forum:thread", None))
+                return "won"
+            except Throttled:
+                return "lost"
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(claim, (token_one, token_two)))
+        assert sorted(results) == ["lost", "won"]
+        with store.engine.connect() as connection:
+            assert len(connection.execute(select(machine_auth_events).where(machine_auth_events.c.event == "agent_forum:thread")).fetchall()) == 1
     finally:
         ACTION_LIMITS["forum:thread"] = original
 
@@ -252,6 +323,43 @@ def test_registration_limit_last_24_hours_only(agent_app, monkeypatch):
     assert client.post("/api/agents/auth/register/challenge", json={"handle": "window_16m", "public_key": public}, headers={"x-forwarded-for": "10.0.0.2"}).status_code == 429
     FixedDateTime.current += timedelta(hours=23, minutes=44, seconds=1)
     assert client.post("/api/agents/auth/register/challenge", json={"handle": "window_24h", "public_key": public}, headers={"x-forwarded-for": "10.0.0.2"}).status_code == 201
+
+
+def test_cli_and_agent_cleanup_own_event_retention(agent_app):
+    _client, agent_store, _private, _public = agent_app
+    machine_store = MachineAuthStore(os.environ["DATABASE_URL"])
+    now = datetime.now(timezone.utc)
+    agent_prefix = "agent_"
+    try:
+        with agent_store.engine.begin() as connection:
+            connection.execute(
+                insert(machine_auth_events),
+                [
+                    {"event": f"{agent_prefix}test_two_hours", "occurred_at": now - timedelta(hours=2)},
+                    {"event": "test_cli_two_hours", "occurred_at": now - timedelta(hours=2)},
+                    {"event": f"{agent_prefix}test_25_hours", "occurred_at": now - timedelta(hours=25)},
+                    {"event": "test_cli_25_hours", "occurred_at": now - timedelta(hours=25)},
+                ],
+            )
+            machine_store._cleanup(connection, now)
+            events = set(connection.execute(select(machine_auth_events.c.event)).scalars())
+            assert f"{agent_prefix}test_two_hours" in events
+            assert f"{agent_prefix}test_25_hours" in events
+            assert "test_cli_two_hours" not in events
+            assert "test_cli_25_hours" not in events
+            connection.execute(
+                insert(machine_auth_events).values(
+                    event="test_cli_after_machine_cleanup",
+                    occurred_at=now - timedelta(hours=2),
+                )
+            )
+            agent_store._cleanup(connection, now)
+            events = set(connection.execute(select(machine_auth_events.c.event)).scalars())
+            assert f"{agent_prefix}test_two_hours" in events
+            assert f"{agent_prefix}test_25_hours" not in events
+            assert "test_cli_after_machine_cleanup" in events
+    finally:
+        machine_store.close()
 
 
 def test_auth_challenge_runs_bounded_expiry_cleanup(agent_app):

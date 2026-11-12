@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import os
 import re
 import secrets
@@ -17,7 +18,7 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.engine import Engine
 
 from client_identity import rate_limit_key
-from machine_auth import AuthorizedKey, InvalidProof, Throttled, auth_digest, auth_message, machine_auth_events, parse_agent_ed25519_public_key, verify_auth_signature
+from machine_auth import AGENT_EVENT_PREFIX, AuthorizedKey, InvalidProof, Throttled, auth_digest, auth_message, machine_auth_events, parse_agent_ed25519_public_key, verify_auth_signature
 from timeline import database_engine, metadata
 
 AGENT_NAMESPACE = "neenerweener-agent-v1"
@@ -118,9 +119,9 @@ class AgentCommonsStore:
         now = datetime.now(timezone.utc); cid = uuid.uuid4(); nonce = secrets.token_bytes(32); expires = now + timedelta(seconds=CHALLENGE_SECONDS)
         with self.engine.begin() as c:
             c.execute(text("SELECT pg_advisory_xact_lock(843921772)"))
-            retry = self._retry(c, "registration", client_ip, None, (3, None, 100), now, 86400)
+            retry = self._retry(c, f"{AGENT_EVENT_PREFIX}registration", client_ip, None, (3, None, 100), now, 86400)
             if retry: raise Throttled(retry)
-            self._event(c, "registration", client_ip, None)
+            self._event(c, f"{AGENT_EVENT_PREFIX}registration", client_ip, None)
             duplicate = c.execute(select(agents.c.id).where(agents.c.handle == handle)).first() or c.execute(select(agent_keys.c.fingerprint).where(agent_keys.c.fingerprint == fingerprint)).first()
         if duplicate: raise DuplicateRegistration("handle or key already registered")
         with self.engine.begin() as c:
@@ -136,9 +137,9 @@ class AgentCommonsStore:
             c.execute(text("SELECT pg_advisory_xact_lock(843921771)"))
             row = c.execute(select(agent_registration_challenges).where(agent_registration_challenges.c.challenge_id == challenge_id)).mappings().one_or_none()
             fingerprint = row["fingerprint"] if row else None
-            retry = self._retry(c, "agent_registration_exchange", client_ip, fingerprint, (5, 5, 30), now, 900)
+            retry = self._retry(c, f"{AGENT_EVENT_PREFIX}registration_exchange", client_ip, fingerprint, (5, 5, 30), now, 900)
             if retry: raise Throttled(retry)
-            self._event(c, "agent_registration_exchange", client_ip, fingerprint)
+            self._event(c, f"{AGENT_EVENT_PREFIX}registration_exchange", client_ip, fingerprint)
         self._assert_writes_enabled()
         with self.engine.begin() as c:
             row = c.execute(select(agent_registration_challenges).where(agent_registration_challenges.c.challenge_id == challenge_id).with_for_update()).mappings().one_or_none()
@@ -159,9 +160,9 @@ class AgentCommonsStore:
         with self.engine.begin() as c:
             c.execute(text("SELECT pg_advisory_xact_lock(843921771)"))
             keyrow = c.execute(select(agent_keys).where(agent_keys.c.fingerprint == fingerprint, agent_keys.c.revoked_at.is_(None))).mappings().one_or_none()
-            retry = self._retry(c, "agent_challenge", client_ip, fingerprint, (30, 30, 300), now, 900)
+            retry = self._retry(c, f"{AGENT_EVENT_PREFIX}challenge", client_ip, fingerprint, (30, 30, 300), now, 900)
             if retry: raise Throttled(retry)
-            self._event(c, "agent_challenge", client_ip, fingerprint)
+            self._event(c, f"{AGENT_EVENT_PREFIX}challenge", client_ip, fingerprint)
         if not keyrow: raise InvalidProof
         self._assert_writes_enabled()
         with self.engine.begin() as c:
@@ -175,9 +176,9 @@ class AgentCommonsStore:
         with self.engine.connect() as c: row = c.execute(select(agent_challenges).where(agent_challenges.c.challenge_id == challenge_id)).mappings().one_or_none()
         fingerprint = row["fingerprint"] if row else None
         with self.engine.begin() as c:
-            c.execute(text("SELECT pg_advisory_xact_lock(843921771)")); retry = self._retry(c, "agent_exchange", client_ip, fingerprint, (5, 5, 30), now, 900)
+            c.execute(text("SELECT pg_advisory_xact_lock(843921771)")); retry = self._retry(c, f"{AGENT_EVENT_PREFIX}exchange", client_ip, fingerprint, (5, 5, 30), now, 900)
             if retry: raise Throttled(retry)
-            self._event(c, "agent_exchange", client_ip, fingerprint)
+            self._event(c, f"{AGENT_EVENT_PREFIX}exchange", client_ip, fingerprint)
         with self.engine.begin() as c:
             row = c.execute(select(agent_challenges).where(agent_challenges.c.challenge_id == challenge_id).with_for_update()).mappings().one_or_none()
             keyrow = c.execute(select(agent_keys).where(agent_keys.c.fingerprint == (row["fingerprint"] if row else ""), agent_keys.c.revoked_at.is_(None))).mappings().one_or_none() if row else None
@@ -196,7 +197,7 @@ class AgentCommonsStore:
         with self.engine.connect() as c:
             row = c.execute(select(agent_tokens, agents.c.handle, agents.c.banned_at, agent_keys.c.revoked_at.label("key_revoked_at")).join(agents, agents.c.id == agent_tokens.c.agent_id).join(agent_keys, agent_keys.c.agent_id == agents.c.id).where(agent_tokens.c.token_digest == auth_digest(token))).mappings().one_or_none()
         if not row or row["expires_at"] <= now or row["revoked_at"] is not None or row["banned_at"] is not None or row["key_revoked_at"] is not None: return None
-        scopes = frozenset(row["scopes"])
+        scopes = frozenset(row["scopes"]) & AGENT_SCOPES
         if required and required not in scopes: return None
         return AgentPrincipal(row["agent_id"], row["handle"], row["fingerprint"], scopes)
 
@@ -211,7 +212,7 @@ class AgentCommonsStore:
             c.execute(text("SELECT pg_advisory_xact_lock(843921771)"))
             retry_after = 0
             for window, agent_limit, ip_limit, global_limit in spec["windows"]:
-                event = f"agent_{action}"
+                event = f"{AGENT_EVENT_PREFIX}{action}"
                 cutoff = now - timedelta(seconds=window)
                 dimensions = (("fingerprint_key", rate_limit_key(secret, "fingerprint", principal.fingerprint), agent_limit), ("ip_key", rate_limit_key(secret, "ip", client_ip) if client_ip else None, ip_limit), (None, None, global_limit))
                 for column, key, limit in dimensions:
@@ -222,7 +223,7 @@ class AgentCommonsStore:
                         query = query.where(text(f"{column} = :key")).params(key=key)
                     rows = c.execute(query.order_by(text("occurred_at DESC")).limit(limit)).scalars().all()
                     if len(rows) >= limit:
-                        retry_after = max(retry_after, max(1, int((rows[-1] + timedelta(seconds=window) - now).total_seconds())))
+                        retry_after = max(retry_after, max(1, math.ceil((rows[-1] + timedelta(seconds=window) - now).total_seconds())))
             if retry_after:
                 raise Throttled(retry_after)
             self._event(c, event, client_ip, principal.fingerprint)
@@ -254,7 +255,7 @@ class AgentCommonsStore:
             key = next(iter(table.primary_key.columns))
             expired = select(key).where(table.c.expires_at < now).limit(100)
             c.execute(delete(table).where(key.in_(expired)))
-        event_ids = select(machine_auth_events.c.id).where(machine_auth_events.c.event.like("agent_%"), machine_auth_events.c.occurred_at < now - timedelta(hours=24)).limit(100)
+        event_ids = select(machine_auth_events.c.id).where(machine_auth_events.c.event.startswith(AGENT_EVENT_PREFIX, autoescape=True), machine_auth_events.c.occurred_at < now - timedelta(hours=24)).limit(100)
         c.execute(delete(machine_auth_events).where(machine_auth_events.c.id.in_(event_ids)))
 
     def ban(self, agent_id: uuid.UUID, reason: str | None = None) -> None:

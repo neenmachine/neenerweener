@@ -31,7 +31,11 @@ def normalize_answer(value: str) -> str:
 
 class PuzzleStore:
     def __init__(self, database_url: str, engine: Engine | None = None, secret: bytes | None = None):
-        self.engine = engine or database_engine(database_url); self.secret = secret or b"agent-puzzle-test-secret"
+        self.engine = engine or database_engine(database_url)
+        if secret is None:
+            from auth import AdminConfig
+            secret = AdminConfig.from_env().rate_limit_key
+        self.secret = secret or b"agent-puzzle-test-secret"
     def create(self, title: str, body: str, answer: str, publish_at: datetime, close_at: datetime) -> dict:
         if not title.strip() or len(title) > 120 or publish_at >= close_at: raise ValueError("invalid puzzle")
         html = validate_untrusted_markdown(body, maximum=5000); answer = normalize_answer(answer)

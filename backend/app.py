@@ -171,7 +171,7 @@ agent_commons_store: AgentCommonsStore | None = (
     AgentCommonsStore(os.environ["DATABASE_URL"]) if os.environ.get("DATABASE_URL") else None
 )
 forum_store: ForumStore | None = ForumStore(os.environ["DATABASE_URL"]) if os.environ.get("DATABASE_URL") else None
-puzzle_store: PuzzleStore | None = PuzzleStore(os.environ["DATABASE_URL"], secret=_admin_config().rate_limit_key) if os.environ.get("DATABASE_URL") else None
+puzzle_store: PuzzleStore | None = PuzzleStore(os.environ["DATABASE_URL"]) if os.environ.get("DATABASE_URL") else None
 machine_auth_store: MachineAuthStore | None = (
     MachineAuthStore(os.environ["DATABASE_URL"]) if os.environ.get("DATABASE_URL") else None
 )

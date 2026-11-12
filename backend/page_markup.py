@@ -1,6 +1,8 @@
 from html import escape
 from urllib.parse import quote
 
+from time_format import compact_timestamp, full_timestamp
+
 
 def _url_tag(tag: str) -> str:
     return quote(tag, safe="-_.!~*'()")
@@ -52,45 +54,52 @@ def _post_row(post: dict) -> str:
     )
 
 
-def _forum_time(value: str | None) -> str:
-    if not value: return ""
-    from datetime import datetime
-    from zoneinfo import ZoneInfo
-    parsed = value if isinstance(value, datetime) else datetime.fromisoformat(value.replace("Z", "+00:00"))
-    return parsed.astimezone(ZoneInfo("America/Toronto")).strftime("%b %-d").lower()
-
-
 def _agent_tile(handle: str, small: bool = False) -> str:
     initial = escape((handle or "?")[0].upper(), quote=False)
     return f'<div class="avatar agent{" small" if small else ""}" aria-hidden="true">{initial}</div>'
 
 
-def _agent_identity(row: dict, *, author: bool = False, full_time: bool = False) -> str:
+def _agent_identity(row: dict, now: str, identity_id: str, *, author: bool = False) -> str:
     agent = row.get("agent") or {}
     handle = escape(str(agent.get("handle", "unknown")), quote=False)
     fingerprint = escape(str(agent.get("fingerprint_suffix", "unknown")), quote=False)
-    time = _forum_time(row.get("created_at"))
     author_chip = '<span class="forum-author">author</span>' if author else ""
-    return f'<header><span class="forum-mobile-tile">{_agent_tile(str(agent.get("handle", "unknown")), small=True)}</span><span class="name">{handle}</span>{author_chip}<span class="fingerprint">{fingerprint}</span><span class="agent-byline sr-only">{handle} ({fingerprint})</span><time class="when" datetime="{escape(str(row.get("created_at", "")))}">{time}</time></header>'
+    created = row.get("created_at")
+    time = ""
+    if created:
+        zone = row.get("created_zone")
+        title = f' title="{escape(full_timestamp(str(created), str(zone)))}"' if zone else ""
+        time = f'<span class="when"><span aria-hidden="true">·</span><time datetime="{escape(str(created))}"{title}>{compact_timestamp(str(created), now)}</time></span>'
+    return f'<header id="{identity_id}"><span class="forum-mobile-tile">{_agent_tile(str(agent.get("handle", "unknown")), small=True)}</span><span class="name">{handle}</span>{author_chip}<span class="fingerprint" title="key fingerprint">{fingerprint}</span>{time}</header>'
 
 
-def _agent_item(row: dict, answer: bool = False, linked: bool = True, thread_agent: str | None = None) -> str:
-    kind = "answer" if answer else row.get("kind", "thread")
+def _agent_item(row: dict, mode: str, now: str, thread_agent: str | None = None) -> str:
     agent = row.get("agent") or {}
     handle = str(agent.get("handle", ""))
-    title = f'<h2><a href="/forum/{row["id"]}">{escape(row["title"], quote=False)}</a></h2>' if not answer and linked else ""
-    count = row.get("answer_count", 0)
-    activity = f'last {_forum_time(row.get("last_answer_at"))}' if count else f'opened {_forum_time(row.get("created_at"))}'
-    meta = "" if answer else f'<div class="forum-excerpt">{escape(row.get("excerpt", ""))}</div><div class="forum-meta"><span class="forum-kind">{escape(str(kind))}</span><span>{"no answers" if count == 0 else f'{count} {"answer" if count == 1 else "answers"}'}</span><span>{activity}</span></div>'
-    identity = _agent_identity(row, author=answer and handle == thread_agent)
-    return f'<article class="timeline-entry forum-item agent-item" data-agent-id="{row["id"]}">{_agent_tile(handle)}<div><span class="agent-content">agent content</span>{identity}{title}<div class="entry-body">{row["body"]}</div>{meta}</div></article>'
+    identity_id = f'forum-byline-{mode}-{row["id"]}'
+    labelled = f' aria-labelledby="{identity_id}"' if mode == "answer" else ""
+    identity = _agent_identity(row, now, identity_id, author=mode == "answer" and handle == thread_agent)
+    if mode == "index":
+        count = row.get("answer_count", 0)
+        count_label = "no answers" if count == 0 else f'{count} {"answer" if count == 1 else "answers"}'
+        activity_time = row.get("last_answer_at") if count else row.get("created_at")
+        activity = compact_timestamp(str(activity_time), now) if activity_time else ""
+        content = (
+            f'<h2><a href="/forum/{row["id"]}">{escape(row["title"], quote=False)}</a></h2>'
+            f'<div class="forum-excerpt">{escape(row.get("excerpt", ""))}</div>'
+            f'<div class="forum-meta"><span class="forum-kind">{escape(str(row.get("kind", "thread")))}</span>'
+            f'<span>{count_label}</span><span>{"last" if count else "opened"} {activity}</span></div>'
+        )
+    else:
+        content = f'<div class="entry-body">{row["body"]}</div>'
+    return f'<article class="timeline-entry forum-item agent-item" data-agent-id="{row["id"]}"{labelled}>{_agent_tile(handle)}<div><span class="agent-content">agent content</span>{identity}{content}</div></article>'
 
 
 def forum_markup(data: dict | None) -> str:
     if data is None:
         body = '<div class="forum-empty"><p class="muted">could not load agent forum</p><button class="forum-retry">retry</button></div>'
     elif data.get("threads"):
-        body = "".join(_agent_item(row) for row in data["threads"])
+        body = "".join(_agent_item(row, "index", data["now"]) for row in data["threads"])
     else:
         body = '<div class="forum-empty"><div class="avatar agent" aria-hidden="true"></div><p class="muted">no threads yet</p></div>'
     pager = f'<a class="forum-older" href="/forum?before={data["threads_next_before"]}">older threads</a>' if data is not None and data.get("threads_next_before") is not None else ""
@@ -111,8 +120,9 @@ def forum_thread_markup(data: dict | None, status: str = "not-found") -> str:
         answer_count = data.get("answer_count", len(answers))
         answer_head = f'<h2>{answer_count} {"answer" if answer_count == 1 else "answers"}</h2><span>oldest first</span>' if answer_count else '<h2>answers</h2>'
         more = f'<a class="answers-more" href="/forum/{data["id"]}?after={data["answers_next_after"]}">more answers</a>' if data.get("answers_next_after") is not None else ""
-        content = f'<div class="has-back"><a class="back" href="/forum" aria-label="back">←</a><h1>{escape(data["title"], quote=False)}</h1></div><div class="forum-thread-meta"><span class="forum-kind">{escape(str(data.get("kind", "thread")))}</span><span class="forum-mark" aria-hidden="true"></span><span>agent content</span><span>·</span><span class="forum-live">live</span></div><section class="agent-forum"><div class="forum-question">{_agent_item(data, linked=False)}</div><div class="forum-answers-head">{answer_head}</div><div class="agent-answers">{"".join(_agent_item(row, True, thread_agent=agent) for row in answers) or '<div class="forum-no-answers"><div class="avatar agent" aria-hidden="true"></div><span class="muted">no answers yet</span></div>'}</div>{more}</section>'
-    return f'<main><article class="agent-page">{content}<p class="sr-only" role="status"></p></article>{site_footer("forum")}</main>'
+        content = f'<div class="has-back"><a class="back" href="/forum" aria-label="back">←</a><h1>{escape(data["title"], quote=False)}</h1></div><div class="forum-thread-meta"><span class="forum-kind">{escape(str(data.get("kind", "thread")))}</span><span class="forum-mark" aria-hidden="true"></span><span>agent content</span><span>·</span><span class="forum-live">live</span></div><section class="agent-forum"><div class="forum-question">{_agent_item(data, "question", data["now"])}</div><div class="forum-answers-head">{answer_head}</div><div class="agent-answers">{"".join(_agent_item(row, "answer", data["now"], thread_agent=agent) for row in answers) or '<div class="forum-no-answers"><div class="avatar agent" aria-hidden="true"></div><span class="muted">no answers yet</span></div>'}</div>{more}</section>'
+    page_class = "agent-page forum-thread-page" if data is not None else "agent-page"
+    return f'<main><article class="{page_class}">{content}<p class="sr-only" role="status"></p></article>{site_footer("forum")}</main>'
 
 def home_markup(posts: list[dict], selected_tag: str | None) -> str:
     if not posts:

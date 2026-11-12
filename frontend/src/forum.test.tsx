@@ -82,9 +82,47 @@ test("polling preserves the first visible item's scroll position", async () => {
   vi.stubGlobal("fetch", fetch);
   const scrollBy = vi.spyOn(window, "scrollBy").mockImplementation(() => {});
   await render(<ForumPage initial={{ threads: [{ id: 1, title: "old", body: "<p>body</p>", kind: "question", agent }] }} />);
-  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({ top: 100, bottom: 200 } as DOMRect);
+  let reads = 0;
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(() => {
+    const top = 100 + reads++ * 44;
+    return { top, bottom: top + 100 } as DOMRect;
+  });
   await act(async () => { vi.advanceTimersByTime(10000); await Promise.resolve(); await Promise.resolve(); });
-  expect(scrollBy).toHaveBeenCalledWith(0, 0);
+  expect(scrollBy).toHaveBeenCalledWith(0, 44);
+});
+
+test("polling preserves the thread at the paging cursor boundary", async () => {
+  vi.useFakeTimers();
+  const item = (id: number) => ({ id, title: `thread ${id}`, body: `<p>body ${id}</p>`, kind: "question", agent });
+  const fetch = vi.fn()
+    .mockResolvedValueOnce({ ok: true, status: 200, headers: new Headers(), json: () => Promise.resolve({ threads: Array.from({ length: 20 }, (_, index) => item(101 - index)), threads_next_before: 82 }) })
+    .mockResolvedValueOnce({ ok: true, status: 200, json: () => Promise.resolve({ threads: [item(80)], threads_next_before: null }) });
+  vi.stubGlobal("fetch", fetch);
+  await render(<ForumPage initial={{ threads: Array.from({ length: 20 }, (_, index) => item(100 - index)), threads_next_before: 81 }} />);
+  await act(async () => { vi.advanceTimersByTime(10000); await Promise.resolve(); await Promise.resolve(); });
+  await act(async () => { document.querySelector<HTMLButtonElement>(".forum-older")!.click(); await Promise.resolve(); await Promise.resolve(); });
+  const ids = [...document.querySelectorAll<HTMLElement>(".forum-item")].map((row) => Number(row.dataset.agentId));
+  expect(ids).toEqual(Array.from({ length: 22 }, (_, index) => 101 - index));
+  expect(document.querySelector('[data-agent-id="101"] .forum-new-label')?.textContent).toBe("new");
+  expect(document.querySelector('[role="status"]')?.textContent).toBe("1 new thread");
+});
+
+test("thread polling marks and announces new answers until a no-change poll", async () => {
+  vi.useFakeTimers();
+  const first = answer(1);
+  const second = answer(2);
+  const thread = { id: 7, title: "thread", body: "<p>body</p>", kind: "question", agent, answers: [first], answers_next_after: null, answer_count: 1 };
+  const fetch = vi.fn()
+    .mockResolvedValueOnce({ ok: true, status: 200, headers: new Headers(), json: () => Promise.resolve({ ...thread, answers: [first, second], answer_count: 2 }) })
+    .mockResolvedValueOnce({ ok: true, status: 200, headers: new Headers(), json: () => Promise.resolve({ ...thread, answers: [first, second], answer_count: 2 }) });
+  vi.stubGlobal("fetch", fetch);
+  await render(<ForumThreadPage id="7" initial={thread as never} />);
+  await act(async () => { vi.advanceTimersByTime(10000); await Promise.resolve(); await Promise.resolve(); });
+  expect(document.querySelector('[data-agent-id="2"] .forum-new-label')?.textContent).toBe("new");
+  expect(document.querySelector('[role="status"]')?.textContent).toBe("1 new answer");
+  await act(async () => { vi.advanceTimersByTime(10000); await Promise.resolve(); await Promise.resolve(); });
+  expect(document.querySelector('[data-agent-id="2"] .forum-new-label')).toBeNull();
+  expect(document.querySelector('[role="status"]')?.textContent).toBe("");
 });
 
 test("a refresh failure keeps the last good forum content and recovers", async () => {

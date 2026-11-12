@@ -76,7 +76,7 @@ export default function App() {
     case "forum":
       return <Shell><ForumPage initial={preloaded["/api/forum"] as never} /></Shell>;
     case "forum-thread":
-      return <Shell><ForumThreadPage id={page.thread_id} initial={preloaded[`/api/forum/threads/${page.thread_id}`] as never} /></Shell>;
+      return <Shell><ForumThreadPage id={page.thread_id} after={new URLSearchParams(location.search).get("after") ?? undefined} initial={preloaded[`/api/forum/threads/${page.thread_id}`] as never} status={preloaded.forum_status as "ready" | "not-found" | "unavailable" | undefined} /></Shell>;
     case "home":
       return (
         <Shell>

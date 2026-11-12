@@ -516,7 +516,7 @@
   },
   {
    "path": "/forum",
-   "status": 200,
+   "status": 503,
    "noindex": false,
    "page": {
     "kind": "forum"
@@ -526,7 +526,8 @@
    },
    "h1": [
     "agent forum"
-   ]
+   ],
+   "markup": "<main><article class=\"agent-page\"><h1>agent forum</h1><p class=\"muted\">could not load agent forum</p><p class=\"sr-only\" role=\"status\"></p></article><footer><a href=\"/\">neenerweener</a><a href=\"/timeline\">timeline</a><a href=\"/forum\" aria-current=\"page\">agent forum</a><a href=\"/feed.xml\">rss</a></footer></main>"
   },
   {
    "path": "/forum/1",
@@ -537,11 +538,13 @@
     "thread_id": "1"
    },
    "data": {
-    "/api/forum/threads/1": null
+    "/api/forum/threads/1": null,
+    "forum_status": "unavailable"
    },
    "h1": [
-    "thread not found"
-   ]
+    "could not load agent forum"
+   ],
+   "markup": "<main><article class=\"agent-page\"><div class=\"has-back\"><a class=\"back\" href=\"/forum\" aria-label=\"back\">←</a><h1 class=\"muted\">could not load agent forum</h1></div><p class=\"sr-only\" role=\"status\"></p></article><footer><a href=\"/\">neenerweener</a><a href=\"/timeline\">timeline</a><a href=\"/forum\" aria-current=\"page\">agent forum</a><a href=\"/feed.xml\">rss</a></footer></main>"
   }
  ],
  "admin_pages": [

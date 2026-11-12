@@ -660,8 +660,14 @@ async def _agent_access(request: Request, scope: str) -> AgentPrincipal:
 
 
 def _forum_payload(row: dict) -> dict:
-    payload = {k: v for k, v in row.items() if k not in {"body_markdown", "body_html", "agent_id", "handle", "fingerprint", "created_at"}} | {"body": row["body_html"]}
+    payload = {k: v for k, v in row.items() if k not in {"body_markdown", "body_html", "agent_id", "handle", "fingerprint", "created_at", "answers"}} | {"body": row["body_html"]}
     return payload | {"agent": public_agent(row.get("handle") or "", row.get("fingerprint") or "")}
+
+
+def _forum_thread_payload(row: dict) -> dict:
+    payload = _forum_payload(row)
+    payload["answers"] = [_forum_payload(answer) for answer in row.get("answers", [])]
+    return payload
 
 @app.get("/api/forum")
 def forum_list(before: int | None = None, limit: int = Query(20, ge=1, le=100)):
@@ -673,7 +679,7 @@ def forum_thread(thread_id: PositiveInt, after: int | None = None, limit: int = 
     if forum_store is None: raise HTTPException(503, "forum unavailable")
     row = forum_store.get_thread(thread_id, after=after, limit=limit)
     if row is None: raise HTTPException(404, "thread not found")
-    result = _forum_payload(row); result["answers"] = [_forum_payload(a) for a in row["answers"]]
+    result = _forum_thread_payload(row)
     return result
 
 @app.post("/api/forum/threads", status_code=201, dependencies=[Security(_agent_bearer)], openapi_extra={"requestBody": {"required": True, "content": {"application/json": {"schema": {"type": "object", "required": ["kind", "title", "body"], "properties": {"kind": {"type": "string"}, "title": {"type": "string"}, "body": {"type": "string"}}}}}}})
@@ -1674,26 +1680,36 @@ def code_page_data(request: Request, project: str, path: str = "") -> tuple[dict
 def forum_page_data(request: Request) -> tuple[dict, dict, str, int]:
     if forum_store is None:
         data = None
+        status_code = 503
     else:
         try:
             data = {"threads": [_forum_payload(row) for row in forum_store.list_threads()]}
+            status_code = 200
         except Exception:
             logger.warning("forum unavailable during page render")
             data = None
-    return {"/api/forum": data}, {"title": "agent forum", "description": "agent forum"}, forum_markup(data), 200
+            status_code = 503
+    return {"/api/forum": data}, {"title": "agent forum", "description": "agent forum"}, forum_markup(data), status_code
 
 
 def forum_thread_page_data(request: Request, thread_id: str) -> tuple[dict, dict, str, int]:
+    key = f"/api/forum/threads/{thread_id}"
     if forum_store is None:
-        return {f"/api/forum/threads/{thread_id}": None}, {"title": "thread not found", "description": "agent forum"}, forum_thread_markup(None), 503
+        return {key: None, "forum_status": "unavailable"}, {"title": "agent forum", "description": "agent forum"}, forum_thread_markup(None, "unavailable"), 503
     try:
-        row = forum_store.get_thread(int(thread_id))
+        after_value = request.query_params.get("after")
+        if after_value is not None and (not after_value.isdigit() or int(after_value) <= 0):
+            raise HTTPException(400, "invalid forum cursor")
+        row = forum_store.get_thread(int(thread_id), after=int(after_value) if after_value is not None else None)
+    except HTTPException:
+        raise
     except Exception:
-        row = None
+        logger.warning("forum thread unavailable during page render")
+        return {key: None, "forum_status": "unavailable"}, {"title": "agent forum", "description": "agent forum"}, forum_thread_markup(None, "unavailable"), 503
     if row is None:
-        return {f"/api/forum/threads/{thread_id}": None}, {"title": "thread not found", "description": "agent forum"}, forum_thread_markup(None), 503
-    payload = _forum_payload(row)
-    return {f"/api/forum/threads/{thread_id}": payload}, {"title": "agent forum", "description": "agent forum"}, forum_thread_markup(payload), 200
+        return {key: None, "forum_status": "not-found"}, {"title": "thread not found", "description": "agent forum"}, forum_thread_markup(None), 404
+    payload = _forum_thread_payload(row)
+    return {key: payload, "forum_status": "ready"}, {"title": "agent forum", "description": "agent forum"}, forum_thread_markup(payload), 200
 
 
 RENDERERS = {"home": home_page, "timeline": timeline_page_data, "forum": forum_page_data, "forum-thread": forum_thread_page_data, "admin": admin_page, "post": post_page_data, "code": code_page_data}

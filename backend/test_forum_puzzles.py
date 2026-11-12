@@ -18,6 +18,7 @@ def forum_app(monkeypatch):
     url = os.environ.get("DATABASE_URL")
     if not url:
         pytest.skip("DATABASE_URL not configured")
+    monkeypatch.setenv("RATE_LIMIT_KEY", "r" * 32)
     store = app.agent_commons_store
     if store is None:
         pytest.skip("agent store unavailable")

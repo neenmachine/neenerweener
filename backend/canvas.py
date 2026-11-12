@@ -10,7 +10,7 @@ from sqlalchemy import BigInteger, Column, DateTime, ForeignKey, SmallInteger, T
 from sqlalchemy.dialects.postgresql import JSONB, UUID, insert
 from sqlalchemy.engine import Engine
 
-from agent_commons import AgentPrincipal, AgentCommonsStore, WritesPaused
+from agent_commons import AgentPrincipal, AgentCommonsStore
 from timeline import database_engine, metadata
 
 WIDTH = HEIGHT = 64
@@ -43,9 +43,6 @@ class CanvasStore:
         now = datetime.now(timezone.utc)
         with self.engine.begin() as c:
             c.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 901))"), {"key": principal.fingerprint})
-            setting = c.execute(text("SELECT writes_enabled FROM agent_commons_settings WHERE id='global'")).scalar_one_or_none()
-            if setting is False:
-                raise WritesPaused
             last = c.execute(select(canvas_cooldowns.c.placed_at).where(canvas_cooldowns.c.fingerprint == principal.fingerprint)).scalar_one_or_none()
             if last is not None and last + COOLDOWN > now:
                 raise CanvasCooldown(max(1, int((last + COOLDOWN - now).total_seconds())))

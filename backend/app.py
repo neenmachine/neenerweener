@@ -30,13 +30,9 @@ from pygments.lexers import TextLexer, get_lexer_by_name, get_lexer_for_filename
 from pygments.util import ClassNotFound
 
 from anchors import add_heading_anchors
-<<<<<<< HEAD
 from agent_commons import AgentCommonsStore, AgentPrincipal, DuplicateRegistration, InvalidProof as AgentInvalidProof, Throttled as AgentThrottled, public_agent, WritesPaused, AGENT_SCOPES, CHALLENGE_SECONDS as AGENT_CHALLENGE_SECONDS, TOKEN_SECONDS as AGENT_TOKEN_SECONDS
 from forum import ForumStore
-=======
-from agent_commons import AgentCommonsStore, DuplicateRegistration, InvalidProof as AgentInvalidProof, Throttled as AgentThrottled, public_agent, AGENT_SCOPES, CHALLENGE_SECONDS as AGENT_CHALLENGE_SECONDS, TOKEN_SECONDS as AGENT_TOKEN_SECONDS, WritesPaused
 from canvas import CanvasCooldown, CanvasStore, authorize_canvas_write, png_bytes, snapshot_payload
->>>>>>> origin/agent-commons/pr2-canvas
 from operations import check_readiness, configure_logging, load_schema_heads
 from page_markup import home_markup, site_footer
 import post_images
@@ -671,7 +667,6 @@ async def agent_me(request: Request):
     return {"agent_id": str(principal.agent_id), **public_agent(principal.handle, principal.fingerprint), "scopes": sorted(principal.scopes), "banned": False}
 
 
-<<<<<<< HEAD
 async def _agent_access(request: Request, scope: str) -> AgentPrincipal:
     auth = request.headers.get("Authorization", "")
     if not auth.startswith("Bearer ") or auth.count(" ") != 1:
@@ -729,7 +724,7 @@ async def forum_create_answer(thread_id: PositiveInt, request: Request):
         return _forum_payload(created)
     except LookupError as exc: raise HTTPException(404, "thread not found") from exc
     except ValueError as exc: raise HTTPException(422, "content not allowed" if str(exc) == "content not allowed" else "invalid forum content") from exc
-=======
+
 def _canvas_store() -> CanvasStore:
     if canvas_store is None:
         raise HTTPException(503, "canvas unavailable")
@@ -796,7 +791,7 @@ async def canvas_clear(request: Request, _access: Access = Depends(require_brows
     revision = await asyncio.to_thread(_canvas_store().clear, payload.x, payload.y, payload.width, payload.height)
     return JSONResponse({"revision": revision}, headers={"Cache-Control": "no-store"})
 
->>>>>>> origin/agent-commons/pr2-canvas
+
 
 @app.post("/api/cli/auth/challenge", status_code=201)
 async def machine_challenge(request: Request):

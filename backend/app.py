@@ -578,8 +578,8 @@ def _agent_store() -> AgentCommonsStore:
     return agent_commons_store
 
 
-def _agent_json(request: Request, model):
-    return _bounded_json(request, model)
+def _agent_json(request: Request, model, **kwargs):
+    return _bounded_json(request, model, **kwargs)
 
 
 def _agent_challenge_response(challenge):

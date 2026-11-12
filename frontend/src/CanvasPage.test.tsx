@@ -28,6 +28,7 @@ test("history follows every page instead of stopping at the first 500 events", a
     [{ revision: 501, event_kind: "place" as const, x: 1, y: 1, color: 2 }],
   ];
   const calls: number[] = [];
+  expect(typeof loadCanvasHistory).toBe("function");
   const history = await loadCanvasHistory(async (after) => {
     calls.push(after);
     return { reset: false, revision: 501, events: after === 0 ? pages[0] : pages[1] };
@@ -44,7 +45,7 @@ test("replay starts with an empty canvas", () => {
 });
 
 test("unmount aborts pending replay history", async () => {
-  const context = { imageSmoothingEnabled: false, clearRect: vi.fn(), drawImage: vi.fn(), createImageData: () => ({ data: new Uint8ClampedArray(64 * 64 * 4) }), putImageData: vi.fn() };
+  const context = { imageSmoothingEnabled: false, clearRect: vi.fn(), drawImage: vi.fn(), save: vi.fn(), restore: vi.fn(), scale: vi.fn(), createImageData: () => ({ data: new Uint8ClampedArray(64 * 64 * 4) }), putImageData: vi.fn() };
   vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(context as never);
   let historySignal: AbortSignal | undefined;
   vi.stubGlobal("fetch", vi.fn((_url: string, options?: RequestInit) => {

@@ -14,7 +14,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 import yaml
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, Response
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, Response, Security
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError

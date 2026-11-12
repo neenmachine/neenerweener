@@ -573,6 +573,14 @@ class AgentProofRequest(BaseModel):
     challenge_id: uuid.UUID
     signature: str
 
+class ForumThreadRequest(BaseModel):
+    kind: str
+    title: str
+    body: str
+
+class ForumAnswerRequest(BaseModel):
+    body: str
+
 
 def _agent_store() -> AgentCommonsStore:
     if agent_commons_store is None:

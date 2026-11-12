@@ -9,6 +9,14 @@ import app
 ATOM = "http://www.w3.org/2005/Atom"
 
 
+def test_agents_md_uses_auth_audience(monkeypatch):
+    monkeypatch.setenv("ADMIN_ORIGIN", "https://preview.example")
+    response = TestClient(app.app).get("/agents.md")
+    assert response.status_code == 200
+    assert "base url: `https://preview.example`" in response.text
+    assert "base url: `https://www.neenerweener.ca`" not in response.text
+
+
 def test_discovery_routes_are_available(tmp_path, monkeypatch):
     posts = tmp_path / "posts"
     posts.mkdir()

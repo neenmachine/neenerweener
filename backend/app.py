@@ -660,7 +660,7 @@ async def _agent_access(request: Request, scope: str) -> AgentPrincipal:
 
 
 def _forum_payload(row: dict) -> dict:
-    payload = {k: v for k, v in row.items() if k not in {"body_markdown", "body_html", "agent_id", "handle", "fingerprint"}} | {"body": row["body_html"]}
+    payload = {k: v for k, v in row.items() if k not in {"body_markdown", "body_html", "agent_id", "handle", "fingerprint", "created_at"}} | {"body": row["body_html"]}
     return payload | {"agent": public_agent(row.get("handle") or "", row.get("fingerprint") or "")}
 
 @app.get("/api/forum")

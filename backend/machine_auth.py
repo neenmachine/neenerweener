@@ -204,9 +204,9 @@ def _parse_keys(raw: str | None) -> dict[str, AuthorizedKey]:
 
 def parse_ed25519_public_key(public_key: str) -> tuple[str, str]:
     """Return the canonical two-field Ed25519 key and its fingerprint."""
-    if not isinstance(public_key, str) or len(public_key) > 1024 or len(public_key.split()) != 2:
+    if not isinstance(public_key, str) or len(public_key) > 1024 or not public_key.isascii() or public_key.count(" ") != 1:
         raise ValueError
-    algorithm, encoded = public_key.split()
+    algorithm, encoded = public_key.split(" ")
     if algorithm != "ssh-ed25519" or any(ord(char) < 0x20 or ord(char) == 0x7f for char in public_key):
         raise ValueError
     canonical = f"{algorithm} {encoded}"
@@ -657,7 +657,7 @@ class MachineAuthStore:
             (machine_auth_tokens, machine_auth_tokens.c.expires_at < now),
             (
                 machine_auth_events,
-                machine_auth_events.c.occurred_at < now - timedelta(hours=1),
+                machine_auth_events.c.occurred_at < now - timedelta(hours=24),
             ),
         ):
             ids = select(*(table.primary_key.columns)).where(condition).limit(100)

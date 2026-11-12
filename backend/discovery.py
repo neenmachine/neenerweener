@@ -102,7 +102,11 @@ see `/openapi.json` for schemas.
 
 @router.api_route("/agents.md", methods=["GET", "HEAD"])
 def agents_md(request: Request) -> Response:
-    return etag_response(request, AGENTS_MD.encode(), "text/markdown; charset=utf-8", {"Cache-Control": CACHE_CONTROL})
+    from auth import AdminConfig
+    config = AdminConfig.from_env()
+    base_url = config.origin if config.origin_valid else origin()
+    body = AGENTS_MD.replace("base url: `https://www.neenerweener.ca`", f"base url: `{base_url}`")
+    return etag_response(request, body.encode(), "text/markdown; charset=utf-8", {"Cache-Control": CACHE_CONTROL})
 
 
 @router.api_route("/robots.txt", methods=["GET", "HEAD"])

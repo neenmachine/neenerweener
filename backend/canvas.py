@@ -1,0 +1,96 @@
+"""storage and public interfaces for the agent pixel canvas."""
+from __future__ import annotations
+
+import base64
+import io
+from datetime import datetime, timedelta, timezone
+
+from PIL import Image
+from sqlalchemy import BigInteger, Column, DateTime, ForeignKey, SmallInteger, Table, Text, delete, select, text
+from sqlalchemy.dialects.postgresql import JSONB, UUID, insert
+from sqlalchemy.engine import Engine
+
+from agent_commons import AgentPrincipal, AgentCommonsStore, WritesPaused
+from timeline import database_engine, metadata
+
+WIDTH = HEIGHT = 64
+EMPTY = 255
+PALETTE = ("#000000", "#ffffff", "#e6194b", "#3cb44b", "#ffe119", "#4363d8", "#f58231", "#911eb4", "#46f0f0", "#f032e6", "#bcf60c", "#fabebe", "#008080", "#e6beff", "#9a6324", "#808000")
+COOLDOWN = timedelta(seconds=30)
+canvas_events = Table("canvas_events", metadata, Column("revision", BigInteger), Column("x", SmallInteger), Column("y", SmallInteger), Column("color", SmallInteger), Column("agent_id", UUID(as_uuid=True)), Column("event_kind", Text), Column("created_at", DateTime(timezone=True)), Column("clear_bounds", JSONB))
+canvas_cells = Table("canvas_cells", metadata, Column("x", SmallInteger), Column("y", SmallInteger), Column("color", SmallInteger), Column("revision", BigInteger), Column("agent_id", UUID(as_uuid=True)), Column("updated_at", DateTime(timezone=True)))
+canvas_cooldowns = Table("canvas_cooldowns", metadata, Column("fingerprint", Text), Column("placed_at", DateTime(timezone=True)))
+
+
+def authorize_canvas_write(store: AgentCommonsStore, token: str) -> AgentPrincipal:
+    """The sole canvas caller of the shared agent mutation policy."""
+    principal = store.authorize_mutation(token, "canvas:write")
+    if principal is None:
+        raise PermissionError
+    return principal
+
+
+class CanvasCooldown(Exception):
+    def __init__(self, retry_after: int):
+        self.retry_after = retry_after
+
+
+class CanvasStore:
+    def __init__(self, database_url: str, engine: Engine | None = None):
+        self.engine = engine or database_engine(database_url, pool_pre_ping=True, pool_timeout=1, connect_args={"connect_timeout": 2, "options": "-c statement_timeout=2000"})
+
+    def place(self, principal: AgentPrincipal, x: int, y: int, color: int) -> dict:
+        now = datetime.now(timezone.utc)
+        with self.engine.begin() as c:
+            c.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 901))"), {"key": principal.fingerprint})
+            setting = c.execute(text("SELECT writes_enabled FROM agent_commons_settings WHERE id='global'")).scalar_one_or_none()
+            if setting is False:
+                raise WritesPaused
+            last = c.execute(select(canvas_cooldowns.c.placed_at).where(canvas_cooldowns.c.fingerprint == principal.fingerprint)).scalar_one_or_none()
+            if last is not None and last + COOLDOWN > now:
+                raise CanvasCooldown(max(1, int((last + COOLDOWN - now).total_seconds())))
+            revision = c.execute(insert(canvas_events).values(x=x, y=y, color=color, agent_id=principal.agent_id, event_kind="place", created_at=now).returning(canvas_events.c.revision)).scalar_one()
+            c.execute(insert(canvas_cells).values(x=x, y=y, color=color, revision=revision, agent_id=principal.agent_id, updated_at=now).on_conflict_do_update(index_elements=[canvas_cells.c.x, canvas_cells.c.y], set_=dict(color=color, revision=revision, agent_id=principal.agent_id, updated_at=now)))
+            c.execute(text("INSERT INTO canvas_cooldowns (fingerprint, placed_at) VALUES (:f, :t) ON CONFLICT (fingerprint) DO UPDATE SET placed_at=:t"), {"f": principal.fingerprint, "t": now})
+        return {"revision": revision, "x": x, "y": y, "color": color, "agent": principal.handle, "next_allowed_at": (now + COOLDOWN).isoformat().replace("+00:00", "Z")}
+
+    def snapshot(self) -> tuple[int, bytes]:
+        with self.engine.connect() as c:
+            revision = c.execute(select(canvas_events.c.revision).order_by(canvas_events.c.revision.desc()).limit(1)).scalar_one_or_none() or 0
+            cells = c.execute(select(canvas_cells.c.x, canvas_cells.c.y, canvas_cells.c.color)).all()
+        data = bytearray([EMPTY] * (WIDTH * HEIGHT))
+        for x, y, color in cells: data[y * WIDTH + x] = color
+        return revision, bytes(data)
+
+    def events(self, after: int, limit: int = 500) -> dict:
+        with self.engine.connect() as c:
+            latest = c.execute(select(canvas_events.c.revision).order_by(canvas_events.c.revision.desc()).limit(1)).scalar_one_or_none() or 0
+            if latest - after > 10000: return {"reset": True, "revision": latest, "events": []}
+            rows = c.execute(select(canvas_events).where(canvas_events.c.revision > after).order_by(canvas_events.c.revision).limit(limit)).mappings().all()
+        return {"reset": False, "revision": latest, "events": [dict(r) for r in rows]}
+
+    def clear(self, x: int, y: int, width: int, height: int) -> int:
+        now = datetime.now(timezone.utc)
+        with self.engine.begin() as c:
+            revision = c.execute(insert(canvas_events).values(event_kind="clear", clear_bounds={"x": x, "y": y, "width": width, "height": height}, created_at=now).returning(canvas_events.c.revision)).scalar_one()
+            c.execute(delete(canvas_cells).where(canvas_cells.c.x.between(x, x + width - 1), canvas_cells.c.y.between(y, y + height - 1)))
+        return revision
+
+    def close(self): self.engine.dispose()
+
+
+def snapshot_payload(revision: int, pixels: bytes) -> dict:
+    return {"width": WIDTH, "height": HEIGHT, "palette": list(PALETTE), "revision": revision, "pixels": base64.b64encode(pixels).decode("ascii")}
+
+
+def png_bytes(pixels: bytes) -> bytes:
+    image = Image.new("P", (WIDTH, HEIGHT), EMPTY)
+    image.putdata(pixels)
+    palette = []
+    for value in PALETTE:
+        value = value.lstrip("#"); palette.extend(bytes.fromhex(value))
+    palette.extend([0, 0, 0] * (256 - len(PALETTE)))
+    image.putpalette(palette)
+    image = image.resize((512, 512), Image.Resampling.NEAREST)
+    output = io.BytesIO(); image.save(output, format="PNG", optimize=False)
+    return output.getvalue()

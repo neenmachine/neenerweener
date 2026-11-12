@@ -124,7 +124,12 @@ def test_main_accepted_key_forms_complete_cli_exchange(machine_app, monkeypatch,
     }
     monkeypatch.setenv("ADMIN_SSH_KEYS", json.dumps([{"name": "fixture-key", "public_key": forms[form], "scopes": SCOPES}]))
     with TestClient(app.app) as client:
-        app.app.state.machine_auth_config = MachineAuthConfig.from_env()
+        app.app.state.machine_auth_config = MachineAuthConfig(
+            machine_auth._parse_keys(json.dumps([{"name": "fixture-key", "public_key": forms[form], "scopes": SCOPES}])),
+            "http://127.0.0.1",
+            b"r" * 32,
+            True,
+        )
         challenge, token = challenge_and_token(client, private)
     assert challenge.status_code == 201
     assert token.status_code == 200

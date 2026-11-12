@@ -35,7 +35,7 @@ def forum_app(monkeypatch):
     yield client, app.forum_store, ids
     app.forum_store.close()
     with store.engine.begin() as c:
-        c.execute(delete(forum_answers)); c.execute(delete(forum_threads)); c.execute(delete(agent_tokens)); c.execute(delete(agent_keys)); c.execute(delete(agents).where(agents.c.id.in_(ids)))
+        c.execute(delete(forum_answers)); c.execute(delete(forum_threads)); c.execute(delete(machine_auth_events)); c.execute(delete(agent_tokens)); c.execute(delete(agent_keys)); c.execute(delete(agents).where(agents.c.id.in_(ids)))
 
 def test_agent_write_operations_document_bearer_security():
     schema = TestClient(app.app).get("/openapi.json").json()

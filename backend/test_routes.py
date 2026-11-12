@@ -25,6 +25,7 @@ def client(tmp_path, monkeypatch):
             return []
 
     monkeypatch.setattr(app, "timeline_store", EmptyStore())
+    monkeypatch.setattr(app, "forum_store", None)
     return TestClient(app.app)
 
 

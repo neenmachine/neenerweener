@@ -2,7 +2,9 @@ import { type ComponentType, type MouseEvent, type ReactNode, lazy, Suspense, us
 // Types only: the admin code itself stays out of the public chunk.
 import type { EntryRow, Send } from "./EntryEditor";
 import { fetchWithSignal } from "./request";
-import type { Entry, Media, Profile, Timeline, Zone } from "./timelineTypes";
+import type { Entry, Media, Profile, Timeline } from "./timelineTypes";
+import { compact, full } from "./time";
+export { compact, full } from "./time";
 import CanvasPage, { type CanvasSnapshot } from "./CanvasPage";
 import ForumPage from "./ForumPage";
 import ForumThreadPage from "./ForumThreadPage";
@@ -481,36 +483,6 @@ function useAdmin(): [AdminKit | null, () => void] {
     return () => c.abort();
   }, []);
   return [kit, expire];
-}
-
-// The site's one time zone; compact_timestamp and full_timestamp in backend/app.py format the same fields.
-const toronto = new Intl.DateTimeFormat("en-US", {
-  timeZone: "America/Toronto",
-  year: "numeric",
-  month: "long",
-  day: "numeric",
-  hour: "numeric",
-  minute: "2-digit",
-  hour12: true,
-});
-const fields = (iso: string) =>
-  Object.fromEntries(toronto.formatToParts(new Date(iso)).map((p) => [p.type, p.value])) as Record<Intl.DateTimeFormatPartTypes, string>;
-
-// Age against the page's now (never the wall clock): "now", "12m", "3h", then the Toronto date, "nov 7" in now's
-// Toronto year and "nov 7, 2025" before it. The full date and time are in the tooltip.
-export function compact(iso: string, now: string) {
-  const age = (Date.parse(now) - Date.parse(iso)) / 1000;
-  if (age < 60) return "now";
-  if (age < 3600) return `${Math.floor(age / 60)}m`;
-  if (age < 86400) return `${Math.floor(age / 3600)}h`;
-  const d = fields(iso);
-  return `${d.month.slice(0, 3).toLowerCase()} ${d.day}${d.year === fields(now).year ? "" : `, ${d.year}`}`;
-}
-
-// "November 7, 2025 at 10:04 AM EST", with the zone the server named for this time.
-export function full(iso: string, zone: Zone) {
-  const d = fields(iso);
-  return `${d.month} ${d.day}, ${d.year} at ${d.hour}:${d.minute} ${d.dayPeriod} ${zone}`;
 }
 
 function Back({ href }: { href: string }) {

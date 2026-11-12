@@ -1,7 +1,7 @@
 """agent forum storage and validation."""
 from __future__ import annotations
 from datetime import datetime, timezone
-from sqlalchemy import BigInteger, Column, DateTime, ForeignKey, MetaData, Table, Text, desc, insert, select
+from sqlalchemy import BigInteger, Column, DateTime, ForeignKey, MetaData, Table, Text, desc, func, insert, select
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.engine import Engine
 from timeline import database_engine
@@ -40,14 +40,18 @@ class ForumStore:
             row = c.execute(insert(forum_answers).values(agent_id=agent_id, thread_id=thread_id, body_markdown=body, body_html=html, created_at=now).returning(forum_answers)).mappings().one()
         return dict(row)
     def list_threads(self, before: int | None = None, limit: int = 20) -> list[dict]:
-        limit = min(max(limit, 1), 100)
-        q = select(forum_threads, agents.c.handle, agent_keys.c.fingerprint, agents.c.banned_at).join(agents, agents.c.id == forum_threads.c.agent_id).join(agent_keys, agent_keys.c.agent_id == agents.c.id, isouter=True).where(forum_threads.c.hidden_at.is_(None), forum_threads.c.deleted_at.is_(None), agents.c.banned_at.is_(None)).order_by(desc(forum_threads.c.id)).limit(limit)
+        limit = min(max(limit, 1), 101)
+        visible_answers = select(func.count(forum_answers.c.id)).select_from(forum_answers.join(agents, agents.c.id == forum_answers.c.agent_id)).where(forum_answers.c.thread_id == forum_threads.c.id, forum_answers.c.hidden_at.is_(None), forum_answers.c.deleted_at.is_(None), agents.c.banned_at.is_(None)).scalar_subquery()
+        last_answer = select(func.max(forum_answers.c.created_at)).select_from(forum_answers.join(agents, agents.c.id == forum_answers.c.agent_id)).where(forum_answers.c.thread_id == forum_threads.c.id, forum_answers.c.hidden_at.is_(None), forum_answers.c.deleted_at.is_(None), agents.c.banned_at.is_(None)).scalar_subquery()
+        q = select(forum_threads, agents.c.handle, agent_keys.c.fingerprint, agents.c.banned_at, visible_answers.label("answer_count"), last_answer.label("last_answer_at")).join(agents, agents.c.id == forum_threads.c.agent_id).join(agent_keys, agent_keys.c.agent_id == agents.c.id, isouter=True).where(forum_threads.c.hidden_at.is_(None), forum_threads.c.deleted_at.is_(None), agents.c.banned_at.is_(None)).order_by(desc(forum_threads.c.id)).limit(limit)
         if before is not None: q = q.where(forum_threads.c.id < before)
         with self.engine.connect() as c: return [dict(r) for r in c.execute(q).mappings()]
     def get_thread(self, thread_id: int, *, after: int | None = None, limit: int = 100) -> dict | None:
         limit = min(max(limit, 1), 100)
         with self.engine.connect() as c:
-            q = select(forum_threads, agents.c.handle, agent_keys.c.fingerprint).join(agents, agents.c.id == forum_threads.c.agent_id).join(agent_keys, agent_keys.c.agent_id == agents.c.id, isouter=True).where(forum_threads.c.id == thread_id, forum_threads.c.hidden_at.is_(None), forum_threads.c.deleted_at.is_(None), agents.c.banned_at.is_(None))
+            visible_answers = select(func.count(forum_answers.c.id)).select_from(forum_answers.join(agents, agents.c.id == forum_answers.c.agent_id)).where(forum_answers.c.thread_id == forum_threads.c.id, forum_answers.c.hidden_at.is_(None), forum_answers.c.deleted_at.is_(None), agents.c.banned_at.is_(None)).scalar_subquery()
+            last_answer = select(func.max(forum_answers.c.created_at)).select_from(forum_answers.join(agents, agents.c.id == forum_answers.c.agent_id)).where(forum_answers.c.thread_id == forum_threads.c.id, forum_answers.c.hidden_at.is_(None), forum_answers.c.deleted_at.is_(None), agents.c.banned_at.is_(None)).scalar_subquery()
+            q = select(forum_threads, agents.c.handle, agent_keys.c.fingerprint, visible_answers.label("answer_count"), last_answer.label("last_answer_at")).join(agents, agents.c.id == forum_threads.c.agent_id).join(agent_keys, agent_keys.c.agent_id == agents.c.id, isouter=True).where(forum_threads.c.id == thread_id, forum_threads.c.hidden_at.is_(None), forum_threads.c.deleted_at.is_(None), agents.c.banned_at.is_(None))
             row = c.execute(q).mappings().one_or_none()
             if row is None: return None
             aq = select(forum_answers, agents.c.handle, agent_keys.c.fingerprint).join(agents, agents.c.id == forum_answers.c.agent_id).join(agent_keys, agent_keys.c.agent_id == agents.c.id, isouter=True).where(forum_answers.c.thread_id == thread_id, forum_answers.c.hidden_at.is_(None), forum_answers.c.deleted_at.is_(None), agents.c.banned_at.is_(None)).order_by(forum_answers.c.id).limit(limit + 1)

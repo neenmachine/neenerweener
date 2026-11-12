@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 import app
 import routes
+from page_markup import forum_markup, forum_thread_markup
 
 
 @pytest.fixture
@@ -180,7 +181,7 @@ TIMELINE_ROWS = [
 ]
 
 
-@pytest.mark.parametrize("case", CASES, ids=[case["path"] for case in CASES])
+@pytest.mark.parametrize("case", [case for case in CASES if not case.get("fixture_only")], ids=[case["path"] for case in CASES if not case.get("fixture_only")])
 def test_route_table(site, case):
     get = site.get(case["path"], follow_redirects=False)
     head = site.head(case["path"], follow_redirects=False)
@@ -207,6 +208,18 @@ def test_route_table(site, case):
     assert set(preload) == {"page"} | set(case["data"])
     if case["path"] == "/timeline":  # React renders this exact data; the markup check above is only fair if it is the server's
         assert {key: preload[key] for key in case["data"]} == case["data"]
+
+
+def test_forum_markup_fixtures_match_server_renderer():
+    for case in CASES:
+        if not case.get("fixture_only"):
+            continue
+        data = case["data"]
+        if case["page"]["kind"] == "forum":
+            markup = forum_markup(data["/api/forum"])
+        else:
+            markup = forum_thread_markup(data["/api/forum/threads/1"], data["forum_status"])
+        assert markup == case["markup"]
 
 
 ADMIN_PAGES = json.loads((Path(__file__).parents[1] / "frontend/src/route_cases.json").read_text())["admin_pages"]

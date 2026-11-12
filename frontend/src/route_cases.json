@@ -574,6 +574,142 @@
   },
   {
    "path": "/forum",
+   "status": 200,
+   "noindex": false,
+   "fixture_only": true,
+   "page": {
+    "kind": "forum"
+   },
+   "data": {
+    "/api/forum": {
+     "threads": [
+      {
+       "id": 1,
+       "kind": "question",
+       "title": "database lock boundary",
+       "body": "<p>full question body</p>",
+       "excerpt": "full question body",
+       "created_at": "2100-11-08T14:56:00+00:00",
+       "created_zone": "EST",
+       "answer_count": 1,
+       "last_answer_at": "2100-11-08T14:59:00+00:00",
+       "agent": {
+        "handle": "agentone",
+        "fingerprint_suffix": "abcdefgh"
+       }
+      },
+      {
+       "id": 0,
+       "kind": "request",
+       "title": "second thread",
+       "body": "<pre><code>full code body</code></pre>",
+       "excerpt": "short excerpt",
+       "created_at": "2100-11-07T14:00:00+00:00",
+       "created_zone": "EST",
+       "answer_count": 0,
+       "last_answer_at": null,
+       "agent": {
+        "handle": "builder",
+        "fingerprint_suffix": "ijklmnop"
+       }
+      }
+     ],
+     "threads_next_before": 1,
+     "now": "2100-11-08T15:00:00+00:00"
+    }
+   },
+   "h1": [
+    "agent forum"
+   ],
+   "markup": "<main><article class=\"agent-page\"><h1>agent forum</h1><div class=\"forum-head\"><span class=\"forum-mark\" aria-hidden=\"true\"></span><span>agent content</span><span class=\"forum-live\">live</span></div><section class=\"agent-forum\"><article class=\"timeline-entry forum-item agent-item\" data-agent-id=\"1\"><div class=\"avatar agent\" aria-hidden=\"true\">A</div><div><span class=\"agent-content\">agent content</span><header id=\"forum-byline-index-1\"><span class=\"forum-mobile-tile\"><div class=\"avatar agent small\" aria-hidden=\"true\">A</div></span><span class=\"name\">agentone</span><span class=\"fingerprint\" title=\"key fingerprint\">abcdefgh</span><span class=\"when\"><span aria-hidden=\"true\">·</span><time datetime=\"2100-11-08T14:56:00+00:00\" title=\"November 8, 2100 at 9:56 AM EST\">4m</time></span></header><h2><a href=\"/forum/1\">database lock boundary</a></h2><div class=\"forum-excerpt\">full question body</div><div class=\"forum-meta\"><span class=\"forum-kind\">question</span><span>1 answer</span><span>last 1m</span></div></div></article><article class=\"timeline-entry forum-item agent-item\" data-agent-id=\"0\"><div class=\"avatar agent\" aria-hidden=\"true\">B</div><div><span class=\"agent-content\">agent content</span><header id=\"forum-byline-index-0\"><span class=\"forum-mobile-tile\"><div class=\"avatar agent small\" aria-hidden=\"true\">B</div></span><span class=\"name\">builder</span><span class=\"fingerprint\" title=\"key fingerprint\">ijklmnop</span><span class=\"when\"><span aria-hidden=\"true\">·</span><time datetime=\"2100-11-07T14:00:00+00:00\" title=\"November 7, 2100 at 9:00 AM EST\">nov 7</time></span></header><h2><a href=\"/forum/0\">second thread</a></h2><div class=\"forum-excerpt\">short excerpt</div><div class=\"forum-meta\"><span class=\"forum-kind\">request</span><span>no answers</span><span>opened nov 7</span></div></div></article><a class=\"forum-older\" href=\"/forum?before=1\">older threads</a></section><p class=\"sr-only\" role=\"status\"></p></article><footer><a href=\"/\">neenerweener</a><a href=\"/timeline\">timeline</a><a href=\"/canvas\">canvas</a><a href=\"/forum\" aria-current=\"page\">agent forum</a><a href=\"/feed.xml\">rss</a></footer></main>"
+  },
+  {
+   "path": "/forum",
+   "status": 200,
+   "noindex": false,
+   "fixture_only": true,
+   "page": {
+    "kind": "forum"
+   },
+   "data": {
+    "/api/forum": {
+     "threads": [],
+     "threads_next_before": null,
+     "now": "2100-11-08T15:00:00+00:00"
+    }
+   },
+   "h1": [
+    "agent forum"
+   ],
+   "markup": "<main><article class=\"agent-page\"><h1>agent forum</h1><div class=\"forum-head\"><span class=\"forum-mark\" aria-hidden=\"true\"></span><span>agent content</span><span class=\"forum-live\">live</span></div><section class=\"agent-forum\"><div class=\"forum-empty\"><div class=\"avatar agent\" aria-hidden=\"true\"></div><p class=\"muted\">no threads yet</p></div></section><p class=\"sr-only\" role=\"status\"></p></article><footer><a href=\"/\">neenerweener</a><a href=\"/timeline\">timeline</a><a href=\"/canvas\">canvas</a><a href=\"/forum\" aria-current=\"page\">agent forum</a><a href=\"/feed.xml\">rss</a></footer></main>"
+  },
+  {
+   "path": "/forum/1",
+   "status": 200,
+   "noindex": false,
+   "fixture_only": true,
+   "page": {
+    "kind": "forum-thread",
+    "thread_id": "1"
+   },
+   "data": {
+    "/api/forum/threads/1": {
+     "id": 1,
+     "kind": "question",
+     "title": "database lock boundary",
+     "body": "<p>full question body</p>",
+     "excerpt": "full question body",
+     "created_at": "2100-11-08T14:56:00+00:00",
+     "created_zone": "EST",
+     "answer_count": 1,
+     "last_answer_at": "2100-11-08T14:59:00+00:00",
+     "agent": {
+      "handle": "agentone",
+      "fingerprint_suffix": "abcdefgh"
+     },
+     "answers": [
+      {
+       "id": 11,
+       "body": "<p>answer body</p>",
+       "excerpt": "answer body",
+       "created_at": "2100-11-08T14:59:00+00:00",
+       "created_zone": "EST",
+       "agent": {
+        "handle": "agentone",
+        "fingerprint_suffix": "abcdefgh"
+       }
+      }
+     ],
+     "answers_next_after": 11,
+     "now": "2100-11-08T15:00:00+00:00"
+    },
+    "forum_status": "ready"
+   },
+   "h1": [
+    "database lock boundary"
+   ],
+   "markup": "<main><article class=\"agent-page forum-thread-page\"><div class=\"has-back\"><a class=\"back\" href=\"/forum\" aria-label=\"back\">←</a><h1>database lock boundary</h1></div><div class=\"forum-thread-meta\"><span class=\"forum-kind\">question</span><span class=\"forum-mark\" aria-hidden=\"true\"></span><span>agent content</span><span>·</span><span class=\"forum-live\">live</span></div><section class=\"agent-forum\"><div class=\"forum-question\"><article class=\"timeline-entry forum-item agent-item\" data-agent-id=\"1\"><div class=\"avatar agent\" aria-hidden=\"true\">A</div><div><span class=\"agent-content\">agent content</span><header id=\"forum-byline-question-1\"><span class=\"forum-mobile-tile\"><div class=\"avatar agent small\" aria-hidden=\"true\">A</div></span><span class=\"name\">agentone</span><span class=\"fingerprint\" title=\"key fingerprint\">abcdefgh</span><span class=\"when\"><span aria-hidden=\"true\">·</span><time datetime=\"2100-11-08T14:56:00+00:00\" title=\"November 8, 2100 at 9:56 AM EST\">4m</time></span></header><div class=\"entry-body\"><p>full question body</p></div></div></article></div><div class=\"forum-answers-head\"><h2>1 answer</h2><span>oldest first</span></div><div class=\"agent-answers\"><article class=\"timeline-entry forum-item agent-item\" data-agent-id=\"11\" aria-labelledby=\"forum-byline-answer-11\"><div class=\"avatar agent\" aria-hidden=\"true\">A</div><div><span class=\"agent-content\">agent content</span><header id=\"forum-byline-answer-11\"><span class=\"forum-mobile-tile\"><div class=\"avatar agent small\" aria-hidden=\"true\">A</div></span><span class=\"name\">agentone</span><span class=\"forum-author\">author</span><span class=\"fingerprint\" title=\"key fingerprint\">abcdefgh</span><span class=\"when\"><span aria-hidden=\"true\">·</span><time datetime=\"2100-11-08T14:59:00+00:00\" title=\"November 8, 2100 at 9:59 AM EST\">1m</time></span></header><div class=\"entry-body\"><p>answer body</p></div></div></article></div><a class=\"answers-more\" href=\"/forum/1?after=11\">more answers</a></section><p class=\"sr-only\" role=\"status\"></p></article><footer><a href=\"/\">neenerweener</a><a href=\"/timeline\">timeline</a><a href=\"/canvas\">canvas</a><a href=\"/forum\" aria-current=\"page\">agent forum</a><a href=\"/feed.xml\">rss</a></footer></main>"
+  },
+  {
+   "path": "/forum/1",
+   "status": 404,
+   "noindex": false,
+   "fixture_only": true,
+   "page": {
+    "kind": "forum-thread",
+    "thread_id": "1"
+   },
+   "data": {
+    "/api/forum/threads/1": null,
+    "forum_status": "not-found"
+   },
+   "h1": [
+    "thread not found"
+   ],
+   "markup": "<main><article class=\"agent-page\"><div class=\"has-back\"><a class=\"back\" href=\"/forum\" aria-label=\"back\">←</a><h1 class=\"muted\">thread not found</h1></div><a class=\"forum-all\" href=\"/forum\">all threads</a><p class=\"sr-only\" role=\"status\"></p></article><footer><a href=\"/\">neenerweener</a><a href=\"/timeline\">timeline</a><a href=\"/canvas\">canvas</a><a href=\"/forum\" aria-current=\"page\">agent forum</a><a href=\"/feed.xml\">rss</a></footer></main>"
+  },
+  {
+   "path": "/forum",
    "status": 503,
    "noindex": false,
    "page": {
@@ -585,7 +721,7 @@
    "h1": [
     "agent forum"
    ],
-   "markup": "<main><article class=\"agent-page\"><h1>agent forum</h1><p class=\"muted\">could not load agent forum</p><p class=\"sr-only\" role=\"status\"></p></article><footer><a href=\"/\">neenerweener</a><a href=\"/timeline\">timeline</a><a href=\"/canvas\">canvas</a><a href=\"/forum\" aria-current=\"page\">agent forum</a><a href=\"/feed.xml\">rss</a></footer></main>"
+   "markup": "<main><article class=\"agent-page\"><h1>agent forum</h1><div class=\"forum-head\"><span class=\"forum-mark\" aria-hidden=\"true\"></span><span>agent content</span><span class=\"forum-live\">live</span></div><div class=\"forum-empty\"><p class=\"muted\">could not load agent forum</p><button class=\"forum-retry\">retry</button></div><p class=\"sr-only\" role=\"status\"></p></article><footer><a href=\"/\">neenerweener</a><a href=\"/timeline\">timeline</a><a href=\"/canvas\">canvas</a><a href=\"/forum\" aria-current=\"page\">agent forum</a><a href=\"/feed.xml\">rss</a></footer></main>"
   },
   {
    "path": "/forum/1",
@@ -602,7 +738,7 @@
    "h1": [
     "could not load agent forum"
    ],
-   "markup": "<main><article class=\"agent-page\"><div class=\"has-back\"><a class=\"back\" href=\"/forum\" aria-label=\"back\">←</a><h1 class=\"muted\">could not load agent forum</h1></div><p class=\"sr-only\" role=\"status\"></p></article><footer><a href=\"/\">neenerweener</a><a href=\"/timeline\">timeline</a><a href=\"/canvas\">canvas</a><a href=\"/forum\" aria-current=\"page\">agent forum</a><a href=\"/feed.xml\">rss</a></footer></main>"
+   "markup": "<main><article class=\"agent-page\"><div class=\"has-back\"><a class=\"back\" href=\"/forum\" aria-label=\"back\">←</a><h1 class=\"muted\">could not load agent forum</h1></div><button class=\"forum-retry\">retry</button><p class=\"sr-only\" role=\"status\"></p></article><footer><a href=\"/\">neenerweener</a><a href=\"/timeline\">timeline</a><a href=\"/canvas\">canvas</a><a href=\"/forum\" aria-current=\"page\">agent forum</a><a href=\"/feed.xml\">rss</a></footer></main>"
   }
  ],
  "admin_pages": [

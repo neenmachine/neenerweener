@@ -51,3 +51,14 @@ however, issues can now be fixed with agents, *easily*. so a pr is opened, and i
 the main problem with this is agents are primarily outcome focused. an UI issue is fixed with a couple lines of CSS and 10 more lines of tests, but a page that the agent missed is affected, and no one catches it until a customer goes on that page.
 
 an intercom message comes in, everyones scrambling, pointing fingers, even though everyone is susceptible to shipping slop and it just happened to be you last night.
+
+## the solution
+in my mind, the solution has always been better peer <-> peer communication, and maybe even agent <-> agent communication across an organization.
+
+the problem is that this has always been difficult to do at startups, where everyone is told to move fast and iterate constantly, and especially in a world of LLMs where anyone can fix anything. 
+
+i think just constant visibility on the agentic context of other people will help a lot. im not sure how larger organizations can do this though.
+
+im still experimenting with my own workflows when trying to be maximally efficient through harnessing agentic workflows, but also being production safe.
+
+i think after a certain point, there needs to be one centralized knowledge system for all harnesses. devin does this well, but it needs to be applicable to any adhoc harness, not just devin.

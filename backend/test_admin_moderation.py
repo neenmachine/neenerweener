@@ -21,6 +21,8 @@ def setup(monkeypatch):
     with app.moderation_store.engine.begin() as c:
         c.execute(text("TRUNCATE agent_moderation_audit, forum_answers, forum_threads, agent_tokens, agent_keys, agents RESTART IDENTITY CASCADE"))
     yield password
+    with app.moderation_store.engine.begin() as c:
+        c.execute(text("TRUNCATE agent_moderation_audit, forum_answers, forum_threads, agent_tokens, agent_keys, agents RESTART IDENTITY CASCADE"))
 
 def session(password):
     r=client.post("/api/admin/login", json={"password":password}, headers={"Origin":"http://127.0.0.1"}); assert r.status_code==204

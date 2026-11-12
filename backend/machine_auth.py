@@ -295,8 +295,20 @@ def _verify_signature(message: bytes, signature: str, key: AuthorizedKey, namesp
         return False
 
 
+def auth_digest(value: str) -> bytes:
+    return hashlib.sha256(value.encode("utf-8")).digest()
+
+
 def _digest(value: str) -> bytes:
     return hashlib.sha256(value.encode("utf-8")).digest()
+
+
+def auth_message(challenge_id, fingerprint, nonce, audience, expires_at) -> str:
+    return _message(challenge_id, fingerprint, nonce, audience, expires_at)
+
+
+def verify_auth_signature(message: bytes, signature: str, key: AuthorizedKey, namespace: str = NAMESPACE) -> bool:
+    return _verify_signature(message, signature, key, namespace)
 
 
 def _rfc3339(value: datetime) -> str:

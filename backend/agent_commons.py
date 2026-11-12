@@ -13,13 +13,15 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.engine import Engine
 
 from client_identity import rate_limit_key
-from machine_auth import AuthorizedKey, InvalidProof, Throttled, _digest, _message, _verify_signature, parse_ed25519_public_key
+from machine_auth import AuthorizedKey, InvalidProof, Throttled, auth_digest, auth_message, parse_ed25519_public_key, verify_auth_signature
 from timeline import database_engine, metadata
 
 AGENT_NAMESPACE = "neenerweener-agent-v1"
 AGENT_SCOPES = frozenset({"canvas:write", "forum:write", "puzzle:submit"})
 HANDLE_PATTERN = re.compile(r"[a-z0-9][a-z0-9_-]{2,31}\Z", re.ASCII)
 RESERVED_HANDLES = frozenset({"henry", "admin", "root", "neen", "neenerweener", "system", "moderator"})
+# scope -> persistent event, per-agent limit, window in seconds. canvas cooldown is feature data.
+SCOPE_LIMITS = {"forum:write": ("agent_forum_write", 200, 3600), "puzzle:submit": ("agent_puzzle_submit", 30, 3600)}
 CHALLENGE_SECONDS = 300
 TOKEN_SECONDS = 600
 
@@ -74,7 +76,7 @@ class AgentCommonsStore:
 
     @staticmethod
     def _message(challenge_id, fingerprint, nonce, audience, expires_at):
-        return _message(challenge_id, fingerprint, nonce, audience, expires_at).replace("ween-cli-auth-v1", AGENT_NAMESPACE, 1)
+        return auth_message(challenge_id, fingerprint, nonce, audience, expires_at).replace("ween-cli-auth-v1", AGENT_NAMESPACE, 1)
 
     def _retry(self, c, event: str, ip: str | None, fingerprint: str | None, limits: tuple[int | None, int | None, int], now: datetime) -> int | None:
         secret = self._secret()
@@ -123,7 +125,7 @@ class AgentCommonsStore:
             row = c.execute(select(agent_registration_challenges).where(agent_registration_challenges.c.challenge_id == challenge_id).with_for_update()).mappings().one_or_none()
             if not row or row["consumed_at"] is not None or row["expires_at"] <= now or row["audience"] != audience: raise InvalidProof
             key = AuthorizedKey("agent", row["public_key"], row["fingerprint"], AGENT_SCOPES)
-            if not _verify_signature(self._message(challenge_id, row["fingerprint"], row["nonce"], row["audience"], row["expires_at"]).encode(), signature, key, AGENT_NAMESPACE): raise InvalidProof
+            if not verify_auth_signature(self._message(challenge_id, row["fingerprint"], row["nonce"], row["audience"], row["expires_at"]).encode(), signature, key, AGENT_NAMESPACE): raise InvalidProof
             agent_id = uuid.uuid4()
             try:
                 c.execute(insert(agents).values(id=agent_id, handle=row["handle"], created_at=now)); c.execute(insert(agent_keys).values(fingerprint=row["fingerprint"], agent_id=agent_id, public_key=row["public_key"], created_at=now))
@@ -160,26 +162,42 @@ class AgentCommonsStore:
             agent = c.execute(select(agents).where(agents.c.id == keyrow["agent_id"])).mappings().one_or_none() if keyrow else None
             valid = bool(row and keyrow and agent and agent["banned_at"] is None and row["consumed_at"] is None and row["expires_at"] > now and row["audience"] == audience)
             key = AuthorizedKey("agent", keyrow["public_key"], row["fingerprint"], AGENT_SCOPES) if keyrow and row else None
-            valid = valid and bool(key and _verify_signature(self._message(challenge_id, row["fingerprint"], row["nonce"], row["audience"], row["expires_at"]).encode(), signature, key, AGENT_NAMESPACE))
+            valid = valid and bool(key and verify_auth_signature(self._message(challenge_id, row["fingerprint"], row["nonce"], row["audience"], row["expires_at"]).encode(), signature, key, AGENT_NAMESPACE))
             if not valid: raise InvalidProof
             raw = secrets.token_urlsafe(32); expires = now + timedelta(seconds=TOKEN_SECONDS)
-            c.execute(update(agent_challenges).where(agent_challenges.c.challenge_id == challenge_id).values(consumed_at=now)); c.execute(insert(agent_tokens).values(token_digest=_digest(raw), agent_id=agent["id"], fingerprint=row["fingerprint"], scopes=sorted(AGENT_SCOPES), issued_at=now, expires_at=expires))
+            c.execute(update(agent_challenges).where(agent_challenges.c.challenge_id == challenge_id).values(consumed_at=now)); c.execute(insert(agent_tokens).values(token_digest=auth_digest(raw), agent_id=agent["id"], fingerprint=row["fingerprint"], scopes=sorted(AGENT_SCOPES), issued_at=now, expires_at=expires))
         return raw, AgentPrincipal(agent["id"], agent["handle"], row["fingerprint"], AGENT_SCOPES)
 
     def authorize(self, token: str, required: str | None = None) -> AgentPrincipal | None:
         now = datetime.now(timezone.utc)
         with self.engine.connect() as c:
-            row = c.execute(select(agent_tokens, agents.c.handle, agents.c.banned_at, agent_keys.c.revoked_at.label("key_revoked_at")).join(agents, agents.c.id == agent_tokens.c.agent_id).join(agent_keys, agent_keys.c.agent_id == agents.c.id).where(agent_tokens.c.token_digest == _digest(token))).mappings().one_or_none()
+            row = c.execute(select(agent_tokens, agents.c.handle, agents.c.banned_at, agent_keys.c.revoked_at.label("key_revoked_at")).join(agents, agents.c.id == agent_tokens.c.agent_id).join(agent_keys, agent_keys.c.agent_id == agents.c.id).where(agent_tokens.c.token_digest == auth_digest(token))).mappings().one_or_none()
         if not row or row["expires_at"] <= now or row["revoked_at"] is not None or row["banned_at"] is not None or row["key_revoked_at"] is not None: return None
         scopes = frozenset(row["scopes"])
         if required and required not in scopes: return None
         return AgentPrincipal(row["agent_id"], row["handle"], row["fingerprint"], scopes)
 
+    def _permit_scope(self, principal: AgentPrincipal, scope: str, now: datetime) -> None:
+        limit_spec = SCOPE_LIMITS.get(scope)
+        if limit_spec is None: return
+        event, limit, window = limit_spec
+        secret = self._secret()
+        if secret is None: raise Throttled(1)
+        key = rate_limit_key(secret, "fingerprint", principal.fingerprint)
+        with self.engine.begin() as c:
+            c.execute(text("SELECT pg_advisory_xact_lock(843921771)"))
+            cutoff = now - timedelta(seconds=window)
+            rows = c.execute(select(text("occurred_at")).select_from(text("machine_auth_events")).where(text("event = :event AND fingerprint_key = :key AND occurred_at > :cutoff")).params(event=event, key=key, cutoff=cutoff).order_by(text("occurred_at DESC")).limit(limit)).scalars().all()
+            if len(rows) >= limit:
+                raise Throttled(max(1, int((rows[-1] + timedelta(seconds=window) - now).total_seconds())))
+            self._event(c, event, None, principal.fingerprint)
+
     def authorize_mutation(self, token: str, scope: str) -> AgentPrincipal | None:
-        """Shared gate for canvas/forum/puzzle: token, scope, ban, revoke, pause, and hard-off."""
+        """One gate for pr 2 canvas and pr 3 forum: token, scope, bans, pause, hard-off, and scope limits."""
         principal = self.authorize(token, scope)
         if principal is None: return None
         self.assert_writes_enabled()
+        self._permit_scope(principal, scope, datetime.now(timezone.utc))
         return principal
 
     def writes_enabled(self) -> bool:

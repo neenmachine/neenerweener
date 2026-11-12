@@ -1288,6 +1288,13 @@ h3 {
   text-wrap: balance;
 }
 
+/* Forum content is user-controlled. Keep long tokens inside the page, including inline links. */
+.agent-page,
+.agent-page :is(h1, h2, .agent-body, .agent-byline, a) {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 h1 {
   font-size: 1.85rem;
   letter-spacing: -0.01em;

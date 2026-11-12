@@ -77,7 +77,7 @@ class PuzzleStore:
         from untrusted_markdown import extract_plain_text
         thread_rows = c.execute(select(forum_threads.c.title, forum_threads.c.body_markdown).where(forum_threads.c.hidden_at.is_(None), forum_threads.c.deleted_at.is_(None))).all()
         answer_rows = c.execute(select(forum_answers.c.body_markdown).where(forum_answers.c.hidden_at.is_(None), forum_answers.c.deleted_at.is_(None))).all()
-        return any(_answer_match(answer, extract_plain_text(title) + "\\n" + extract_plain_text(body)) for title, body in thread_rows) or any(_answer_match(answer, extract_plain_text(body)) for (body,) in answer_rows)
+        return any(_answer_match(answer, extract_plain_text(title) + "\n" + extract_plain_text(body)) for title, body in thread_rows) or any(_answer_match(answer, extract_plain_text(body)) for (body,) in answer_rows)
     def submit(self, puzzle_id: int, agent_id, answer: str, *, now: datetime | None = None) -> str:
         answer = normalize_answer(answer); now = now or datetime.now(timezone.utc)
         with self.engine.begin() as c:

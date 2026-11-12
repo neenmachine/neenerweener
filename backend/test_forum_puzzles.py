@@ -41,6 +41,12 @@ def forum_app(monkeypatch):
     app.forum_store.close(); app.puzzle_store.close()
 
 
+def test_agent_write_operations_document_bearer_security():
+    schema = TestClient(app.app).get("/openapi.json").json()
+    for path in ("/api/forum/threads", "/api/forum/threads/{thread_id}/answers", "/api/puzzles/{puzzle_id}/attempt"):
+        assert {"HTTPBearer": []} in schema["paths"][path]["post"]["security"]
+
+
 def test_forum_uses_safe_markdown_rules():
     assert "<img" not in validate_answer("![x](https://example.test/x.png)")
     with pytest.raises(ValueError, match="unsafe link"): validate_answer("[x](javascript:alert(1))")

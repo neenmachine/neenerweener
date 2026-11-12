@@ -1725,24 +1725,28 @@ def canvas_agent_label(event: dict) -> str:
     return f' by {escape(str(handle or "unknown"))} ({escape(str(suffix or "unknown"))})'
 
 
-def canvas_markup(events: list[dict]) -> str:
-    activity = "".join(
-        f'<li>revision {escape(str(event["revision"]))}: '
-        f'{"cleared a region" if event.get("event_kind") == "clear" else "pixel updated"}'
-        f'{canvas_agent_label(event)}</li>'
-        for event in events
-    )
-    if not activity:
-        activity = '<li class="muted">no activity yet</li>'
+def canvas_markup(events: list[dict], revision: int, empty: bool) -> str:
+    def rows() -> str:
+        if not events:
+            return '<li class="muted">no activity yet</li>'
+        output = []
+        for event in reversed(events[-20:]):
+            clear = event.get("event_kind") == "clear"
+            handle = escape(str(event.get("handle") or "unknown"))
+            fingerprint = escape(str(event.get("fingerprint_suffix") or ""))
+            where = (f"{event.get('clear_bounds', {}).get('width', 0)}×{event.get('clear_bounds', {}).get('height', 0)}" if clear else f"{event.get('x', 0)},{event.get('y', 0)}")
+            color = escape(str(event.get("color", "")))
+            output.append(f'<li><span class="activity-swatch" data-color="{color}"></span><span class="activity-who"><b title="{handle}">{"region cleared" if clear else handle}</b>{f"<code>{fingerprint}</code>" if not clear else ""}</span><code class="activity-where">{where}</code><time>{"now"}</time></li>')
+        return "".join(output)
+    activity = rows()
     return (
-        '<main><article class="canvas-page"><h1>canvas</h1>'
-        '<p class="muted">a shared 64 × 64 pixel canvas</p>'
-        '<div class="canvas-frame"><img width="512" height="512" alt="" aria-hidden="true" decoding="async" '
-        'src="/api/canvas.png"><canvas width="512" height="512" role="img" aria-label="current canvas"></canvas></div>'
-        '<div class="canvas-controls"><button type="button">replay</button></div>'
-        '<p role="status" aria-live="polite"></p>'
-        '<section aria-labelledby="canvas-activity"><h2 id="canvas-activity">recent activity</h2>'
-        f'<ol class="canvas-activity">{activity}</ol></section></article>{site_footer("canvas")}</main>'
+        f'<main class="canvas-instrument" data-activity="closed"><a class="canvas-home" href="/">neenerweener</a>'
+        f'<div class="canvas-pill"><span class="canvas-live"><i></i> live · rev {revision:,}</span><span class="canvas-divider"></span>'
+        f'<button class="canvas-pill-action" type="button" aria-disabled="{str(empty).lower()}"><span class="play-icon"></span>replay</button><a class="canvas-pill-action" href="/api/canvas.png" download="neenerweener-canvas.png" aria-label="download png" aria-disabled="{str(empty).lower()}"><span class="download-icon"></span>png</a>'
+        '<span class="canvas-divider"></span><button class="canvas-pill-action" type="button" aria-expanded="false" aria-controls="canvas-activity" aria-label="show activity"><span class="activity-icon"></span> <span class="activity-label">activity</span></button></div>'
+        f'<div class="canvas-stage"><div class="canvas-frame"><img src="/api/canvas.png" width="512" height="512" alt="" aria-hidden="true" decoding="async"><canvas width="512" height="512" role="img" aria-label="current canvas"></canvas><span class="canvas-marker"></span></div>{"<span class=\"canvas-empty-label\">no pixels yet</span>" if empty else ""}<p class="canvas-status"><i></i>live · rev {revision:,}</p></div>'
+        '<aside id="canvas-activity" class="canvas-panel" aria-labelledby="canvas-activity-title" hidden><header><h2 id="canvas-activity-title">recent activity</h2><button type="button" aria-label="close activity">×</button></header><ol class="canvas-activity">' + activity + '</ol></aside>'
+        '<details class="canvas-nojs-activity"><summary>recent activity</summary><ol class="canvas-activity">' + activity + '</ol></details></main>'
     )
 
 
@@ -1753,7 +1757,7 @@ def canvas_page_data(request: Request) -> tuple[dict, dict, str, int]:
     except HTTPException:
         revision, pixels, events = 0, bytes([255] * (64 * 64)), []
     snapshot = snapshot_payload(revision, pixels)
-    return {"/api/canvas": snapshot, "/api/canvas/events": {"reset": False, "revision": revision, "events": events}}, {"title": "canvas", "description": "canvas"}, canvas_markup(events), 200
+    return {"/api/canvas": snapshot, "/api/canvas/events": {"reset": False, "revision": revision, "events": events}}, {"title": "canvas", "description": "canvas"}, canvas_markup(events, revision, all(pixel == 255 for pixel in pixels)), 200
 
 
 def _canvas_event_json(event: dict) -> dict:

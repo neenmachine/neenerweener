@@ -265,6 +265,9 @@ def test_every_server_footer_links_the_feed(site, case):
     if case["page"]["kind"] == "code":
         assert markup == ""  # React draws project pages, footer included.
         return
+    if case["path"] == "/canvas":
+        assert "<footer>" not in markup
+        return
     footer = re.search(r"<footer><a href=\"/\".*?</footer></main>$", markup)[0]
     assert footer.count(FEED_LINK) == 1
     current = re.findall(r'<a href="([^"]*)" aria-current="page">', footer)

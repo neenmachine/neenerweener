@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, expect, test, vi } from "vitest";
-import CanvasPage, { applyCanvasEvents, type CanvasSnapshot } from "./CanvasPage";
+import CanvasPage, { applyCanvasEvents, replayDelay, replayPositionToRevision, replayStep, type CanvasSnapshot } from "./CanvasPage";
 
 const snapshot: CanvasSnapshot = { width: 64, height: 64, palette: ["#000000", "#ffffff"], revision: 0, pixels: "" };
 let root: Root | undefined;
@@ -12,6 +12,17 @@ afterEach(() => {
   root = undefined;
   vi.unstubAllGlobals();
   vi.useRealTimers();
+});
+
+test("replay position seeks revisions, steps within bounds, and scales speed", () => {
+  const history = [{ revision: 4, event_kind: "place" as const }, { revision: 9, event_kind: "place" as const }];
+  expect(replayPositionToRevision(history, 0)).toBe(0);
+  expect(replayPositionToRevision(history, 1)).toBe(4);
+  expect(replayPositionToRevision(history, 8)).toBe(9);
+  expect(replayStep(0, -1, 2)).toBe(0);
+  expect(replayStep(1, 1, 2)).toBe(2);
+  expect(replayStep(2, 1, 2)).toBe(2);
+  expect(replayDelay(4)).toBe(8.75);
 });
 
 test("canvas events apply placements and clear regions in order", () => {

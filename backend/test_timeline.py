@@ -204,7 +204,7 @@ def test_alembic_has_one_head():
 
     config = Config(str(Path(__file__).with_name('alembic.ini')))
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == ['007_media_sweep_claims']
+    assert script.get_heads() == ['008_agent_identity']
     assert script.get_revision('001_timeline').down_revision is None
     assert script.get_revision('002_admin_auth').down_revision == '001_timeline'
     assert script.get_revision('003_machine_auth').down_revision == '002_admin_auth'

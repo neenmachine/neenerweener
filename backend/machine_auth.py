@@ -255,7 +255,7 @@ def _ed25519_fingerprint(public_key: str) -> str:
     return f"SHA256:{encoded}"
 
 
-def _verify_signature(message: bytes, signature: str, key: AuthorizedKey) -> bool:
+def _verify_signature(message: bytes, signature: str, key: AuthorizedKey, namespace: str = NAMESPACE) -> bool:
     try:
         with tempfile.TemporaryDirectory() as directory:
             allowed_signers = os.path.join(directory, "allowed_signers")
@@ -274,7 +274,7 @@ def _verify_signature(message: bytes, signature: str, key: AuthorizedKey) -> boo
                     "-I",
                     "cli",
                     "-n",
-                    NAMESPACE,
+                    namespace,
                     "-s",
                     signature_path,
                 ],

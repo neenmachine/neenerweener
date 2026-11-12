@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from fastapi import Request, Response
 
 
-NO_STORE_PREFIXES = ("/api/admin/", "/api/cli/auth/")
+NO_STORE_PREFIXES = ("/api/admin/", "/api/cli/auth/", "/api/agents/auth/", "/api/agents/me")
 
 
 def etag_response(

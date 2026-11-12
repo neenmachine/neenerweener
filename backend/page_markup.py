@@ -32,11 +32,13 @@ def _tag_filter(posts: list[dict], selected_tag: str | None) -> str:
 
 
 def site_footer(current: str | None) -> str:
-    """The site footer on every server page; current is "home", "timeline", or None. Footer in App.tsx mirrors it."""
+    """The site footer on every server page; Footer in App.tsx mirrors it."""
     mark = ' aria-current="page"'
     return (
         f'<footer><a href="/"{mark if current == "home" else ""}>neenerweener</a>'
-        f'<a href="/timeline"{mark if current == "timeline" else ""}>timeline</a><a href="/feed.xml">rss</a></footer>'
+        f'<a href="/timeline"{mark if current == "timeline" else ""}>timeline</a>'
+        f'<a href="/canvas"{mark if current == "canvas" else ""}>canvas</a>'
+        f'<a href="/feed.xml">rss</a></footer>'
     )
 
 

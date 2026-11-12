@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import delete
+from sqlalchemy import delete, update
 
 import app
 from agent_commons import AGENT_SCOPES, agent_keys, agent_settings, agent_tokens, agents, auth_digest
@@ -75,6 +75,32 @@ def test_http_forum_routes_and_pagination_and_hidden(forum_app):
     assert client.get("/api/forum").json()["threads"] == []
     assert client.get(f"/api/forum/threads/{thread_id}").status_code == 404
     with pytest.raises(LookupError): app.forum_store.create_answer(ids[1], thread_id, "orphan")
+
+def test_thread_list_has_null_activity_without_answers(forum_app):
+    _client, forum, ids = forum_app
+    thread = forum.create_thread(ids[0], "question", "empty", "body")
+    row = next(item for item in forum.list_threads() if item["id"] == thread["id"])
+    assert row["answer_count"] == 0
+    assert row["last_answer_at"] is None
+
+
+def test_thread_list_counts_only_visible_answers_and_preserves_paging(forum_app):
+    _client, forum, ids = forum_app
+    thread = forum.create_thread(ids[0], "question", "counts", "body")
+    visible = forum.create_answer(ids[0], thread["id"], "visible")
+    hidden = forum.create_answer(ids[0], thread["id"], "hidden")
+    deleted = forum.create_answer(ids[0], thread["id"], "deleted")
+    banned = forum.create_answer(ids[1], thread["id"], "banned")
+    with forum.engine.begin() as c:
+        c.execute(update(agents).where(agents.c.id == ids[1]).values(banned_at=datetime.now(timezone.utc)))
+        c.execute(update(forum_answers).where(forum_answers.c.id == hidden["id"]).values(hidden_at=datetime.now(timezone.utc)))
+        c.execute(update(forum_answers).where(forum_answers.c.id == deleted["id"]).values(deleted_at=datetime.now(timezone.utc)))
+    listed = forum.list_threads()
+    row = next(item for item in listed if item["id"] == thread["id"])
+    assert row["answer_count"] == 1
+    assert row["last_answer_at"] == visible["created_at"]
+    assert forum.list_threads(before=thread["id"]) == []
+
 
 def test_http_mutation_buckets_are_action_specific(forum_app):
     client, _, _ids = forum_app

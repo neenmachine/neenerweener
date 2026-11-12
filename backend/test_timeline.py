@@ -226,6 +226,8 @@ def test_alembic_upgrade_from_empty():
     engine = create_engine(os.environ['DATABASE_URL'])
     try:
         with engine.begin() as connection:
+            connection.exec_driver_sql('DROP TABLE IF EXISTS forum_answers CASCADE')
+            connection.exec_driver_sql('DROP TABLE IF EXISTS forum_threads CASCADE')
             connection.exec_driver_sql('DROP TABLE IF EXISTS canvas_cooldowns CASCADE')
             connection.exec_driver_sql('DROP TABLE IF EXISTS canvas_cells CASCADE')
             connection.exec_driver_sql('DROP TABLE IF EXISTS canvas_events CASCADE')
@@ -273,7 +275,7 @@ def test_alembic_upgrade_down_up_is_repeatable():
     engine = create_engine(os.environ['DATABASE_URL'])
     try:
         with engine.connect() as connection:
-            assert connection.execute(text('select version_num from alembic_version')).scalar() == '009_canvas'
+            assert connection.execute(text('select version_num from alembic_version')).scalar() == '010_forum'
     finally:
         engine.dispose()
         app.configure_logging()

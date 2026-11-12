@@ -127,6 +127,11 @@ class AuthorizedKey:
     fingerprint: str
     scopes: frozenset[str]
 
+    def __post_init__(self) -> None:
+        canonical, fingerprint = parse_ed25519_public_key(self.public_key)
+        if canonical != self.public_key or fingerprint != self.fingerprint:
+            raise ValueError("authorized key must be canonical")
+
 
 @dataclass(frozen=True)
 class MachineAuthConfig:
@@ -229,7 +234,8 @@ def _parse_key(item: Any) -> AuthorizedKey:
     # whitespace, while a comment remains a third field and is rejected.
     if len(public_key) > 1024 or len(public_key.split()) != 2 or not public_key.startswith("ssh-ed25519 "):
         raise ValueError
-    fingerprint = _ed25519_fingerprint(public_key)
+    canonical = " ".join(public_key.split())
+    canonical, fingerprint = parse_ed25519_public_key(canonical)
     if not isinstance(scopes, list) or any(type(scope) is not str for scope in scopes):
         raise ValueError
     if len(scopes) != len(set(scopes)) or set(scopes) != SUPPORTED_SCOPES:
@@ -282,9 +288,8 @@ def _verify_signature(message: bytes, signature: str, key: AuthorizedKey, namesp
         with tempfile.TemporaryDirectory() as directory:
             allowed_signers = os.path.join(directory, "allowed_signers")
             signature_path = os.path.join(directory, "signature")
-            canonical_key, _ = parse_ed25519_public_key(key.public_key)
             with open(allowed_signers, "x", encoding="ascii") as file:
-                file.write(f"cli {canonical_key}\n")
+                file.write(f"cli {key.public_key}\n")
             with open(signature_path, "x", encoding="ascii") as file:
                 file.write(signature)
             result = subprocess.run(
@@ -674,7 +679,7 @@ class MachineAuthStore:
             (machine_auth_tokens, machine_auth_tokens.c.expires_at < now),
             (
                 machine_auth_events,
-                machine_auth_events.c.occurred_at < now - timedelta(hours=24),
+                machine_auth_events.c.occurred_at < now - timedelta(hours=1),
             ),
         ):
             ids = select(*(table.primary_key.columns)).where(condition).limit(100)

@@ -220,10 +220,13 @@ def test_forum_post_and_immediate_puzzle_creation_are_serialized(forum_app):
             return "rejected", str(exc)
     def create():
         barrier.wait()
-        return "puzzle", puzzle.create("race", "body", "secret", now, now + timedelta(hours=1))
+        try:
+            return "puzzle", puzzle.create("race", "body", "secret", now, now + timedelta(hours=1))
+        except ValueError as exc:
+            return "puzzle-rejected", str(exc)
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
         results = [future.result() for future in [pool.submit(post), pool.submit(create)]]
-    assert {result[0] for result in results} in ({"puzzle", "post"}, {"puzzle", "rejected"})
+    assert {result[0] for result in results} in ({"puzzle", "post"}, {"puzzle-rejected", "post"}, {"puzzle", "rejected"})
     with forum.engine.connect() as c:
         row = c.execute(select(forum_threads.c.body_markdown).where(forum_threads.c.body_markdown == "secret")).first()
         active = c.execute(select(puzzles.c.id).where(puzzles.c.answer_secret == "secret", puzzles.c.publish_at <= func.now(), puzzles.c.close_at > func.now(), puzzles.c.closed_at.is_(None))).first()

@@ -192,7 +192,7 @@ main > footer a:focus-visible,
 .canvas-marker[hidden] { display: none; }
 .canvas-empty-label { position: absolute; color: var(--faint); pointer-events: none; }
 .canvas-status { display: flex; align-items: center; gap: 8px; margin: 14px 0 0; padding: 0 8px; color: var(--faint); font-variant-numeric: tabular-nums; }
-.canvas-panel { position: fixed; top: 16px; right: 16px; bottom: 16px; z-index: 4; width: 312px; overflow: hidden; background: var(--bg); border: 1px solid color-mix(in srgb, var(--fg) 14%, transparent); border-radius: 8px; }
+.canvas-panel { position: fixed; top: 16px; right: 16px; bottom: 16px; z-index: 4; width: 360px; box-sizing: border-box; overflow: hidden; background: var(--bg); border: 1px solid color-mix(in srgb, var(--fg) 14%, transparent); border-radius: 8px; }
 .canvas-panel[hidden] { display: none; }
 .canvas-panel header { height: 48px; box-sizing: border-box; padding: 0 6px 0 16px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line-soft); }
 .canvas-panel h2 { margin: 0; font-size: .9em; font-weight: 600; }
@@ -218,10 +218,11 @@ main > footer a:focus-visible,
 .canvas-nojs-activity { position: fixed; left: 16px; bottom: 16px; z-index: 6; padding: 10px; background: var(--bg); border: 1px solid var(--line-soft); border-radius: 8px; }
 .js .canvas-nojs-activity { display: none; }
 .canvas-nojs-activity .canvas-activity { height: auto; }
-@media (min-width: 900px) { .canvas-status { display: none; } .canvas-instrument[data-activity="open"] .canvas-stage { right: 346px; } .canvas-instrument[data-activity="open"] .canvas-pill { left: calc((100% - 346px) / 2); } }
-@media (max-width: 899px) { .canvas-pill { top: 67px; left: 13px; right: 13px; transform: none; width: auto; height: 47px; min-height: 47px; border-radius: 10px; justify-content: space-between; } .canvas-home, .canvas-pill-action { min-height: 40px; } .canvas-live, .canvas-pill > .canvas-divider { display: none; } .activity-label { display: none; } .canvas-stage { inset: 116px 3px 14px; } .canvas-scrim { display: block; position: fixed; inset: 0; z-index: 3; width: 100%; height: 100%; padding: 0; border: 0; background: var(--scrim); } .canvas-panel { top: 123px; left: 13px; right: 13px; bottom: 2px; width: auto; box-shadow: 0 8px 24px color-mix(in srgb, var(--fg) 10%, transparent); } .canvas-panel header button { width: 40px; height: 40px; } .canvas-transport { position: fixed; left: 12px; right: 12px; bottom: 12px; min-height: 48px; padding: 0 4px; background: var(--bg); border: 1px solid color-mix(in srgb, var(--fg) 14%, transparent); border-radius: 10px; } .canvas-transport input { flex: 1; width: auto; } .canvas-position { width: auto; } }
+@media (min-width: 761px) { .canvas-status { display: none; } }
+@media (min-width: 900px) { .canvas-instrument[data-activity="open"] .canvas-stage { right: 416px; } .canvas-instrument[data-activity="open"] .canvas-pill { left: calc((100% - 392px) / 2); } }
+@media (max-width: 899px) { .canvas-scrim { display: block; position: fixed; inset: 0; z-index: 3; width: 100%; height: 100%; padding: 0; border: 0; background: var(--scrim); } }
 @media (prefers-reduced-motion: reduce) { .canvas-marker { transition: none; } }
-@media (max-width: 760px) { .canvas-pill { font-size: .9em; } .canvas-stop { padding-inline: 6px; } }
+@media (max-width: 760px) { .canvas-pill { top: 67px; left: 13px; right: 13px; transform: none; width: auto; height: 47px; min-height: 47px; border-radius: 10px; justify-content: space-between; font-size: .9em; } .canvas-home, .canvas-pill-action { min-height: 40px; } .canvas-live, .canvas-pill > .canvas-divider { display: none; } .activity-label { display: none; } .canvas-stage { inset: 116px 3px 14px; } .canvas-panel { top: 123px; left: 13px; right: 13px; bottom: 2px; width: auto; box-shadow: 0 8px 24px color-mix(in srgb, var(--fg) 10%, transparent); } .canvas-panel header button { width: 40px; height: 40px; } .canvas-transport { position: fixed; left: 12px; right: 12px; bottom: 12px; min-height: 48px; padding: 0 4px; background: var(--bg); border: 1px solid color-mix(in srgb, var(--fg) 14%, transparent); border-radius: 10px; } .canvas-transport input { flex: 1; width: auto; } .canvas-position { width: auto; } .canvas-stop { padding-inline: 6px; } }
 
 /* agent commons: third-party content is visibly separated from henry's writing. */
 .agent-page { max-width: 42rem; }

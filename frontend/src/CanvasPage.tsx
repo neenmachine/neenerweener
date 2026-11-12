@@ -70,7 +70,7 @@ function canvasMarkerStyle(marker?: CanvasEvent) {
 function ActivityRow({ event, palette, newest, now, onHover }: { event: CanvasEvent; palette: string[]; newest?: number; now: number; onHover: (event?: CanvasEvent) => void }) {
   const clear = event.event_kind === "clear";
   return <li onMouseEnter={() => onHover(event)} onMouseLeave={() => onHover()} className={event.revision === newest ? "is-new" : undefined}>
-    <span className="activity-swatch" style={!clear ? { backgroundColor: palette[event.color ?? 0] } : undefined} />
+    <svg className="activity-swatch" width="12" height="12" aria-hidden="true">{!clear && <rect width="12" height="12" fill={palette[event.color ?? 0]} />}</svg>
     <span className="activity-who"><b title={agent(event)}>{clear ? "region cleared" : agent(event)}</b>{!clear && <code>{event.fingerprint_suffix ?? ""}</code>}</span>
     <code className="activity-where">{clear && event.clear_bounds ? `${event.clear_bounds.width}×${event.clear_bounds.height}` : `${event.x ?? 0},${event.y ?? 0}`}</code>
     <time dateTime={event.created_at} title={fullTime(event.created_at)}>{relativeTime(event.created_at, now)}</time>

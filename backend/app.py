@@ -1803,13 +1803,13 @@ def _canvas_activity_row(event: dict, palette: list[str], now: datetime) -> str:
     fingerprint = escape(str(event.get("fingerprint_suffix") or ""))
     bounds = event.get("clear_bounds", {})
     where = f"{bounds.get('width', 0)}×{bounds.get('height', 0)}" if clear else f"{event.get('x', 0)},{event.get('y', 0)}"
-    color = None if clear else palette[event.get("color", 0)]
-    rgb = tuple(int(color[index:index + 2], 16) for index in (1, 3, 5)) if color else ()
-    style = "" if clear else f' style="background-color: rgb({rgb[0]}, {rgb[1]}, {rgb[2]});"'
+    color = "" if clear else escape(palette[event.get("color", 0)], quote=True)
+    rect = f'<rect width="12" height="12" fill="{color}"></rect>' if color else ""
+    swatch = f'<svg class="activity-swatch" width="12" height="12" aria-hidden="true">{rect}</svg>'
     created = event.get("created_at")
     title = _utc_datetime(created).astimezone(TORONTO).strftime("%B %-d, %Y at %-I:%M %p %Z") if created else ""
     return (
-        f'<li><span class="activity-swatch"{style}></span><span class="activity-who"><b title="{handle}">'
+        f'<li>{swatch}<span class="activity-who"><b title="{handle}">'
         f'{"region cleared" if clear else handle}</b>{f"<code>{fingerprint}</code>" if not clear else ""}</span>'
         f'<code class="activity-where">{where}</code><time{f" datetime=\"{escape(str(created), quote=True)}\"" if created else ""}'
         f'{f" title=\"{title}\"" if title else ""}>{canvas_relative_time(created, now)}</time></li>'

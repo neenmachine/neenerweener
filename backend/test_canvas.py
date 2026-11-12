@@ -1,12 +1,13 @@
 import concurrent.futures
 import os
+import threading
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
-from sqlalchemy import delete, insert
+from sqlalchemy import delete, event, insert
 
 import app
 from agent_commons import AgentPrincipal, agent_keys, agents
@@ -109,13 +110,90 @@ def test_concurrent_different_agents_have_monotonic_revisions_and_matching_event
 
 def test_clear_and_placement_share_serial_event_and_cell_order(canvas_db):
     store, principals = canvas_db
-    principal = principals[0]
-    store.place(principal, 5, 5, 3)
-    revision = store.clear(0, 0, 10, 10)
+    place_event = threading.Event()
+    clear_deleted = threading.Event()
+    release_place = threading.Event()
+    release_clear = threading.Event()
+
+    def after_execute(_conn, _cursor, statement, parameters, _context, _executemany):
+        sql = statement.lower()
+        kind = parameters.get("event_kind") if isinstance(parameters, dict) else None
+        if "insert into canvas_events" in sql and kind == "place":
+            place_event.set()
+            assert release_place.wait(10)
+        elif "delete from canvas_cells" in sql:
+            clear_deleted.set()
+            assert release_clear.wait(10)
+
+    event.listen(store.engine, "after_cursor_execute", after_execute)
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            placement = pool.submit(store.place, principals[0], 5, 5, 3)
+            assert place_event.wait(10)
+            clearing = pool.submit(store.clear, 0, 0, 10, 10)
+            # old code reaches DELETE while placement is paused; the fixed store waits on its canvas lock.
+            clear_overlapped = clear_deleted.wait(1)
+            release_place.set()
+            release_clear.set()
+            placement.result(timeout=10)
+            clear_revision = clearing.result(timeout=10)
+    finally:
+        release_place.set()
+        release_clear.set()
+        event.remove(store.engine, "after_cursor_execute", after_execute)
     current_revision, pixels = store.snapshot()
-    assert current_revision == revision
+    assert not clear_overlapped
+    assert current_revision == clear_revision
     assert pixels[5 * WIDTH + 5] == EMPTY
-    assert [event["event_kind"] for event in store.events(0)["events"]] == ["place", "clear"]
+    assert [item["event_kind"] for item in store.events(0)["events"]] == ["place", "clear"]
+
+
+def test_snapshot_does_not_mix_revision_with_a_concurrent_write(canvas_db):
+    store, principals = canvas_db
+    initial_revision = store.place(principals[0], 1, 1, 1)["revision"]
+    latest_seen = threading.Event()
+    writer_event = threading.Event()
+    cells_seen = threading.Event()
+    release_latest = threading.Event()
+    release_writer = threading.Event()
+    release_cells = threading.Event()
+
+    def after_execute(_conn, _cursor, statement, parameters, _context, _executemany):
+        sql = statement.lower()
+        kind = parameters.get("event_kind") if isinstance(parameters, dict) else None
+        if "select canvas_events.revision" in sql:
+            latest_seen.set()
+            assert release_latest.wait(10)
+        elif "insert into canvas_events" in sql and kind == "place":
+            writer_event.set()
+            assert release_writer.wait(10)
+        elif "select canvas_cells.x" in sql:
+            cells_seen.set()
+            assert release_cells.wait(10)
+
+    event.listen(store.engine, "after_cursor_execute", after_execute)
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            snapshot = pool.submit(store.snapshot)
+            assert latest_seen.wait(10)
+            writer = pool.submit(store.place, principals[1], 2, 2, 2)
+            release_latest.set()
+            # The old store lets the writer commit before the second read. The fixed store holds its lock.
+            assert cells_seen.wait(10)
+            writer_overlapped = writer_event.wait(1)
+            release_writer.set()
+            release_cells.set()
+            revision, pixels = snapshot.result(timeout=10)
+            writer.result(timeout=10)
+    finally:
+        release_latest.set()
+        release_writer.set()
+        release_cells.set()
+        event.remove(store.engine, "after_cursor_execute", after_execute)
+    assert revision == initial_revision
+    assert pixels[1 * WIDTH + 1] == 1
+    assert pixels[2 * WIDTH + 2] == EMPTY
+    assert not writer_overlapped
 
 
 def test_event_gap_resets_and_clear_bounds_are_applied(canvas_db):
@@ -126,21 +204,6 @@ def test_event_gap_resets_and_clear_bounds_are_applied(canvas_db):
     assert store.snapshot()[1][2 * WIDTH + 1] == EMPTY
     assert store.events(0)["reset"] is False
     assert store.events(-10001)["reset"] is True
-
-
-def test_canvas_pixel_maps_shared_throttle_to_retryable_http(monkeypatch):
-    class ThrottledStore:
-        async def authorize_mutation(self, token, scope, client_ip):
-            raise Throttled(9)
-
-        def close(self):
-            pass
-
-    monkeypatch.setattr(app, "agent_commons_store", ThrottledStore())
-    with TestClient(app.app) as client:
-        response = client.post("/api/canvas/pixels", headers={"Authorization": "Bearer token"}, json={"x": 1, "y": 1, "color": 1})
-    assert response.status_code == 429
-    assert response.headers["retry-after"] == "9"
 
 
 class _CanvasAgentStore:
@@ -206,6 +269,25 @@ def test_canvas_http_cooldown_and_shared_denials_are_retryable_or_forbidden(canv
         cooldown = client.post("/api/canvas/pixels", headers={"Authorization": "Bearer token"}, json={"x": 2, "y": 2, "color": 1})
         assert cooldown.status_code == 429
         assert int(cooldown.headers["retry-after"]) > 0
+
+
+def test_canvas_cooldown_retry_after_rounds_up(monkeypatch, canvas_db):
+    store, principals = canvas_db
+    import canvas
+
+    class ControlledDateTime(datetime):
+        current = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+        @classmethod
+        def now(cls, tz=None):
+            return cls.current
+
+    monkeypatch.setattr(canvas, "datetime", ControlledDateTime)
+    store.place(principals[0], 1, 1, 1)
+    ControlledDateTime.current += timedelta(milliseconds=1)
+    with pytest.raises(CanvasCooldown) as error:
+        store.place(principals[0], 2, 2, 1)
+    assert error.value.retry_after == 30
 
 
 def test_canvas_history_exposes_public_identity_not_internal_agent_id(canvas_db):

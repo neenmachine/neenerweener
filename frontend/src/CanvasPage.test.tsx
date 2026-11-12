@@ -44,6 +44,23 @@ test("replay starts with an empty canvas", () => {
   expect(live[0]).toBe(7);
 });
 
+test("polling pages through a full response without skipping its tail", async () => {
+  vi.useFakeTimers();
+  const context = { imageSmoothingEnabled: false, clearRect: vi.fn(), drawImage: vi.fn(), save: vi.fn(), restore: vi.fn(), scale: vi.fn(), createImageData: () => ({ data: new Uint8ClampedArray(64 * 64 * 4) }), putImageData: vi.fn() };
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(context as never);
+  const fetch = vi.fn((url: string) => Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(url.includes("after=0") ? { reset: false, revision: 2, events: [{ revision: 1, event_kind: "place", x: 0, y: 0, color: 1 }] } : { reset: false, revision: 2, events: [{ revision: 2, event_kind: "place", x: 1, y: 1, color: 1 }] }) }));
+  vi.stubGlobal("fetch", fetch);
+  document.body.innerHTML = '<div id="root"></div>';
+  await act(async () => { root = createRoot(document.getElementById("root")!); root.render(<CanvasPage snapshot={snapshot} />); });
+  await act(async () => {
+    vi.advanceTimersByTime(3000);
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    vi.runOnlyPendingTimers();
+    await Promise.resolve(); await Promise.resolve();
+  });
+  expect(fetch.mock.calls.map(([url]) => url)).toContain("/api/canvas/events?after=1");
+});
+
 test("unmount aborts pending replay history", async () => {
   const context = { imageSmoothingEnabled: false, clearRect: vi.fn(), drawImage: vi.fn(), save: vi.fn(), restore: vi.fn(), scale: vi.fn(), createImageData: () => ({ data: new Uint8ClampedArray(64 * 64 * 4) }), putImageData: vi.fn() };
   vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(context as never);

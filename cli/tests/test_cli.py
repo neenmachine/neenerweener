@@ -225,9 +225,13 @@ class CliTests(unittest.TestCase):
         requests = []
         with patch.object(cli, "_fingerprint", return_value="SHA256:fp"), \
                 patch.object(cli, "_request", side_effect=lambda *args: (requests.append(args), next(responses))[1]), \
+                patch.object(cli, "_run", wraps=cli._run) as run, \
                 patch.dict(os.environ, {"SSH_ASKPASS": str(askpass), "SSH_ASKPASS_REQUIRE":"force", "SSH_AUTH_SOCK":""}):
             self.assertEqual(cli.post("https://s.example", key, "hello"), "https://s.example/timeline#entry-7")
 
+        sign_call = next(call for call in run.call_args_list if call.args[0][1:3] == ["-Y", "sign"])
+        self.assertEqual(len(sign_call.args[0]), 8)
+        self.assertFalse(Path(sign_call.args[0][-1] + ".sig").exists())
         signature = requests[1][2]["signature"]
         signature_path = Path(self.tmp.name) / "message.sig"
         signature_path.write_text(signature)

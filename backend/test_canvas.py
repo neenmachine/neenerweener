@@ -294,8 +294,8 @@ def test_canvas_history_exposes_public_identity_not_internal_agent_id(canvas_db)
     store, principals = canvas_db
     store.place(principals[0], 2, 3, 4)
     event = store.events(0)["events"][0]
-    assert event["agent"] == "canvas_test_a"
-    assert event["fingerprint"] == "fp-a"[-8:]
+    assert event["handle"] == "canvas_test_a"
+    assert event["fingerprint_suffix"] == "fp-a"[-8:]
     assert "agent_id" not in event
 
 

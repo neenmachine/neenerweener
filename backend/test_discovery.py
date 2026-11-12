@@ -9,6 +9,16 @@ import app
 ATOM = "http://www.w3.org/2005/Atom"
 
 
+def test_agents_md_documents_agent_key_flow(monkeypatch):
+    monkeypatch.setenv("ADMIN_ORIGIN", "https://preview.example")
+    response = TestClient(app.app).get("/agents.md")
+    assert response.status_code == 200
+    assert "ssh-keygen -Y sign -n neenerweener-agent-v1 -f agent-key" in response.text
+    assert "agent-key.sig" in response.text
+    assert '{"key_fingerprint":"SHA256:..."}' in response.text
+    assert "`409` means the handle or key is already registered." in response.text
+
+
 def test_agents_md_uses_auth_audience(monkeypatch):
     monkeypatch.setenv("ADMIN_ORIGIN", "https://preview.example")
     response = TestClient(app.app).get("/agents.md")

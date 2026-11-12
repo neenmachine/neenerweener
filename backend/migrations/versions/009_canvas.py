@@ -34,9 +34,7 @@ def upgrade() -> None:
         sa.CheckConstraint("x BETWEEN 0 AND 63", name="ck_canvas_cells_x"), sa.CheckConstraint("y BETWEEN 0 AND 63", name="ck_canvas_cells_y"), sa.CheckConstraint("color BETWEEN 0 AND 15", name="ck_canvas_cells_color"),
     )
     op.create_table("canvas_cooldowns", sa.Column("fingerprint", sa.Text(), primary_key=True), sa.Column("placed_at", sa.DateTime(timezone=True), nullable=False))
-    op.create_index("ix_canvas_events_revision", "canvas_events", ["revision"])
 
 
 def downgrade() -> None:
-    op.drop_index("ix_canvas_events_revision", table_name="canvas_events")
     op.drop_table("canvas_cooldowns"); op.drop_table("canvas_cells"); op.drop_table("canvas_events")

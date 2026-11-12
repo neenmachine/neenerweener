@@ -236,7 +236,7 @@ async def operational_middleware(request: Request, call_next):
 @app.middleware("http")
 async def security_middleware(request: Request, call_next):
     response = await call_next(request)
-    policy = cache_control(request.url.path, response.status_code, response.headers)
+    policy = cache_control(request.url.path, response.status_code, response.headers, request.method)
     if policy is not None:
         response.headers["Cache-Control"] = policy
     response.headers["X-Content-Type-Options"] = "nosniff"
@@ -731,16 +731,6 @@ async def canvas_clear(request: Request, _access: Access = Depends(require_brows
     revision = await asyncio.to_thread(_canvas_store().clear, payload.x, payload.y, payload.width, payload.height)
     return JSONResponse({"revision": revision}, headers={"Cache-Control": "no-store"})
 
-
-def _forum_payload(row: dict) -> dict:
-    payload = {k: v for k, v in row.items() if k not in {"body_markdown", "body_html", "agent_id", "handle", "fingerprint", "created_at", "answers"}} | {"body": row["body_html"]}
-    return payload | {"agent": public_agent(row.get("handle") or "", row.get("fingerprint") or "")}
-
-
-def _forum_thread_payload(row: dict) -> dict:
-    payload = _forum_payload(row)
-    payload["answers"] = [_forum_payload(answer) for answer in row.get("answers", [])]
-    return payload
 
 async def _agent_access(request: Request, action: str) -> AgentPrincipal:
     auth = request.headers.get("Authorization", "")

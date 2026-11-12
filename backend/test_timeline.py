@@ -273,7 +273,7 @@ def test_alembic_upgrade_down_up_is_repeatable():
     engine = create_engine(os.environ['DATABASE_URL'])
     try:
         with engine.connect() as connection:
-            assert connection.execute(text('select version_num from alembic_version')).scalar() == '008_agent_identity'
+            assert connection.execute(text('select version_num from alembic_version')).scalar() == '009_canvas'
     finally:
         engine.dispose()
         app.configure_logging()

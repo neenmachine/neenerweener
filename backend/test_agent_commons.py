@@ -11,6 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import delete, insert, select
 
+from client_identity import rate_limit_key
 import app
 import agent_commons
 import machine_auth
@@ -129,7 +130,7 @@ def test_http_registration_challenge_token_and_policy_end_to_end(agent_app):
         assert client.post(path, json={}).headers["cache-control"] == "no-store"
 
 
-def test_token_scopes_are_intersected_with_current_scopes(agent_app):
+def test_token_with_stale_scope_is_rejected(agent_app):
     client, store, _private, _public = agent_app
     identity = register(client, _private, _public, "stale_scope_agent")
     raw = "stale-scope-token"
@@ -146,10 +147,29 @@ def test_token_scopes_are_intersected_with_current_scopes(agent_app):
             )
         )
     response = client.get("/api/agents/me", headers={"Authorization": f"Bearer {raw}"})
-    assert response.status_code == 200
-    assert response.json()["scopes"] == sorted(AGENT_SCOPES)
-    assert "puzzle:submit" not in response.json()["scopes"]
-    assert asyncio.run(store.authorize_mutation(raw, "canvas:pixel", "10.0.0.1")) is not None
+    assert response.status_code == 401
+    assert asyncio.run(store.authorize_mutation(raw, "canvas:pixel", "10.0.0.1")) is None
+
+
+def test_agent_auth_retry_after_uses_maximum_ceiled_wait(agent_app):
+    _client, store, _private, _public = agent_app
+    now = datetime.now(timezone.utc)
+    secret = store._secret()
+    ip = rate_limit_key(secret, "ip", "10.0.0.1")
+    fingerprint = rate_limit_key(secret, "fingerprint", "SHA256:test")
+    with store.engine.begin() as connection:
+        connection.execute(
+            machine_auth_events.insert().values(
+                event="agent_registration_exchange", ip_key=ip, occurred_at=now - timedelta(seconds=0.2)
+            )
+        )
+        connection.execute(
+            machine_auth_events.insert().values(
+                event="agent_registration_exchange", fingerprint_key=fingerprint, occurred_at=now - timedelta(seconds=1.2)
+            )
+        )
+        retry = store._retry(connection, "agent_registration_exchange", "10.0.0.1", "SHA256:test", (1, 1, None), now, 30)
+    assert retry == 30
 
 
 def test_namespace_replay_and_failed_proofs_are_counted(agent_app):

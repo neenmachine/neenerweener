@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import asyncio
-import math
 import os
 import re
 import secrets
@@ -18,7 +17,7 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.engine import Engine
 
 from client_identity import rate_limit_key
-from machine_auth import AGENT_EVENT_PREFIX, AuthorizedKey, InvalidProof, Throttled, auth_digest, auth_message, machine_auth_events, parse_agent_ed25519_public_key, verify_auth_signature
+from machine_auth import AGENT_EVENT_PREFIX, AuthorizedKey, InvalidProof, Throttled, auth_digest, auth_message, machine_auth_events, parse_agent_ed25519_public_key, retry_after_seconds, verify_auth_signature
 from timeline import database_engine, metadata
 
 AGENT_NAMESPACE = "neenerweener-agent-v1"
@@ -98,13 +97,15 @@ class AgentCommonsStore:
         if secret is None: return 1
         values = [("ip_key", rate_limit_key(secret, "ip", ip) if ip else None, limits[0]), ("fingerprint_key", rate_limit_key(secret, "fingerprint", fingerprint) if fingerprint else None, limits[1]), (None, None, limits[2])]
         cutoff = now - timedelta(seconds=window)
+        retry_after = 0
         for column, value, limit in values:
             if limit is None or (column and value is None): continue
             q = select(text("occurred_at")).select_from(text("machine_auth_events")).where(text("event = :event AND occurred_at > :cutoff")).params(event=event, cutoff=cutoff)
             if column: q = q.where(text(f"{column} = :value")).params(value=value)
             rows = c.execute(q.order_by(text("occurred_at DESC")).limit(limit)).scalars().all()
-            if len(rows) >= limit: return max(1, int((rows[-1] + timedelta(seconds=window) - now).total_seconds()))
-        return None
+            if len(rows) >= limit:
+                retry_after = max(retry_after, retry_after_seconds(rows[-1] + timedelta(seconds=window) - now))
+        return retry_after or None
 
     def _event(self, c, event, ip, fingerprint):
         secret = self._secret()
@@ -197,7 +198,8 @@ class AgentCommonsStore:
         with self.engine.connect() as c:
             row = c.execute(select(agent_tokens, agents.c.handle, agents.c.banned_at, agent_keys.c.revoked_at.label("key_revoked_at")).join(agents, agents.c.id == agent_tokens.c.agent_id).join(agent_keys, agent_keys.c.agent_id == agents.c.id).where(agent_tokens.c.token_digest == auth_digest(token))).mappings().one_or_none()
         if not row or row["expires_at"] <= now or row["revoked_at"] is not None or row["banned_at"] is not None or row["key_revoked_at"] is not None: return None
-        scopes = frozenset(row["scopes"]) & AGENT_SCOPES
+        scopes = frozenset(row["scopes"])
+        if scopes != AGENT_SCOPES: return None
         if required and required not in scopes: return None
         return AgentPrincipal(row["agent_id"], row["handle"], row["fingerprint"], scopes)
 
@@ -223,7 +225,7 @@ class AgentCommonsStore:
                         query = query.where(text(f"{column} = :key")).params(key=key)
                     rows = c.execute(query.order_by(text("occurred_at DESC")).limit(limit)).scalars().all()
                     if len(rows) >= limit:
-                        retry_after = max(retry_after, max(1, math.ceil((rows[-1] + timedelta(seconds=window) - now).total_seconds())))
+                        retry_after = max(retry_after, retry_after_seconds(rows[-1] + timedelta(seconds=window) - now))
             if retry_after:
                 raise Throttled(retry_after)
             self._event(c, event, client_ip, principal.fingerprint)

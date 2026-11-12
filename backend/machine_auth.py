@@ -45,6 +45,10 @@ from timeline import database_engine, metadata
 NAMESPACE = "neenerweener.ca/cli-auth/v1"
 AGENT_EVENT_PREFIX = "agent_"
 SUPPORTED_SCOPES = frozenset({"timeline:create", "timeline:read"})
+
+
+def retry_after_seconds(remaining: timedelta | float) -> int:
+    return max(1, math.ceil(remaining.total_seconds() if isinstance(remaining, timedelta) else remaining))
 CHALLENGE_SECONDS = 300
 TOKEN_SECONDS = 600
 RATE_WINDOW_MINUTES = 15
@@ -667,12 +671,7 @@ class MachineAuthStore:
                 relevant = max(relevant, oldest) if relevant else oldest
         if relevant is None:
             return None
-        return max(
-            1,
-            math.ceil(
-                (relevant + timedelta(minutes=window_minutes) - now).total_seconds()
-            ),
-        )
+        return retry_after_seconds(relevant + timedelta(minutes=window_minutes) - now)
 
     @staticmethod
     def _cleanup(connection, now: datetime) -> None:

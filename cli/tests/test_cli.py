@@ -3,10 +3,14 @@ import contextlib
 import io
 import json
 import os
+import pty
 import shutil
+import select
 import socketserver
+import sys
 import subprocess
 import tempfile
+import time
 import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -195,17 +199,70 @@ class CliTests(unittest.TestCase):
         calls=[]
         responses = iter([Response({"challenge_id":"123e4567-e89b-12d3-a456-426614174000", "message":"line\nfinal\n", "namespace":cli.NAMESPACE, "expires_at":"2099-01-01T00:00:00Z"}), Response({"access_token":"tok-123", "token_type":"Bearer", "expires_in":600, "scopes":["timeline:create", "timeline:read"]}), Response({"id":7})])
         def open_(request, timeout): calls.append(request); return next(responses)
-        def run(args, stdin=None):
+        def run(args, stdin=None, **kwargs):
             if args[1:3] == ["-lf", str(self.key)]: return subprocess.CompletedProcess(args, 0, b"256 SHA256:fp comment\n", b"")
-            self.assertEqual(args, ["ssh-keygen", "-Y", "sign", "-n", cli.NAMESPACE, "-f", str(self.key)])
-            self.assertEqual(stdin, b"line\nfinal\n")
-            return subprocess.CompletedProcess(args, 0, signature_bytes(), b"")
+            self.assertEqual(args[:7], ["ssh-keygen", "-Y", "sign", "-n", cli.NAMESPACE, "-f", str(self.key)])
+            self.assertIsNone(stdin)
+            Path(args[7] + ".sig").write_bytes(signature_bytes())
+            return subprocess.CompletedProcess(args, 0, b"", b"")
         with patch.object(cli.OPENER, "open", side_effect=open_), patch.object(cli, "_run", side_effect=run):
             self.assertEqual(cli.post("https://s.example", self.key, "hello"), "https://s.example/timeline#entry-7")
         self.assertEqual(json.loads(calls[0].data), {"key_fingerprint":"SHA256:fp"})
         self.assertEqual(calls[0].full_url, "https://s.example/api/cli/auth/challenge")
         self.assertEqual(calls[2].get_header("Authorization"), "Bearer tok-123")
         self.assertEqual(json.loads(calls[2].data), {"body_markdown":"hello"})
+
+    @unittest.skipUnless(hasattr(os, "fork") and hasattr(pty, "fork"), "pty unavailable")
+    def test_tweet_signs_passphrase_key_without_agent_and_verifies_signature(self):
+        key = Path(self.tmp.name) / "signing-key"
+        subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "test-passphrase", "-f", str(key)], check=True, capture_output=True)
+        message = b"line\nfinal\n"
+        message_path = Path(self.tmp.name) / "message"
+        message_path.write_bytes(message)
+        signature_path = message_path.with_name("message.sig")
+        try:
+            with patch.dict(os.environ):
+                for name in ("SSH_AUTH_SOCK", "SSH_ASKPASS", "SSH_ASKPASS_REQUIRE", "DISPLAY"):
+                    os.environ.pop(name, None)
+                pid, fd = pty.fork()
+        except OSError as error:
+            self.skipTest(f"pty unavailable: {error}")
+        if pid == 0:
+            os.umask(0o077)
+            result = cli._run(["ssh-keygen", "-Y", "sign", "-n", cli.NAMESPACE, "-f", str(key), str(message_path)])
+            os._exit(result.returncode)
+        output = bytearray()
+        status = None
+        passphrase_sent = False
+        deadline = time.monotonic() + 20
+        try:
+            while time.monotonic() < deadline:
+                ready, _, _ = select.select([fd], [], [], min(0.2, deadline - time.monotonic()))
+                if ready:
+                    try:
+                        output.extend(os.read(fd, 65_536))
+                    except OSError:
+                        pass
+                if not passphrase_sent and b"passphrase" in output.lower():
+                    os.write(fd, b"test-passphrase\n")
+                    passphrase_sent = True
+                waited, status = os.waitpid(pid, os.WNOHANG)
+                if waited:
+                    break
+            else:
+                os.kill(pid, 9)
+                os.waitpid(pid, 0)
+                self.fail("ssh-keygen did not finish before the 20 second deadline")
+        finally:
+            os.close(fd)
+        self.assertTrue(passphrase_sent, output.decode(errors="replace"))
+        self.assertEqual(os.waitstatus_to_exitcode(status), 0, output.decode(errors="replace"))
+        self.assertTrue(signature_path.exists())
+        self.assertEqual(signature_path.stat().st_mode & 0o777, 0o600)
+        allowed = Path(self.tmp.name) / "allowed-signers"
+        allowed.write_text("test " + key.with_suffix(".pub").read_text())
+        verified = subprocess.run(["ssh-keygen", "-Y", "verify", "-f", str(allowed), "-I", "test", "-n", cli.NAMESPACE, "-s", str(signature_path)], input=message, capture_output=True, check=False)
+        self.assertEqual(verified.returncode, 0, verified.stderr.decode())
 
     def test_tweet_normalizes_signer_failures_to_exact_safe_error(self):
         challenge = {

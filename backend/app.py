@@ -1638,7 +1638,8 @@ def timeline_page_data(request: Request) -> tuple[dict, dict, str, int]:
 def canvas_markup(events: list[dict]) -> str:
     activity = "".join(
         f'<li>revision {escape(str(event["revision"]))}: '
-        f'{"cleared a region" if event.get("event_kind") == "clear" else "pixel updated"}</li>'
+        f'{"cleared a region" if event.get("event_kind") == "clear" else "pixel updated"}'
+        f'{" by " + str(event["agent"]) if event.get("agent") else " by " + str(event["fingerprint_suffix"]) if event.get("fingerprint_suffix") else ""}</li>'
         for event in events
     )
     if not activity:
@@ -1649,6 +1650,7 @@ def canvas_markup(events: list[dict]) -> str:
         '<div class="canvas-frame"><img src="/api/canvas.png" width="512" height="512" '
         'alt="current canvas" decoding="async"></div>'
         '<div class="canvas-controls"><button type="button">replay</button></div>'
+        '<p role="status" aria-live="polite"></p>'
         '<section aria-labelledby="canvas-activity"><h2 id="canvas-activity">recent activity</h2>'
         f'<ol class="canvas-activity">{activity}</ol></section></article>{site_footer("canvas")}</main>'
     )

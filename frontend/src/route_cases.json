@@ -19,8 +19,8 @@
        "z",
        "ä",
        "a&<\"",
-       "\ue000",
-       "\ud800\udc00"
+       "",
+       "𐀀"
       ],
       "draft": false
      }
@@ -29,7 +29,7 @@
    "h1": [
     "neenerweener"
    ],
-   "markup": "<main><h1 class=\"sr-only\">neenerweener</h1><nav class=\"tag-filter\" aria-label=\"tags\"><a href=\"/\" aria-current=\"page\">all</a><a href=\"/?tag=a%26%3C%22\">#a&amp;&lt;\"<span class=\"muted\"> 1</span></a><a href=\"/?tag=z\">#z<span class=\"muted\"> 1</span></a><a href=\"/?tag=%C3%A4\">#ä<span class=\"muted\"> 1</span></a><a href=\"/?tag=%F0%90%80%80\">#\ud800\udc00<span class=\"muted\"> 1</span></a><a href=\"/?tag=%EE%80%80\">#\ue000<span class=\"muted\"> 1</span></a></nav><ul class=\"posts\"><li><div class=\"post-info\"><a href=\"/posts/hello\">hello</a><span class=\"tags\"><a href=\"/?tag=z\">#z</a><a href=\"/?tag=%C3%A4\">#ä</a><a href=\"/?tag=a%26%3C%22\">#a&amp;&lt;\"</a><a href=\"/?tag=%EE%80%80\">#\ue000</a><a href=\"/?tag=%F0%90%80%80\">#\ud800\udc00</a></span></div></li></ul><footer><a href=\"/\" aria-current=\"page\">neenerweener</a><a href=\"/timeline\">timeline</a><a href=\"/canvas\">canvas</a><a href=\"/feed.xml\">rss</a></footer></main>"
+   "markup": "<main><h1 class=\"sr-only\">neenerweener</h1><nav class=\"tag-filter\" aria-label=\"tags\"><a href=\"/\" aria-current=\"page\">all</a><a href=\"/?tag=a%26%3C%22\">#a&amp;&lt;\"<span class=\"muted\"> 1</span></a><a href=\"/?tag=z\">#z<span class=\"muted\"> 1</span></a><a href=\"/?tag=%C3%A4\">#ä<span class=\"muted\"> 1</span></a><a href=\"/?tag=%F0%90%80%80\">#𐀀<span class=\"muted\"> 1</span></a><a href=\"/?tag=%EE%80%80\">#<span class=\"muted\"> 1</span></a></nav><ul class=\"posts\"><li><div class=\"post-info\"><a href=\"/posts/hello\">hello</a><span class=\"tags\"><a href=\"/?tag=z\">#z</a><a href=\"/?tag=%C3%A4\">#ä</a><a href=\"/?tag=a%26%3C%22\">#a&amp;&lt;\"</a><a href=\"/?tag=%EE%80%80\">#</a><a href=\"/?tag=%F0%90%80%80\">#𐀀</a></span></div></li></ul><footer><a href=\"/\" aria-current=\"page\">neenerweener</a><a href=\"/timeline\">timeline</a><a href=\"/canvas\">canvas</a><a href=\"/feed.xml\">rss</a></footer></main>"
   },
   {
    "path": "/?tag=a%26%3C%22",
@@ -49,8 +49,8 @@
        "z",
        "ä",
        "a&<\"",
-       "\ue000",
-       "\ud800\udc00"
+       "",
+       "𐀀"
       ],
       "draft": false
      }
@@ -59,7 +59,7 @@
    "h1": [
     "neenerweener"
    ],
-   "markup": "<main><h1 class=\"sr-only\">neenerweener</h1><nav class=\"tag-filter\" aria-label=\"tags\"><a href=\"/\">all</a><a href=\"/?tag=a%26%3C%22\" aria-current=\"page\">#a&amp;&lt;\"<span class=\"muted\"> 1</span></a><a href=\"/?tag=z\">#z<span class=\"muted\"> 1</span></a><a href=\"/?tag=%C3%A4\">#ä<span class=\"muted\"> 1</span></a><a href=\"/?tag=%F0%90%80%80\">#\ud800\udc00<span class=\"muted\"> 1</span></a><a href=\"/?tag=%EE%80%80\">#\ue000<span class=\"muted\"> 1</span></a></nav><ul class=\"posts\"><li><div class=\"post-info\"><a href=\"/posts/hello\">hello</a><span class=\"tags\"><a href=\"/?tag=z\">#z</a><a href=\"/?tag=%C3%A4\">#ä</a><a href=\"/?tag=a%26%3C%22\">#a&amp;&lt;\"</a><a href=\"/?tag=%EE%80%80\">#\ue000</a><a href=\"/?tag=%F0%90%80%80\">#\ud800\udc00</a></span></div></li></ul><footer><a href=\"/\">neenerweener</a><a href=\"/timeline\">timeline</a><a href=\"/canvas\">canvas</a><a href=\"/feed.xml\">rss</a></footer></main>"
+   "markup": "<main><h1 class=\"sr-only\">neenerweener</h1><nav class=\"tag-filter\" aria-label=\"tags\"><a href=\"/\">all</a><a href=\"/?tag=a%26%3C%22\" aria-current=\"page\">#a&amp;&lt;\"<span class=\"muted\"> 1</span></a><a href=\"/?tag=z\">#z<span class=\"muted\"> 1</span></a><a href=\"/?tag=%C3%A4\">#ä<span class=\"muted\"> 1</span></a><a href=\"/?tag=%F0%90%80%80\">#𐀀<span class=\"muted\"> 1</span></a><a href=\"/?tag=%EE%80%80\">#<span class=\"muted\"> 1</span></a></nav><ul class=\"posts\"><li><div class=\"post-info\"><a href=\"/posts/hello\">hello</a><span class=\"tags\"><a href=\"/?tag=z\">#z</a><a href=\"/?tag=%C3%A4\">#ä</a><a href=\"/?tag=a%26%3C%22\">#a&amp;&lt;\"</a><a href=\"/?tag=%EE%80%80\">#</a><a href=\"/?tag=%F0%90%80%80\">#𐀀</a></span></div></li></ul><footer><a href=\"/\">neenerweener</a><a href=\"/timeline\">timeline</a><a href=\"/canvas\">canvas</a><a href=\"/feed.xml\">rss</a></footer></main>"
   },
   {
    "path": "/timeline",
@@ -209,13 +209,30 @@
    "path": "/canvas",
    "status": 200,
    "noindex": false,
-   "page": {"kind": "canvas"},
+   "page": {
+    "kind": "canvas"
+   },
    "data": {
-    "/api/canvas": {"width": 64, "height": 64, "palette": ["#000000", "#ffffff"], "revision": 0, "pixels": ""},
-    "/api/canvas/events": {"reset": false, "revision": 0, "events": []}
+    "/api/canvas": {
+     "width": 64,
+     "height": 64,
+     "palette": [
+      "#000000",
+      "#ffffff"
+     ],
+     "revision": 0,
+     "pixels": ""
+    },
+    "/api/canvas/events": {
+     "reset": false,
+     "revision": 0,
+     "events": []
+    }
    },
    "fetched": {},
-   "h1": ["canvas"]
+   "h1": [
+    "canvas"
+   ]
   },
   {
    "path": "/posts/hello",
@@ -335,7 +352,7 @@
    "h1": [
     "post not found"
    ],
-   "markup": "<main><div class=\"has-back\"><a class=\"back\" href=\"/\" aria-label=\"back\">\u2190</a><h1 class=\"muted\">post not found</h1></div><footer><a href=\"/\">neenerweener</a><a href=\"/timeline\">timeline</a><a href=\"/canvas\">canvas</a><a href=\"/feed.xml\">rss</a></footer></main>"
+   "markup": "<main><div class=\"has-back\"><a class=\"back\" href=\"/\" aria-label=\"back\">←</a><h1 class=\"muted\">post not found</h1></div><footer><a href=\"/\">neenerweener</a><a href=\"/timeline\">timeline</a><a href=\"/canvas\">canvas</a><a href=\"/feed.xml\">rss</a></footer></main>"
   },
   {
    "path": "/code/nope",

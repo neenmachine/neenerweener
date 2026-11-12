@@ -675,7 +675,7 @@ async def _agent_access(request: Request, scope: str) -> AgentPrincipal:
 
 def _forum_payload(row: dict) -> dict:
     payload = {k: v for k, v in row.items() if k not in {"body_markdown", "body_html", "agent_id", "handle", "fingerprint"}} | {"body": row["body_html"]}
-    return payload | {"agent": public_agent(row.get("handle"), row.get("fingerprint"))}
+    return payload | {"agent": public_agent(row.get("handle") or "", row.get("fingerprint") or "")}
 
 @app.get("/api/forum")
 def forum_list(before: int | None = None, limit: int = Query(20, ge=1, le=100)):
@@ -698,7 +698,9 @@ async def forum_create_thread(request: Request):
     try:
         def create():
             return forum_store.create_thread(principal.agent_id, payload.kind, payload.title, payload.body)
-        return _forum_payload(await asyncio.to_thread(create))
+        created = await asyncio.to_thread(create)
+        created.update(handle=principal.handle, fingerprint=principal.fingerprint)
+        return _forum_payload(created)
     except ValueError as exc: raise HTTPException(422, "content not allowed" if str(exc) == "content not allowed" else "invalid forum content") from exc
 
 @app.post("/api/forum/threads/{thread_id}/answers", status_code=201, dependencies=[Security(_agent_bearer)], openapi_extra={"requestBody": {"required": True, "content": {"application/json": {"schema": {"type": "object", "required": ["body"], "properties": {"body": {"type": "string"}}}}}}})
@@ -709,7 +711,9 @@ async def forum_create_answer(thread_id: PositiveInt, request: Request):
     try:
         def create():
             return forum_store.create_answer(principal.agent_id, thread_id, payload.body)
-        return _forum_payload(await asyncio.to_thread(create))
+        created = await asyncio.to_thread(create)
+        created.update(handle=principal.handle, fingerprint=principal.fingerprint)
+        return _forum_payload(created)
     except LookupError as exc: raise HTTPException(404, "thread not found") from exc
     except ValueError as exc: raise HTTPException(422, "content not allowed" if str(exc) == "content not allowed" else "invalid forum content") from exc
 
@@ -718,7 +722,7 @@ def puzzle_active():
     if puzzle_store is None: raise HTTPException(503, "puzzle unavailable")
     puzzle = puzzle_store.active()
     leaderboard = puzzle_store.leaderboard(puzzle["id"]) if puzzle else []
-    return {"puzzle": puzzle, "leaderboard": [{k: v for k, v in row.items() if k not in {"handle", "fingerprint"}} | {"agent": public_agent(row.get("handle"), row.get("fingerprint"))} for row in leaderboard]}
+    return {"puzzle": puzzle, "leaderboard": [{k: v for k, v in row.items() if k not in {"handle", "fingerprint"}} | {"agent": public_agent(row.get("handle") or "", row.get("fingerprint") or "")} for row in leaderboard]}
 
 @app.post("/api/puzzles/{puzzle_id}/attempt", dependencies=[Security(_agent_bearer)], openapi_extra={"requestBody": {"required": True, "content": {"application/json": {"schema": {"type": "object", "required": ["answer"], "properties": {"answer": {"type": "string"}}}}}}})
 async def puzzle_attempt(puzzle_id: PositiveInt, request: Request):

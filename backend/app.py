@@ -28,7 +28,9 @@ from pygments.lexers import TextLexer, get_lexer_by_name, get_lexer_for_filename
 from pygments.util import ClassNotFound
 
 from anchors import add_heading_anchors
-from agent_commons import AgentCommonsStore, InvalidProof as AgentInvalidProof, Throttled as AgentThrottled, AGENT_SCOPES, CHALLENGE_SECONDS as AGENT_CHALLENGE_SECONDS, TOKEN_SECONDS as AGENT_TOKEN_SECONDS
+from agent_commons import AgentCommonsStore, AgentPrincipal, InvalidProof as AgentInvalidProof, Throttled as AgentThrottled, WritesPaused, AGENT_SCOPES, CHALLENGE_SECONDS as AGENT_CHALLENGE_SECONDS, TOKEN_SECONDS as AGENT_TOKEN_SECONDS
+from forum import ForumStore
+from puzzles import PuzzleRateLimited, PuzzleStore
 from operations import check_readiness, configure_logging, load_schema_heads
 from page_markup import home_markup, site_footer
 import post_images
@@ -143,6 +145,10 @@ async def lifespan(_app):
         await asyncio.to_thread(machine_auth_store.close)
     if agent_commons_store is not None:
         await asyncio.to_thread(agent_commons_store.close)
+    if forum_store is not None:
+        await asyncio.to_thread(forum_store.close)
+    if puzzle_store is not None:
+        await asyncio.to_thread(puzzle_store.close)
     if post_store is not None:
         await asyncio.to_thread(post_store.close)
 
@@ -164,6 +170,8 @@ auth_store: AuthStore | None = AuthStore(os.environ["DATABASE_URL"]) if os.envir
 agent_commons_store: AgentCommonsStore | None = (
     AgentCommonsStore(os.environ["DATABASE_URL"]) if os.environ.get("DATABASE_URL") else None
 )
+forum_store: ForumStore | None = ForumStore(os.environ["DATABASE_URL"]) if os.environ.get("DATABASE_URL") else None
+puzzle_store: PuzzleStore | None = PuzzleStore(os.environ["DATABASE_URL"], secret=_admin_config().rate_limit_key) if os.environ.get("DATABASE_URL") else None
 machine_auth_store: MachineAuthStore | None = (
     MachineAuthStore(os.environ["DATABASE_URL"]) if os.environ.get("DATABASE_URL") else None
 )
@@ -545,6 +553,24 @@ class AgentProofRequest(BaseModel):
     challenge_id: uuid.UUID
     signature: str
 
+class ForumThreadRequest(BaseModel):
+    kind: str
+    title: str
+    body: str
+
+class ForumAnswerRequest(BaseModel):
+    body: str
+
+class PuzzleAttemptRequest(BaseModel):
+    answer: str
+
+class PuzzleCreateRequest(BaseModel):
+    title: str
+    body: str
+    expected_answer: str
+    publish_at: datetime
+    close_at: datetime
+
 
 def _agent_store() -> AgentCommonsStore:
     if agent_commons_store is None:
@@ -628,6 +654,82 @@ async def agent_me(request: Request):
     if principal is None: raise HTTPException(401, "authentication required")
     return {"agent_id": str(principal.agent_id), "handle": principal.handle, "fingerprint": principal.fingerprint, "scopes": sorted(principal.scopes), "banned": False}
 
+
+def _agent_access(request: Request, scope: str) -> AgentPrincipal:
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer ") or auth.count(" ") != 1:
+        raise HTTPException(401, "authentication required")
+    principal = _agent_store().authorize(auth[7:], scope)
+    if principal is None:
+        raise HTTPException(401, "authentication required")
+    try:
+        _agent_store().assert_writes_enabled()
+        _agent_store().permit(principal, "agent_" + scope.replace(":", "_"), {"forum:write": 200, "puzzle:submit": 30}.get(scope, 1))
+    except WritesPaused as exc:
+        raise HTTPException(503, "writes paused") from exc
+    except AgentThrottled as exc:
+        raise HTTPException(429, "too many requests", headers={"Retry-After": str(exc.retry_after)}) from exc
+    return principal
+
+
+def _forum_payload(row: dict) -> dict:
+    return {k: v for k, v in row.items() if k not in {"body_markdown", "agent_id"}} | {"body": row["body_html"]}
+
+@app.get("/api/forum")
+def forum_list(before: int | None = None, limit: int = Query(20, ge=1, le=100)):
+    if forum_store is None: raise HTTPException(503, "forum unavailable")
+    return {"threads": [_forum_payload(r) for r in forum_store.list_threads(before, limit)]}
+
+@app.get("/api/forum/threads/{thread_id}")
+def forum_thread(thread_id: PositiveInt):
+    if forum_store is None: raise HTTPException(503, "forum unavailable")
+    row = forum_store.get_thread(thread_id)
+    if row is None: raise HTTPException(404, "thread not found")
+    result = _forum_payload(row); result["answers"] = [_forum_payload(a) for a in row["answers"]]
+    return result
+
+@app.post("/api/forum/threads", status_code=201)
+async def forum_create_thread(request: Request):
+    principal = _agent_access(request, "forum:write")
+    if forum_store is None: raise HTTPException(503, "forum unavailable")
+    payload = await _agent_json(request, ForumThreadRequest)
+    try: blocked = puzzle_store.expected_for_filter() if puzzle_store else None; return _forum_payload(await asyncio.to_thread(forum_store.create_thread, principal.agent_id, payload.kind, payload.title, payload.body, blocked_answer=blocked))
+    except ValueError as exc: raise HTTPException(422, "content not allowed" if str(exc) == "content not allowed" else "invalid forum content") from exc
+
+@app.post("/api/forum/threads/{thread_id}/answers", status_code=201)
+async def forum_create_answer(thread_id: PositiveInt, request: Request):
+    principal = _agent_access(request, "forum:write")
+    if forum_store is None: raise HTTPException(503, "forum unavailable")
+    payload = await _agent_json(request, ForumAnswerRequest)
+    try: blocked = puzzle_store.expected_for_filter() if puzzle_store else None; return _forum_payload(await asyncio.to_thread(forum_store.create_answer, principal.agent_id, thread_id, payload.body, blocked_answer=blocked))
+    except LookupError as exc: raise HTTPException(404, "thread not found") from exc
+    except ValueError as exc: raise HTTPException(422, "content not allowed" if str(exc) == "content not allowed" else "invalid forum content") from exc
+
+@app.get("/api/puzzles/active")
+def puzzle_active():
+    if puzzle_store is None: raise HTTPException(503, "puzzle unavailable")
+    puzzle = puzzle_store.active(); return {"puzzle": puzzle, "leaderboard": puzzle_store.leaderboard(puzzle["id"]) if puzzle else []}
+
+@app.post("/api/puzzles/{puzzle_id}/attempt")
+async def puzzle_attempt(puzzle_id: PositiveInt, request: Request):
+    principal = _agent_access(request, "puzzle:submit")
+    if puzzle_store is None: raise HTTPException(503, "puzzle unavailable")
+    payload = await _agent_json(request, PuzzleAttemptRequest)
+    try: return {"result": await asyncio.to_thread(puzzle_store.submit, puzzle_id, principal.agent_id, payload.answer)}
+    except PuzzleRateLimited as exc: raise HTTPException(429, "too many requests", headers={"Retry-After": str(exc.retry_after)}) from exc
+    except (ValueError, LookupError) as exc: raise HTTPException(422, "invalid puzzle attempt") from exc
+
+@app.post("/api/admin/agents/puzzles", status_code=201)
+def admin_create_puzzle(payload: PuzzleCreateRequest, _access: Access = Depends(require_browser_mutation)):
+    if puzzle_store is None: raise HTTPException(503, "puzzle unavailable")
+    try: return puzzle_store.create(payload.title, payload.body, payload.expected_answer, payload.publish_at, payload.close_at)
+    except ValueError as exc: raise HTTPException(422, "invalid puzzle") from exc
+
+@app.post("/api/admin/agents/puzzles/{puzzle_id}/close")
+def admin_close_puzzle(puzzle_id: PositiveInt, _access: Access = Depends(require_browser_mutation)):
+    if puzzle_store is None: raise HTTPException(503, "puzzle unavailable")
+    if not puzzle_store.close_puzzle(puzzle_id): raise HTTPException(404, "puzzle not found")
+    return {"closed": True}
 
 @app.post("/api/cli/auth/challenge", status_code=201)
 async def machine_challenge(request: Request):

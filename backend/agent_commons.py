@@ -167,6 +167,21 @@ class AgentCommonsStore:
         if not self.writes_enabled():
             raise WritesPaused
 
+    def permit(self, principal: AgentPrincipal, action: str, limit: int) -> None:
+        """Enforce one persistent per-agent hourly mutation limit for every feature."""
+        now = datetime.now(timezone.utc)
+        secret = self._secret()
+        if secret is None:
+            raise WritesPaused
+        key = rate_limit_key(secret, "fingerprint", principal.fingerprint)
+        with self.engine.begin() as c:
+            c.execute(text("SELECT pg_advisory_xact_lock(843921773)"))
+            cutoff = now - timedelta(hours=1)
+            count = c.execute(text("SELECT count(*) FROM machine_auth_events WHERE event = :event AND fingerprint_key = :key AND occurred_at > :cutoff"), {"event": action, "key": key, "cutoff": cutoff}).scalar_one()
+            if count >= limit:
+                raise Throttled(3600)
+            c.execute(text("INSERT INTO machine_auth_events (event, fingerprint_key) VALUES (:event, :key)"), {"event": action, "key": key})
+
     def ban(self, agent_id: uuid.UUID, reason: str | None = None) -> None:
         now = datetime.now(timezone.utc)
         with self.engine.begin() as c:

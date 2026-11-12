@@ -142,6 +142,7 @@ def sitemap(request: Request) -> Response:
 
     add("/")
     add("/timeline")
+    add("/canvas")
     try:
         posts = [post for post in app.post_catalog.list_public() if not post["draft"]]
     except app.CatalogUnavailable as exc:

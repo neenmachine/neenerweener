@@ -101,6 +101,7 @@ def test_discovery_routes_are_available(tmp_path, monkeypatch):
     assert [u.findtext("{http://www.sitemaps.org/schemas/sitemap/0.9}loc") for u in urls] == [
         "https://www.neenerweener.ca/",
         "https://www.neenerweener.ca/timeline",
+        "https://www.neenerweener.ca/canvas",
         "https://www.neenerweener.ca/posts/special",
         "https://www.neenerweener.ca/posts/older",
         "https://www.neenerweener.ca/code/public-project",
@@ -109,7 +110,7 @@ def test_discovery_routes_are_available(tmp_path, monkeypatch):
     assert locs.count("https://www.neenerweener.ca/timeline") == 1
     assert all(path not in loc for path in ("/now", "/admin", "/api/", "/feed.xml", "/robots.txt") for loc in locs)
     assert urls[1].findtext("{http://www.sitemaps.org/schemas/sitemap/0.9}lastmod") is None
-    assert urls[2].findtext("{http://www.sitemaps.org/schemas/sitemap/0.9}lastmod") == "2026-03-28"
+    assert urls[3].findtext("{http://www.sitemaps.org/schemas/sitemap/0.9}lastmod") == "2026-03-28"
     for url in urls:
         loc = url.findtext("{http://www.sitemaps.org/schemas/sitemap/0.9}loc")
         assert client.get(urlsplit(loc).path).status_code == 200

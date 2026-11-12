@@ -197,15 +197,47 @@ class CliTests(unittest.TestCase):
         def open_(request, timeout): calls.append(request); return next(responses)
         def run(args, stdin=None):
             if args[1:3] == ["-lf", str(self.key)]: return subprocess.CompletedProcess(args, 0, b"256 SHA256:fp comment\n", b"")
-            self.assertEqual(args, ["ssh-keygen", "-Y", "sign", "-n", cli.NAMESPACE, "-f", str(self.key)])
-            self.assertEqual(stdin, b"line\nfinal\n")
-            return subprocess.CompletedProcess(args, 0, signature_bytes(), b"")
+            self.assertEqual(args[:7], ["ssh-keygen", "-Y", "sign", "-n", cli.NAMESPACE, "-f", str(self.key)])
+            self.assertIsNone(stdin)
+            Path(args[7] + ".sig").write_bytes(signature_bytes())
+            return subprocess.CompletedProcess(args, 0, b"", b"")
         with patch.object(cli.OPENER, "open", side_effect=open_), patch.object(cli, "_run", side_effect=run):
             self.assertEqual(cli.post("https://s.example", self.key, "hello"), "https://s.example/timeline#entry-7")
         self.assertEqual(json.loads(calls[0].data), {"key_fingerprint":"SHA256:fp"})
         self.assertEqual(calls[0].full_url, "https://s.example/api/cli/auth/challenge")
         self.assertEqual(calls[2].get_header("Authorization"), "Bearer tok-123")
         self.assertEqual(json.loads(calls[2].data), {"body_markdown":"hello"})
+
+    def test_tweet_signs_passphrase_key_without_agent_and_verifies_signature(self):
+        key = Path(self.tmp.name) / "signing-key"
+        subprocess.run(
+            ["ssh-keygen", "-q", "-t", "ed25519", "-N", "test-passphrase", "-f", str(key)],
+            check=True, capture_output=True,
+        )
+        askpass = Path(self.tmp.name) / "askpass"
+        askpass.write_text("#!/bin/sh\nprintf '%s\\n' test-passphrase\n")
+        askpass.chmod(0o700)
+        responses = iter([
+            {"challenge_id":"123e4567-e89b-12d3-a456-426614174000", "message":"line\nfinal\n", "namespace":cli.NAMESPACE, "expires_at":"2099-01-01T00:00:00Z"},
+            {"access_token":"tok-123", "token_type":"Bearer", "expires_in":600, "scopes":["timeline:create", "timeline:read"]},
+            {"id":7},
+        ])
+        requests = []
+        with patch.object(cli, "_fingerprint", return_value="SHA256:fp"), \
+                patch.object(cli, "_request", side_effect=lambda *args: (requests.append(args), next(responses))[1]), \
+                patch.dict(os.environ, {"SSH_ASKPASS": str(askpass), "SSH_ASKPASS_REQUIRE":"force", "SSH_AUTH_SOCK":""}):
+            self.assertEqual(cli.post("https://s.example", key, "hello"), "https://s.example/timeline#entry-7")
+
+        signature = requests[1][2]["signature"]
+        signature_path = Path(self.tmp.name) / "message.sig"
+        signature_path.write_text(signature)
+        allowed = Path(self.tmp.name) / "allowed-signers"
+        allowed.write_text("test " + key.with_suffix(".pub").read_text())
+        verified = subprocess.run(
+            ["ssh-keygen", "-Y", "verify", "-f", str(allowed), "-I", "test", "-n", cli.NAMESPACE, "-s", str(signature_path)],
+            input=b"line\nfinal\n", capture_output=True, check=False,
+        )
+        self.assertEqual(verified.returncode, 0, verified.stderr.decode())
 
     def test_tweet_normalizes_signer_failures_to_exact_safe_error(self):
         challenge = {

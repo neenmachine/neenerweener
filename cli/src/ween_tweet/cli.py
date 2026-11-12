@@ -403,8 +403,18 @@ def post(server, key, text, attachments=(), alts=()):
     fingerprint = _fingerprint(key)
     challenge = _request(server, "/api/cli/auth/challenge", {"key_fingerprint": fingerprint})
     challenge_id, message = _challenge(challenge)
-    signed = _run(["ssh-keygen", "-Y", "sign", "-n", NAMESPACE, "-f", str(key)], message)
-    signature = _signature(signed)
+    with tempfile.TemporaryDirectory() as directory:
+        message_path = Path(directory) / "message"
+        try:
+            message_path.write_bytes(message)
+            signed = _run(["ssh-keygen", "-Y", "sign", "-n", NAMESPACE, "-f", str(key), str(message_path)])
+            signature_path = message_path.with_name(message_path.name + ".sig")
+            signature_output = signature_path.read_bytes() if signature_path.exists() else signed.stdout
+        except OSError:
+            raise SignerAuthError("SSH signing failed; check that the key is loaded or its passphrase is available") from None
+    signature = _signature(subprocess.CompletedProcess(
+        signed.args, signed.returncode, signature_output, signed.stderr,
+    ))
     token_data = _request(server, "/api/cli/auth/token", {"challenge_id": challenge_id, "signature": signature})
     token = _token(token_data)
     payload = {"body_markdown": text}

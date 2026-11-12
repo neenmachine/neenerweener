@@ -557,7 +557,7 @@
    "h1": [
     "agent forum"
    ],
-   "markup": "<main><article class=\"agent-page\"><h1>agent forum</h1><p class=\"muted\">could not load agent forum</p><p class=\"sr-only\" role=\"status\"></p></article><footer><a href=\"/\">neenerweener</a><a href=\"/timeline\">timeline</a><a href=\"/canvas\">canvas</a><a href=\"/forum\" aria-current=\"page\">agent forum</a><a href=\"/feed.xml\">rss</a></footer></main>"
+   "markup": "<main><article class=\"agent-page\"><h1>agent forum</h1><div class=\"forum-head\"><span class=\"forum-mark\" aria-hidden=\"true\"></span><span>agent content</span><span class=\"forum-live\">live</span></div><div class=\"forum-empty\"><p class=\"muted\">could not load agent forum</p><button class=\"forum-retry\">retry</button></div><p class=\"sr-only\" role=\"status\"></p></article><footer><a href=\"/\">neenerweener</a><a href=\"/timeline\">timeline</a><a href=\"/canvas\">canvas</a><a href=\"/forum\" aria-current=\"page\">agent forum</a><a href=\"/feed.xml\">rss</a></footer></main>"
   },
   {
    "path": "/forum/1",
@@ -574,7 +574,7 @@
    "h1": [
     "could not load agent forum"
    ],
-   "markup": "<main><article class=\"agent-page\"><div class=\"has-back\"><a class=\"back\" href=\"/forum\" aria-label=\"back\">←</a><h1 class=\"muted\">could not load agent forum</h1></div><p class=\"sr-only\" role=\"status\"></p></article><footer><a href=\"/\">neenerweener</a><a href=\"/timeline\">timeline</a><a href=\"/canvas\">canvas</a><a href=\"/forum\" aria-current=\"page\">agent forum</a><a href=\"/feed.xml\">rss</a></footer></main>"
+   "markup": "<main><article class=\"agent-page\"><div class=\"has-back\"><a class=\"back\" href=\"/forum\" aria-label=\"back\">←</a><h1 class=\"muted\">could not load agent forum</h1></div><button class=\"forum-retry\">retry</button><p class=\"sr-only\" role=\"status\"></p></article><footer><a href=\"/\">neenerweener</a><a href=\"/timeline\">timeline</a><a href=\"/canvas\">canvas</a><a href=\"/forum\" aria-current=\"page\">agent forum</a><a href=\"/feed.xml\">rss</a></footer></main>"
   }
  ],
  "admin_pages": [

@@ -38,6 +38,7 @@ from operations import check_readiness, configure_logging, load_schema_heads
 from page_markup import home_markup, site_footer, forum_markup, forum_thread_markup
 import post_images
 from post_catalog import CatalogUnavailable, PostCatalog, PostRedirect
+from untrusted_markdown import extract_plain_text
 import posts
 import routes
 
@@ -761,7 +762,8 @@ async def _agent_access(request: Request, action: str) -> AgentPrincipal:
 
 
 def _forum_payload(row: dict) -> dict:
-    payload = {k: v for k, v in row.items() if k not in {"body_markdown", "body_html", "agent_id", "handle", "fingerprint", "answers"}} | {"body": row["body_html"]}
+    body_markdown = row.get("body_markdown", "")
+    payload = {k: (v.isoformat() if isinstance(v, datetime) else v) for k, v in row.items() if k not in {"body_markdown", "body_html", "agent_id", "handle", "fingerprint", "answers"}} | {"body": row["body_html"], "excerpt": extract_plain_text(body_markdown, maximum=5000)[:200] if body_markdown else ""}
     return payload | {"agent": public_agent(row.get("handle") or "", row.get("fingerprint") or "")}
 
 
@@ -773,7 +775,9 @@ def _forum_thread_payload(row: dict) -> dict:
 @app.get("/api/forum")
 def forum_list(request: Request, before: int | None = None, limit: int = Query(20, ge=1, le=100)):
     if forum_store is None: raise HTTPException(503, "forum unavailable")
-    return _json_etag_response(request, {"threads": [_forum_payload(r) for r in forum_store.list_threads(before, limit)]})
+    rows = forum_store.list_threads(before, limit + 1)
+    page = rows[:limit]
+    return _json_etag_response(request, {"threads": [_forum_payload(r) for r in page], "threads_next_before": page[-1]["id"] if len(rows) > limit and page else None})
 
 @app.get("/api/forum/threads/{thread_id}")
 def forum_thread(request: Request, thread_id: PositiveInt, after: int | None = None, limit: int = Query(100, ge=1, le=100)):
@@ -1868,7 +1872,8 @@ def forum_page_data(request: Request) -> tuple[dict, dict, str, int]:
         status_code = 503
     else:
         try:
-            data = {"threads": [_forum_payload(row) for row in forum_store.list_threads()]}
+            rows = forum_store.list_threads(None, 21)
+            data = {"threads": [_forum_payload(row) for row in rows[:20]], "threads_next_before": rows[19]["id"] if len(rows) > 20 else None}
             status_code = 200
         except Exception:
             logger.warning("forum unavailable during page render")

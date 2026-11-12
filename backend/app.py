@@ -34,7 +34,7 @@ from agent_commons import AgentCommonsStore, DuplicateRegistration, InvalidProof
 from canvas import CanvasStore, authorize_canvas_write, png_bytes, snapshot_payload
 from forum import ForumStore
 from operations import check_readiness, configure_logging, load_schema_heads
-from page_markup import home_markup, site_footer
+from page_markup import home_markup, site_footer, forum_markup, forum_thread_markup
 import post_images
 from post_catalog import CatalogUnavailable, PostCatalog, PostRedirect
 import posts

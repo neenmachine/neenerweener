@@ -13,8 +13,9 @@ def etag_response(
     media_type: str,
     headers: dict[str, str] | None = None,
     status_code: int = 200,
+    etag: str | None = None,
 ) -> Response:
-    etag = f'"{hashlib.sha256(content).hexdigest()}"'
+    etag = etag or f'"{hashlib.sha256(content).hexdigest()}"'
     response_headers = {**(headers or {}), "ETag": etag}
     candidates = {
         value.strip().removeprefix("W/").strip()

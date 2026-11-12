@@ -202,6 +202,17 @@ def _parse_keys(raw: str | None) -> dict[str, AuthorizedKey]:
     return keys
 
 
+def parse_ed25519_public_key(public_key: str) -> tuple[str, str]:
+    """Return the canonical two-field Ed25519 key and its fingerprint."""
+    if not isinstance(public_key, str) or len(public_key) > 1024 or len(public_key.split()) != 2:
+        raise ValueError
+    algorithm, encoded = public_key.split()
+    if algorithm != "ssh-ed25519" or any(ord(char) < 0x20 or ord(char) == 0x7f for char in public_key):
+        raise ValueError
+    canonical = f"{algorithm} {encoded}"
+    return canonical, _ed25519_fingerprint(canonical)
+
+
 def _parse_key(item: Any) -> AuthorizedKey:
     if not isinstance(item, dict) or set(item) != {"name", "public_key", "scopes"}:
         raise ValueError
@@ -214,17 +225,11 @@ def _parse_key(item: Any) -> AuthorizedKey:
         or not isinstance(public_key, str)
     ):
         raise ValueError
-    if (
-        len(public_key) > 1024
-        or len(public_key.split()) != 2
-        or not public_key.startswith("ssh-ed25519 ")
-    ):
-        raise ValueError
+    public_key, fingerprint = parse_ed25519_public_key(public_key)
     if not isinstance(scopes, list) or any(type(scope) is not str for scope in scopes):
         raise ValueError
     if len(scopes) != len(set(scopes)) or set(scopes) != SUPPORTED_SCOPES:
         raise ValueError
-    fingerprint = _ed25519_fingerprint(public_key)
     return AuthorizedKey(name, public_key, fingerprint, frozenset(scopes))
 
 
@@ -260,8 +265,9 @@ def _verify_signature(message: bytes, signature: str, key: AuthorizedKey, namesp
         with tempfile.TemporaryDirectory() as directory:
             allowed_signers = os.path.join(directory, "allowed_signers")
             signature_path = os.path.join(directory, "signature")
+            canonical_key, _ = parse_ed25519_public_key(key.public_key)
             with open(allowed_signers, "x", encoding="ascii") as file:
-                file.write(f"cli {key.public_key}\n")
+                file.write(f"cli {canonical_key}\n")
             with open(signature_path, "x", encoding="ascii") as file:
                 file.write(signature)
             result = subprocess.run(
@@ -285,12 +291,24 @@ def _verify_signature(message: bytes, signature: str, key: AuthorizedKey, namesp
                 check=False,
             )
         return result.returncode == 0
-    except (OSError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired, ValueError):
         return False
+
+
+def auth_digest(value: str) -> bytes:
+    return hashlib.sha256(value.encode("utf-8")).digest()
 
 
 def _digest(value: str) -> bytes:
     return hashlib.sha256(value.encode("utf-8")).digest()
+
+
+def auth_message(challenge_id, fingerprint, nonce, audience, expires_at) -> str:
+    return _message(challenge_id, fingerprint, nonce, audience, expires_at)
+
+
+def verify_auth_signature(message: bytes, signature: str, key: AuthorizedKey, namespace: str = NAMESPACE) -> bool:
+    return _verify_signature(message, signature, key, namespace)
 
 
 def _rfc3339(value: datetime) -> str:

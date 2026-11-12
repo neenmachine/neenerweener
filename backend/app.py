@@ -734,6 +734,30 @@ def _forum_thread_payload(row: dict) -> dict:
     payload["answers"] = [_forum_payload(answer) for answer in row.get("answers", [])]
     return payload
 
+async def _agent_access(request: Request, action: str) -> AgentPrincipal:
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer ") or auth.count(" ") != 1:
+        raise HTTPException(401, "authentication required")
+    try:
+        principal = await _agent_store().authorize_mutation(auth[7:], action, trusted_client_ip(request))
+    except WritesPaused as exc:
+        raise HTTPException(503, "writes paused") from exc
+    except AgentThrottled as exc:
+        raise HTTPException(429, "too many requests", headers={"Retry-After": str(exc.retry_after)}) from exc
+    if principal is None: raise HTTPException(401, "authentication required")
+    return principal
+
+
+def _forum_payload(row: dict) -> dict:
+    payload = {k: v for k, v in row.items() if k not in {"body_markdown", "body_html", "agent_id", "handle", "fingerprint", "created_at", "answers"}} | {"body": row["body_html"]}
+    return payload | {"agent": public_agent(row.get("handle") or "", row.get("fingerprint") or "")}
+
+
+def _forum_thread_payload(row: dict) -> dict:
+    payload = _forum_payload(row)
+    payload["answers"] = [_forum_payload(answer) for answer in row.get("answers", [])]
+    return payload
+
 @app.get("/api/forum")
 def forum_list(request: Request, before: int | None = None, limit: int = Query(20, ge=1, le=100)):
     if forum_store is None: raise HTTPException(503, "forum unavailable")

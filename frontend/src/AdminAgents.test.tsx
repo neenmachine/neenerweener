@@ -36,6 +36,23 @@ test("moderation controls have target-specific names and banned state", async ()
   expect(document.querySelector('[aria-label="confirm ban alice"]')).not.toBeNull();
 });
 
+test("a held ban disables its control, drops a second click, then reloads", async () => {
+  let release!: (value: any) => void;
+  const held = new Promise((resolve) => (release = resolve));
+  const send = vi.fn(async (_method: string, url: string) => url === "/api/admin/agents" ? ok(data) : held);
+  await render(send);
+  act(() => document.querySelector<HTMLButtonElement>('[aria-label="ban alice"]')!.click());
+  await act(async () => { document.querySelector<HTMLButtonElement>('[aria-label="confirm ban alice"]')!.click(); await Promise.resolve(); });
+  const button = document.querySelector<HTMLButtonElement>('[aria-label="confirm ban alice"]')!;
+  expect(button.getAttribute("aria-busy")).toBe("true");
+  expect(button.getAttribute("aria-disabled")).toBe("true");
+  expect(button.textContent).toContain("banning");
+  button.click();
+  expect(send.mock.calls.filter(([, url]) => url !== "/api/admin/agents")).toHaveLength(1);
+  await act(async () => { release(ok({})); await Promise.resolve(); await Promise.resolve(); });
+  expect(button.getAttribute("aria-busy")).toBe("false");
+});
+
 test("successful ban reload shows banned state and unban", async () => {
   const banned = { ...data, agents: [{ ...data.agents[0], banned: true }] };
   const send = vi.fn().mockResolvedValueOnce(ok(data)).mockResolvedValueOnce(ok({})).mockResolvedValueOnce(ok(banned)).mockResolvedValue(ok(banned));

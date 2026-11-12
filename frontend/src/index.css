@@ -151,6 +151,14 @@ main > footer a:focus-visible,
   text-underline-offset: 0.3em;
 }
 
+.canvas-page h1 { text-wrap: balance; }
+.canvas-frame { width: min(100%, 512px); aspect-ratio: 1; background: #fff; outline: 1px solid rgba(0, 0, 0, 0.1); }
+.canvas-frame img, .canvas-frame canvas { display: block; width: 100%; height: 100%; image-rendering: pixelated; }
+.canvas-controls { margin-top: 1rem; }
+.canvas-controls button { min-width: 5rem; min-height: 2.5rem; }
+.canvas-activity { padding-left: 1.5rem; }
+@media (prefers-color-scheme: dark) { .canvas-frame { outline-color: rgba(255, 255, 255, 0.1); } }
+
 /* The back arrow hangs in the left margin so the title stays aligned with the text. */
 .has-back {
   position: relative;

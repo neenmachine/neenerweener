@@ -1635,6 +1635,43 @@ def timeline_page_data(request: Request) -> tuple[dict, dict, str, int]:
     return {"/api/timeline": page, "/api/profile": profile}, {"title": "timeline", "description": "timeline"}, markup, status_code
 
 
+def canvas_markup(events: list[dict]) -> str:
+    activity = "".join(
+        f'<li>revision {escape(str(event["revision"]))}: '
+        f'{"cleared a region" if event.get("event_kind") == "clear" else "pixel updated"}</li>'
+        for event in events
+    )
+    if not activity:
+        activity = '<li class="muted">no activity yet</li>'
+    return (
+        '<main><article class="canvas-page"><h1>canvas</h1>'
+        '<p class="muted">a shared 64 × 64 pixel canvas</p>'
+        '<div class="canvas-frame"><img src="/api/canvas.png" width="512" height="512" '
+        'alt="current canvas" decoding="async"></div>'
+        '<div class="canvas-controls"><button type="button">replay</button></div>'
+        '<section aria-labelledby="canvas-activity"><h2 id="canvas-activity">recent activity</h2>'
+        f'<ol class="canvas-activity">{activity}</ol></section></article>{site_footer("canvas")}</main>'
+    )
+
+
+def canvas_page_data(request: Request) -> tuple[dict, dict, str, int]:
+    try:
+        revision, pixels = awaitable_canvas_snapshot()
+        events = [_canvas_event_json(event) for event in _canvas_store().events(max(0, revision - 20), 20)["events"]]
+    except HTTPException:
+        revision, pixels, events = 0, bytes([255] * (64 * 64)), []
+    snapshot = snapshot_payload(revision, pixels)
+    return {"/api/canvas": snapshot, "/api/canvas/events": {"reset": False, "revision": revision, "events": events}}, {"title": "canvas", "description": "canvas"}, canvas_markup(events), 200
+
+
+def _canvas_event_json(event: dict) -> dict:
+    return {key: value.isoformat() if isinstance(value, datetime) else str(value) if key == "agent_id" and value is not None else value for key, value in event.items()}
+
+
+def awaitable_canvas_snapshot() -> tuple[int, bytes]:
+    return _canvas_store().snapshot()
+
+
 def timeline_before(request: Request) -> int | None:
     values = request.query_params.getlist("before")
     if not values:
@@ -1681,7 +1718,7 @@ def code_page_data(request: Request, project: str, path: str = "") -> tuple[dict
     return {}, head, "", 200
 
 
-RENDERERS = {"home": home_page, "timeline": timeline_page_data, "admin": admin_page, "post": post_page_data, "code": code_page_data}
+RENDERERS = {"home": home_page, "timeline": timeline_page_data, "canvas": canvas_page_data, "admin": admin_page, "post": post_page_data, "code": code_page_data}
 
 
 def not_found_page(label: str, back: bool = False) -> tuple[dict, dict, str, int]:

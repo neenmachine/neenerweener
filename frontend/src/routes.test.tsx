@@ -52,6 +52,7 @@ test.each(pages.map((row) => [row.path, row] as const))("%s renders the server's
 
 test.each(pages.map((row) => [row.path, row] as const))("%s has one footer rss link", async (_, row) => {
   await render(row.path, { page: row.page, ...row.data }, row.fetched);
+  if (row.path === "/canvas") { expect(document.querySelectorAll("footer")).toHaveLength(0); return; }
   expect(document.querySelectorAll("footer")).toHaveLength(1);
   const footer = document.querySelector("main > footer")!;
   expect(footer.querySelectorAll('a[href="/feed.xml"]')).toHaveLength(1);

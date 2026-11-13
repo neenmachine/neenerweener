@@ -8,18 +8,18 @@ import re
 # test_routes.py holds both equal to the admin_pages rows in frontend/src/route_cases.json.
 ADMIN_PAGES = {"": "overview", "timeline": "timeline", "posts": "posts", "profile": "profile", "agents": "agents"}
 
-# One line per page. A new page is one row here plus one branch in App.tsx's switch.
+# One line per page: kind, path pattern, and whether the standard site chrome is present.
 ROUTES = [
-    ("home", r""),
-    ("timeline", r"timeline"),
-    ("forum", r"forum"),
-    ("forum-thread", r"forum/(?P<thread_id>[1-9][0-9]*)"),
-    ("canvas", r"canvas"),
-    ("admin", r"admin(?:/(?P<section>" + "|".join(s for s in ADMIN_PAGES if s) + "))?"),
-    ("post", r"posts/(?P<slug>[a-z0-9-]+)"),
-    ("code", r"code/(?P<project>[a-z0-9-]+)(?:/(?P<path>.+))?"),
+    ("home", r"", True),
+    ("timeline", r"timeline", True),
+    ("forum", r"forum", True),
+    ("forum-thread", r"forum/(?P<thread_id>[1-9][0-9]*)", True),
+    ("canvas", r"canvas", False),
+    ("admin", r"admin(?:/(?P<section>" + "|".join(s for s in ADMIN_PAGES if s) + "))?", True),
+    ("post", r"posts/(?P<slug>[a-z0-9-]+)", True),
+    ("code", r"code/(?P<project>[a-z0-9-]+)(?:/(?P<path>.+))?", True),
 ]
-_COMPILED = [(kind, re.compile(pattern)) for kind, pattern in ROUTES]
+_COMPILED = [(kind, re.compile(pattern), chrome) for kind, pattern, chrome in ROUTES]
 
 
 def canonical(path: str) -> str:
@@ -27,11 +27,11 @@ def canonical(path: str) -> str:
     return re.sub("/+", "/", path).rstrip("/") or "/"
 
 
-def match(path: str) -> tuple[str, dict[str, str]] | None:
-    """The page kind and its parameters for a canonical path, or None for an unknown path."""
-    for kind, pattern in _COMPILED:
+def match(path: str) -> tuple[str, dict[str, str], bool] | None:
+    """The page kind, parameters, and chrome policy for a canonical path, or None."""
+    for kind, pattern, chrome in _COMPILED:
         if m := pattern.fullmatch(path.removeprefix("/")):
-            return kind, {k: v for k, v in m.groupdict().items() if v is not None}
+            return kind, {k: v for k, v in m.groupdict().items() if v is not None}, chrome
     return None
 
 

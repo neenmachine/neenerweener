@@ -252,7 +252,8 @@ async def security_middleware(request: Request, call_next):
     response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     response.headers["Content-Security-Policy-Report-Only"] = (
         # blob: for the local previews of images being attached in the admin compose form
-        "default-src 'self'; script-src 'self'; img-src 'self' blob:; connect-src 'self'; object-src 'none'; "
+        "default-src 'self'; script-src 'self' 'sha256-qOhFsq0QMV2REqNwk5hGH5bZE9SkX6gt6yeyKdYPv+U='; "
+        "img-src 'self' blob:; connect-src 'self'; object-src 'none'; "
         "base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
     )
     return response
@@ -1752,14 +1753,16 @@ def frontend(path: str, request: Request):
     return etag_response(request, content, "text/html", headers, status_code)
 
 
-def render_page(match: tuple[str, dict[str, str]] | None, request: Request) -> tuple[dict, dict, str, int]:
+def render_page(match: tuple[str, dict[str, str], bool] | None, request: Request) -> tuple[dict, dict, str, int]:
     """Preload data (with the page the React app renders), head tags, no-JS markup and status for a matched path."""
     if match is None:
         return not_found_page("not found")
-    kind, params = match
-    preload, head, markup, status_code = RENDERERS[kind](request, **params)
+    kind, params, chrome = match
+    renderer_params = params | ({"chrome": chrome} if kind == "canvas" else {})
+    preload, head, markup, status_code = RENDERERS[kind](request, **renderer_params)
     # A renderer that answers not-found sets its own page.
-    return {"page": {"kind": kind, **params}} | preload, head, markup, status_code
+    page = {"kind": kind, **params} | ({"chrome": False} if not chrome else {})
+    return {"page": page} | preload, head, markup, status_code
 
 
 def home_page(request: Request) -> tuple[dict, dict, str, int]:
@@ -1777,44 +1780,74 @@ def timeline_page_data(request: Request) -> tuple[dict, dict, str, int]:
     return {"/api/timeline": page, "/api/profile": profile}, {"title": "timeline", "description": "timeline"}, markup, status_code
 
 
-def canvas_agent_label(event: dict) -> str:
-    handle = event.get("handle")
-    suffix = event.get("fingerprint_suffix")
-    if not handle and not suffix:
-        return ""
-    return f' by {escape(str(handle or "unknown"))} ({escape(str(suffix or "unknown"))})'
+def canvas_relative_time(value: str | None, now: datetime) -> str:
+    if not value:
+        return "now"
+    moment = _utc_datetime(value)
+    seconds = max(0, (now - moment).total_seconds())
+    if seconds < 5:
+        return "now"
+    if seconds < 60:
+        return f"{int(seconds)}s"
+    if seconds < 3600:
+        return f"{int(seconds // 60)}m"
+    if seconds < 86400:
+        return f"{int(seconds // 3600)}h"
+    local = moment.astimezone(TORONTO)
+    return f"{local.strftime('%b').lower()} {local.day}"
 
 
-def canvas_markup(events: list[dict]) -> str:
-    activity = "".join(
-        f'<li>revision {escape(str(event["revision"]))}: '
-        f'{"cleared a region" if event.get("event_kind") == "clear" else "pixel updated"}'
-        f'{canvas_agent_label(event)}</li>'
-        for event in events
-    )
-    if not activity:
-        activity = '<li class="muted">no activity yet</li>'
+def _canvas_activity_row(event: dict, palette: list[str], now: datetime) -> str:
+    clear = event.get("event_kind") == "clear"
+    handle = escape(str(event.get("handle") or "unknown"), quote=True)
+    fingerprint = escape(str(event.get("fingerprint_suffix") or ""))
+    bounds = event.get("clear_bounds", {})
+    where = f"{bounds.get('width', 0)}×{bounds.get('height', 0)}" if clear else f"{event.get('x', 0)},{event.get('y', 0)}"
+    color = "" if clear else escape(palette[event.get("color", 0)], quote=True)
+    rect = f'<rect width="12" height="12" fill="{color}"></rect>' if color else ""
+    swatch = f'<svg class="activity-swatch" width="12" height="12" aria-hidden="true">{rect}</svg>'
+    created = event.get("created_at")
+    title = _utc_datetime(created).astimezone(TORONTO).strftime("%B %-d, %Y at %-I:%M %p %Z") if created else ""
     return (
-        '<main><article class="canvas-page"><h1>canvas</h1>'
-        '<p class="muted">a shared 64 × 64 pixel canvas</p>'
-        '<div class="canvas-frame"><img width="512" height="512" alt="" aria-hidden="true" decoding="async" '
-        'src="/api/canvas.png"><canvas width="512" height="512" role="img" aria-label="current canvas"></canvas></div>'
-        '<div class="canvas-controls"><button type="button">replay</button></div>'
-        '<p role="status" aria-live="polite"></p>'
-        '<section aria-labelledby="canvas-activity"><h2 id="canvas-activity">recent activity</h2>'
-        f'<ol class="canvas-activity">{activity}</ol></section></article>{site_footer("canvas")}</main>'
+        f'<li>{swatch}<span class="activity-who"><b title="{handle}">'
+        f'{"region cleared" if clear else handle}</b>{f"<code>{fingerprint}</code>" if not clear else ""}</span>'
+        f'<code class="activity-where">{where}</code><time{f" datetime=\"{escape(str(created), quote=True)}\"" if created else ""}'
+        f'{f" title=\"{title}\"" if title else ""}>{canvas_relative_time(created, now)}</time></li>'
     )
 
 
-def canvas_page_data(request: Request) -> tuple[dict, dict, str, int]:
+def _canvas_activity_markup(events: list[dict], palette: list[str], now: datetime) -> str:
+    if not events:
+        return '<li class="muted">no activity yet</li>'
+    return "".join(_canvas_activity_row(event, palette, now) for event in reversed(events[-20:]))
+
+
+def canvas_markup(events: list[dict], snapshot: dict, empty: bool, now: datetime, chrome: bool) -> str:
+    activity = _canvas_activity_markup(events, snapshot["palette"], now)
+    disabled = ' aria-disabled="true"' if empty else ""
+    png_href = "" if empty else ' href="/api/canvas.png"'
+    instrument = (
+        '<h1 class="sr-only">canvas</h1><div class="canvas-pill"><a class="canvas-home" href="/">neenerweener</a><span class="canvas-divider"></span>'
+        f'<span class="canvas-live"><i></i> live · rev {snapshot["revision"]:,}</span><span class="canvas-divider"></span>'
+        f'<button class="canvas-pill-action" type="button"{disabled}><span class="play-icon"></span>replay</button>'
+        f'<a class="canvas-pill-action"{png_href} download="neenerweener-canvas.png" aria-label="download png"{disabled}><span class="download-icon"></span>png</a>'
+        '<span class="canvas-divider"></span><button class="canvas-pill-action" type="button" aria-expanded="false" aria-controls="canvas-activity" aria-label="show activity"><span class="activity-icon"></span> <span class="activity-label">activity</span></button></div>'
+        f'<div class="canvas-stage"><div class="canvas-frame"><img width="512" height="512" alt="" aria-hidden="true" decoding="async" src="/api/canvas.png"><canvas width="512" height="512" role="img" aria-label="current canvas"></canvas><span class="canvas-marker" hidden=""></span></div>{"<span class=\"canvas-empty-label\">no pixels yet</span>" if empty else ""}<p class="canvas-status"><i></i>live · rev {snapshot["revision"]:,}</p></div>'
+    )
+    panel = '<aside id="canvas-activity" class="canvas-panel" aria-labelledby="canvas-activity-title" hidden=""><header><h2 id="canvas-activity-title">recent activity</h2><button type="button" aria-label="close activity">×</button></header><ol class="canvas-activity">' + activity + '</ol></aside>'
+    fallback = '<details class="canvas-nojs-activity"><summary>recent activity</summary><ol class="canvas-activity">' + activity + '</ol></details>'
+    return f'<main class="canvas-instrument" data-activity="closed">{instrument}</main>{panel}{fallback}' if not chrome else f'<main>{instrument}{panel}{fallback}{site_footer("canvas")}</main>'
+
+
+def canvas_page_data(request: Request, chrome: bool = True) -> tuple[dict, dict, str, int]:
     try:
         revision, pixels = awaitable_canvas_snapshot()
         events = [_canvas_event_json(event) for event in _canvas_store().events(max(0, revision - 20), 20)["events"]]
     except HTTPException:
         revision, pixels, events = 0, bytes([255] * (64 * 64)), []
     snapshot = snapshot_payload(revision, pixels)
-    return {"/api/canvas": snapshot, "/api/canvas/events": {"reset": False, "revision": revision, "events": events}}, {"title": "canvas", "description": "canvas"}, canvas_markup(events), 200
-
+    now = utc_now()
+    return {"/api/canvas": snapshot, "/api/canvas/events": {"reset": False, "revision": revision, "events": events}, "canvas_now": now.isoformat()}, {"title": "canvas", "description": "canvas"}, canvas_markup(events, snapshot, all(pixel == 255 for pixel in pixels), now, chrome), 200
 
 def _canvas_event_json(event: dict) -> dict:
     return {key: value.isoformat() if isinstance(value, datetime) else str(value) if key == "agent_id" and value is not None else value for key, value in event.items()}

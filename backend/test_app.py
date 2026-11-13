@@ -77,7 +77,8 @@ def test_admin_spa_is_noindex_and_public_pages_do_not_link_to_it(tmp_path, monke
         assert missing.headers["Referrer-Policy"] == "strict-origin-when-cross-origin"
         assert missing.headers["X-Frame-Options"] == "DENY"
         assert missing.headers["Content-Security-Policy-Report-Only"] == (
-            "default-src 'self'; script-src 'self'; img-src 'self' blob:; connect-src 'self'; object-src 'none'; "
+            "default-src 'self'; script-src 'self' 'sha256-qOhFsq0QMV2REqNwk5hGH5bZE9SkX6gt6yeyKdYPv+U='; "
+            "img-src 'self' blob:; connect-src 'self'; object-src 'none'; "
             "base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
         )
         assert client.head("/admin").headers["X-Robots-Tag"] == "noindex"

@@ -20,7 +20,7 @@ type Page =
   | { kind: "timeline" }
   | { kind: "forum" }
   | { kind: "forum-thread"; thread_id: string }
-  | { kind: "canvas" }
+  | { kind: "canvas"; chrome?: false }
   | { kind: "admin" }
   | { kind: "post"; slug: string }
   | { kind: "code"; project: string; path?: string }
@@ -77,8 +77,10 @@ export default function App() {
           <TimelinePage />
         </Shell>
       );
-    case "canvas":
-      return <CanvasPage snapshot={preloaded["/api/canvas"] as CanvasSnapshot} initialEvents={(preloaded["/api/canvas/events"] as { events: never[] })?.events} />;
+    case "canvas": {
+      const canvas = <CanvasPage snapshot={preloaded["/api/canvas"] as CanvasSnapshot} initialEvents={(preloaded["/api/canvas/events"] as { events: never[] })?.events} initialNow={preloaded.canvas_now as string | undefined} />;
+      return page.chrome === false ? canvas : <Shell>{canvas}</Shell>;
+    }
     case "forum":
       return <Shell><ForumPage initial={preloaded["/api/forum"] as never} /></Shell>;
     case "forum-thread":

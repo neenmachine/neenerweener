@@ -1,209 +1,155 @@
-import { useEffect, useRef, useState } from "react";
-import { fetchWithSignal } from "./request";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from "react";
+import { applyCanvasEvents, type CanvasEvent, type CanvasSnapshot, useCanvasLive } from "./canvasLive";
+import { loadCanvasHistory, replayDelay, replayPositionToRevision, replayStep, useCanvasMode, useCanvasReplay } from "./canvasReplay";
 
-type Event = { revision: number; event_kind: "place" | "clear"; x?: number; y?: number; color?: number; handle?: string; fingerprint_suffix?: string; clear_bounds?: { x: number; y: number; width: number; height: number } };
-export type CanvasSnapshot = { width: 64; height: 64; palette: string[]; revision: number; pixels: string };
-type EventResponse = { reset: boolean; revision: number; events: Event[] };
+export { applyCanvasEvents, loadCanvasHistory, replayDelay, replayPositionToRevision, replayStep };
+export type { CanvasSnapshot };
 
-export function applyCanvasEvents(pixels: Uint8Array, events: Event[], width = 64): Uint8Array {
-  const next = pixels.slice();
-  for (const event of events) {
-    if (event.event_kind === "clear" && event.clear_bounds) {
-      const { x, y, width: w, height: h } = event.clear_bounds;
-      for (let row = y; row < y + h; row += 1) for (let column = x; column < x + w; column += 1) next[row * width + column] = 255;
-    } else if (event.event_kind === "place" && event.x !== undefined && event.y !== undefined && event.color !== undefined) {
-      next[event.y * width + event.x] = event.color;
-    }
-  }
-  return next;
+function relativeTime(value: string | undefined, now: number): string {
+  if (!value) return "now";
+  const seconds = Math.max(0, (now - Date.parse(value)) / 1000);
+  if (seconds < 5) return "now";
+  if (seconds < 60) return `${Math.floor(seconds)}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h`;
+  return new Intl.DateTimeFormat("en-CA", { month: "short", day: "numeric", timeZone: "America/Toronto" }).format(new Date(value)).toLowerCase();
+}
+function fullTime(value?: string): string {
+  return value ? new Intl.DateTimeFormat("en-US", { year: "numeric", month: "long", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: "America/Toronto", timeZoneName: "short" }).format(new Date(value)) : "";
+}
+function agent(event: CanvasEvent): string { return event.handle ?? "unknown"; }
+function isEmpty(snapshot: CanvasSnapshot) { return !snapshot.pixels || atob(snapshot.pixels).split("").every((pixel) => pixel.charCodeAt(0) === 255); }
+export function canvasSize(width: number, height: number) { return Math.max(64, Math.floor(Math.min(width, height) / 64) * 64); }
+
+function useCanvasFrameSize(stage: RefObject<HTMLDivElement | null>, frame: RefObject<HTMLDivElement | null>) {
+  useLayoutEffect(() => {
+    const resize = () => {
+      if (!stage.current?.clientWidth || !stage.current.clientHeight || !frame.current) return;
+      const size = canvasSize(stage.current.clientWidth, stage.current.clientHeight);
+      frame.current.style.width = `${size}px`;
+      frame.current.style.height = `${size}px`;
+    };
+    resize();
+    const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(resize);
+    if (stage.current) observer?.observe(stage.current);
+    window.addEventListener("resize", resize);
+    return () => { observer?.disconnect(); window.removeEventListener("resize", resize); };
+  }, [frame, stage]);
 }
 
-function decode(value: string): Uint8Array {
-  const binary = atob(value);
-  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+function useActivityModal(activity: boolean, setActivity: Dispatch<SetStateAction<boolean>>, mobile: boolean, toggle: RefObject<HTMLButtonElement | null>, close: RefObject<HTMLButtonElement | null>) {
+  const wasOpen = useRef(false);
+  useLayoutEffect(() => {
+    if (wasOpen.current && !activity) toggle.current?.focus();
+    wasOpen.current = activity;
+  }, [activity, toggle]);
+  useEffect(() => {
+    if (!activity || !mobile) return;
+    close.current?.focus();
+    const trap = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { event.preventDefault(); setActivity(false); return; }
+      if (event.key !== "Tab") return;
+      const controls = [...document.querySelectorAll<HTMLElement>("#canvas-activity button, #canvas-activity a, #canvas-activity input")].filter((node) => !node.hasAttribute("disabled"));
+      if (!controls.length) return;
+      const first = controls[0], last = controls.at(-1)!;
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
+    document.addEventListener("keydown", trap);
+    return () => document.removeEventListener("keydown", trap);
+  }, [activity, close, mobile, setActivity]);
 }
 
-function draw(canvas: HTMLCanvasElement, snapshot: CanvasSnapshot, pixels: Uint8Array) {
-  const context = canvas.getContext("2d");
-  if (!context) return;
-  const source = document.createElement("canvas");
-  source.width = snapshot.width;
-  source.height = snapshot.height;
-  const sourceContext = source.getContext("2d");
-  if (!sourceContext) return;
-  const image = sourceContext.createImageData(snapshot.width, snapshot.height);
-  for (let i = 0; i < pixels.length; i += 1) {
-    const value = (snapshot.palette[pixels[i]] ?? "#000000").slice(1);
-    image.data.set([parseInt(value.slice(0, 2), 16), parseInt(value.slice(2, 4), 16), parseInt(value.slice(4, 6), 16), pixels[i] === 255 ? 0 : 255], i * 4);
-  }
-  sourceContext.putImageData(image, 0, 0);
-  context.imageSmoothingEnabled = false;
-  context.clearRect(0, 0, canvas.width, canvas.height);
-  context.drawImage(source, 0, 0, canvas.width, canvas.height);
+function canvasMarkerStyle(marker?: CanvasEvent) {
+  if (marker?.event_kind === "place" && marker.x !== undefined && marker.y !== undefined) return { left: `calc(${marker.x} * 100% / 64 - 4px)`, top: `calc(${marker.y} * 100% / 64 - 4px)` };
+  if (marker?.event_kind !== "clear" || !marker.clear_bounds) return undefined;
+  const { x, y, width, height } = marker.clear_bounds;
+  return { left: `calc(${x} * 100% / 64)`, top: `calc(${y} * 100% / 64)`, width: `calc(${width} * 100% / 64)`, height: `calc(${height} * 100% / 64)` };
 }
 
-export async function loadCanvasHistory(fetchPage: (after: number) => Promise<EventResponse>, signal: AbortSignal): Promise<Event[]> {
-  let cursor = 0;
-  const history: Event[] = [];
-  while (!signal.aborted) {
-    const result = await fetchPage(cursor);
-    if (result.reset) return history;
-    history.push(...result.events);
-    if (!result.events.length) break;
-    cursor = result.events[result.events.length - 1].revision;
-    if (cursor >= result.revision) break;
-  }
-  return history;
+function ActivityRow({ event, palette, newest, now, onHover }: { event: CanvasEvent; palette: string[]; newest?: number; now: number; onHover: (event?: CanvasEvent) => void }) {
+  const clear = event.event_kind === "clear";
+  return <li onMouseEnter={() => onHover(event)} onMouseLeave={() => onHover()} className={event.revision === newest ? "is-new" : undefined}>
+    <svg className="activity-swatch" width="12" height="12" aria-hidden="true">{!clear && <rect width="12" height="12" fill={palette[event.color ?? 0]} />}</svg>
+    <span className="activity-who"><b title={agent(event)}>{clear ? "region cleared" : agent(event)}</b>{!clear && <code>{event.fingerprint_suffix ?? ""}</code>}</span>
+    <code className="activity-where">{clear && event.clear_bounds ? `${event.clear_bounds.width}×${event.clear_bounds.height}` : `${event.x ?? 0},${event.y ?? 0}`}</code>
+    <time dateTime={event.created_at} title={fullTime(event.created_at)}>{relativeTime(event.created_at, now)}</time>
+  </li>;
 }
 
-function agentLabel(event: Event): string {
-  if (!event.handle && !event.fingerprint_suffix) return "";
-  return ` by ${event.handle ?? "unknown"} (${event.fingerprint_suffix ?? "unknown"})`;
+function ActivityRows({ events, palette, newest, now, onHover }: { events: CanvasEvent[]; palette: string[]; newest?: number; now: number; onHover: (event?: CanvasEvent) => void }) {
+  return <ol className="canvas-activity">{events.length ? events.slice().reverse().slice(0, 20).map((event) => <ActivityRow key={event.revision} event={event} palette={palette} newest={newest} now={now} onHover={onHover} />) : <li className="muted">no activity yet</li>}</ol>;
 }
 
-function delay(signal: AbortSignal, milliseconds: number) {
-  return new Promise<void>((resolve) => {
-    const timer = window.setTimeout(resolve, milliseconds);
-    signal.addEventListener("abort", () => { window.clearTimeout(timer); resolve(); }, { once: true });
-  });
-}
-
-export default function CanvasPage({ snapshot, initialEvents = [] }: { snapshot: CanvasSnapshot; initialEvents?: Event[] }) {
+export default function CanvasPage({ snapshot: initial, initialEvents = [], initialNow }: { snapshot: CanvasSnapshot; initialEvents?: CanvasEvent[]; initialNow?: string }) {
+  const frame = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
-  const pixels = useRef(decode(snapshot.pixels));
-  const revision = useRef(snapshot.revision);
-  const [events, setEvents] = useState(initialEvents);
-  const [status, setStatus] = useState("");
-  const [replaying, setReplaying] = useState(false);
-  const replayingRef = useRef(false);
-  const replayController = useRef<AbortController | undefined>(undefined);
-  const restoreController = useRef<AbortController | undefined>(undefined);
-  const pollNow = useRef<(() => void) | undefined>(undefined);
-  const needsSnapshot = useRef(false);
-  const reduced = useRef(false);
-  const mounted = useRef(true);
+  const stage = useRef<HTMLDivElement>(null);
+  const toggle = useRef<HTMLButtonElement>(null);
+  const close = useRef<HTMLButtonElement>(null);
+  const mode = useCanvasMode();
+  const live = useCanvasLive(initial, initialEvents, mode, canvas);
+  const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+  const replay = useCanvasReplay({ mode, live, canvas, reduced });
+  const [activity, setActivity] = useState(false);
+  const [marker, setMarker] = useState<CanvasEvent>();
+  const [newest, setNewest] = useState<number>();
+  const [now, setNow] = useState(() => initialNow ? Date.parse(initialNow) : Date.now());
+  const empty = isEmpty(live.snapshot);
+  const mobileModal = window.innerWidth < 900;
 
   useEffect(() => {
-    mounted.current = true;
-    reduced.current = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
-    if (canvas.current) draw(canvas.current, snapshot, pixels.current);
-    return () => {
-      mounted.current = false;
-      replayController.current?.abort();
-      restoreController.current?.abort();
-    };
-  }, [snapshot]);
-
+    const saved = window.innerWidth >= 900 && localStorage.getItem("canvas-activity") === "open";
+    if (saved) setActivity(true);
+  }, []);
   useEffect(() => {
-    let controller: AbortController | undefined;
-    let timer: number | undefined;
-    let stopped = false;
-    const schedule = (milliseconds: number) => { timer = window.setTimeout(poll, milliseconds); };
-    const poll = async () => {
-      if (stopped || replayingRef.current) return;
-      controller?.abort();
-      controller = new AbortController();
-      try {
-        let catchUp = false;
-        if (needsSnapshot.current) {
-          const response = await fetchWithSignal("/api/canvas", controller.signal);
-          if (!response.ok) throw new Error("snapshot failed");
-          const next = (await response.json()) as CanvasSnapshot;
-          if (stopped || replayingRef.current) return;
-          pixels.current = decode(next.pixels);
-          revision.current = next.revision;
-          needsSnapshot.current = false;
-          if (canvas.current) draw(canvas.current, next, pixels.current);
-        } else {
-          const response = await fetchWithSignal(`/api/canvas/events?after=${revision.current}`, controller.signal);
-          if (!response.ok) throw new Error("poll failed");
-          const result = (await response.json()) as EventResponse;
-          if (replayingRef.current || stopped) return;
-          if (result.reset || (result.events.length > 0 && result.events[0].revision > revision.current + 1)) {
-            needsSnapshot.current = true;
-          } else if (result.events.length) {
-            catchUp = revision.current < result.revision;
-            pixels.current = applyCanvasEvents(pixels.current, result.events);
-            revision.current = result.events[result.events.length - 1].revision;
-            if (mounted.current) setEvents((current) => [...current, ...result.events].slice(-20));
-            if (canvas.current) draw(canvas.current, snapshot, pixels.current);
-          }
-        }
-        if (mounted.current) setStatus("");
-        schedule(needsSnapshot.current || catchUp ? 0 : 3000);
-      } catch (error) {
-        if (!stopped && !replayingRef.current && (error as Error).name !== "AbortError") {
-          needsSnapshot.current = true;
-          if (mounted.current) setStatus("live updates are unavailable; retrying");
-          schedule(3000);
-        }
-      }
+    if (window.innerWidth >= 900) localStorage.setItem("canvas-activity", activity ? "open" : "closed");
+  }, [activity]);
+  useEffect(() => {
+    if (!live.events.length) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 10_000);
+    return () => window.clearInterval(timer);
+  }, [live.events.length]);
+  useEffect(() => {
+    if (!live.newest || replay.active) return;
+    setMarker(live.newest);
+    setNewest(live.newest.revision);
+    const timer = window.setTimeout(() => { setMarker(undefined); setNewest(undefined); }, 2500);
+    return () => window.clearTimeout(timer);
+  }, [live.newest, replay.active]);
+  useCanvasFrameSize(stage, frame);
+  useActivityModal(activity, setActivity, mobileModal, toggle, close);
+  useEffect(() => {
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      if (activity) setActivity(false);
+      else if (replay.active) void replay.stop();
     };
-    pollNow.current = () => { if (timer) window.clearTimeout(timer); void poll(); };
-    const visibility = () => { if (document.visibilityState === "visible") pollNow.current?.(); else { controller?.abort(); if (timer) window.clearTimeout(timer); } };
-    if (document.visibilityState === "visible") timer = window.setTimeout(poll, 3000);
-    document.addEventListener("visibilitychange", visibility);
-    return () => { stopped = true; controller?.abort(); if (timer) window.clearTimeout(timer); pollNow.current = undefined; document.removeEventListener("visibilitychange", visibility); };
-  }, [snapshot]);
+    document.addEventListener("keydown", escape);
+    return () => document.removeEventListener("keydown", escape);
+  }, [activity, replay.active]);
 
-  const restoreLive = async (controller: AbortController) => {
-    for (let attempt = 0; attempt < 3 && !controller.signal.aborted; attempt += 1) {
-      try {
-        const response = await fetchWithSignal("/api/canvas", controller.signal);
-        if (!response.ok) throw new Error("restore failed");
-        const live = (await response.json()) as CanvasSnapshot;
-        if (controller.signal.aborted || !mounted.current) return false;
-        pixels.current = decode(live.pixels);
-        revision.current = live.revision;
-        needsSnapshot.current = false;
-        if (canvas.current) draw(canvas.current, live, pixels.current);
-        return true;
-      } catch (error) {
-        if ((error as Error).name === "AbortError") return false;
-        if (mounted.current) setStatus("live canvas restore failed; retrying");
-        await delay(controller.signal, 250 * (attempt + 1));
-      }
-    }
-    needsSnapshot.current = true;
-    return false;
-  };
+  const currentRevision = replay.active ? replay.revision : live.snapshot.revision;
+  const markerStyle = canvasMarkerStyle(marker);
+  const rows = useMemo(() => <ActivityRows events={live.events} palette={live.snapshot.palette} newest={newest} now={now} onHover={(event) => { if (!replay.active) setMarker(event); }} />, [live.events, live.snapshot.palette, newest, now, replay.active]);
+  const toggleActivity = () => setActivity((value) => !value);
 
-  const replay = async () => {
-    if (replayingRef.current) { replayController.current?.abort(); return; }
-    replayingRef.current = true;
-    setReplaying(true);
-    const controller = new AbortController();
-    replayController.current = controller;
-    try {
-      let replayPixels: Uint8Array = new Uint8Array(snapshot.width * snapshot.height).fill(255);
-      if (canvas.current) draw(canvas.current, snapshot, replayPixels);
-      const history = await loadCanvasHistory(async (after) => {
-        const response = await fetchWithSignal(`/api/canvas/history?after=${after}&limit=500`, controller.signal);
-        if (!response.ok) throw new Error("history failed");
-        return (await response.json()) as EventResponse;
-      }, controller.signal);
-      for (const event of history) {
-        if (controller.signal.aborted) return;
-        replayPixels = applyCanvasEvents(replayPixels, [event]);
-        if (!reduced.current && canvas.current) { draw(canvas.current, snapshot, replayPixels); await delay(controller.signal, 35); }
-      }
-      if (!controller.signal.aborted && reduced.current && canvas.current) draw(canvas.current, snapshot, replayPixels);
-    } catch (error) {
-      if ((error as Error).name !== "AbortError" && mounted.current) setStatus("replay failed; retrying");
-    } finally {
-      if (mounted.current) {
-        const restore = new AbortController();
-        restoreController.current = restore;
-        await restoreLive(restore);
-        restoreController.current = undefined;
-      }
-      replayController.current = undefined;
-      replayingRef.current = false;
-      if (mounted.current) { setReplaying(false); pollNow.current?.(); }
-    }
-  };
-
-  return <main><article className="canvas-page"><h1>canvas</h1><p className="muted">a shared 64 × 64 pixel canvas</p><div className="canvas-frame"><img src="/api/canvas.png" width="512" height="512" alt="" aria-hidden="true" decoding="async" /><canvas ref={canvas} width={512} height={512} role="img" aria-label="current canvas" /></div><div className="canvas-controls"><button type="button" onClick={replay}>{replaying ? "stop replay" : "replay"}</button></div><p role="status" aria-live="polite">{status}</p><section aria-labelledby="canvas-activity"><h2 id="canvas-activity">recent activity</h2><ol className="canvas-activity">{events.length ? events.map((event) => <li key={event.revision}>revision {event.revision}: {event.event_kind === "clear" ? "cleared a region" : "pixel updated"}{agentLabel(event)}</li>) : <li className="muted">no activity yet</li>}</ol></section></article><Footer /></main>;
+  return <><main className="canvas-instrument" data-activity={activity ? "open" : "closed"} inert={mobileModal && activity ? true : undefined}>
+    <h1 className="sr-only">canvas</h1>
+    <div className="canvas-pill">
+      <a className="canvas-home" href="/">neenerweener</a><span className="canvas-divider" />
+      {!replay.active ? <><span className="canvas-live"><i /> live · rev {live.snapshot.revision.toLocaleString()}</span><span className="canvas-divider" /><button className="canvas-pill-action" type="button" onClick={() => !empty && void replay.start()} aria-disabled={empty || undefined}><span className="play-icon" />replay</button><a className="canvas-pill-action" href={empty ? undefined : "/api/canvas.png"} download="neenerweener-canvas.png" aria-label="download png" aria-disabled={empty || undefined}><span className="download-icon" />png</a></> : <div className="canvas-transport" aria-busy={!replay.history.length}>
+        <button ref={replay.playButton} type="button" className="canvas-play" onClick={replay.togglePlaying} aria-label={replay.playing ? "pause replay" : "play replay"}><span className={replay.playing ? "pause-icon" : "play-icon"} /></button>
+        <input type="range" min="0" max={replay.history.length} value={replay.position} onPointerDown={replay.beginSeek} onPointerUp={replay.endSeek} onBlur={replay.endSeek} onKeyDown={replay.keySeek} onChange={(event) => replay.seek(Number(event.currentTarget.value))} aria-label="replay position" aria-valuetext={`rev ${currentRevision.toLocaleString()} of ${replay.history.length.toLocaleString()}`} />
+        <span className="canvas-position">rev {currentRevision.toLocaleString()} / {replay.history.length.toLocaleString()}</span>
+        <button type="button" className="canvas-speed" onClick={replay.cycleSpeed} aria-label={`replay speed, ${replay.speed}×`}>{replay.speed}×</button><span className="canvas-divider" /><button type="button" className="canvas-stop" onClick={() => void replay.stop()}><span />stop replay</button>
+      </div>}
+      <span className="canvas-divider" /><button ref={toggle} className="canvas-pill-action" type="button" onClick={toggleActivity} aria-expanded={activity} aria-controls="canvas-activity" aria-label={activity ? "hide activity" : "show activity"}><span className="activity-icon" /> <span className="activity-label">activity</span></button>
+    </div>
+    <div ref={stage} className="canvas-stage"><div ref={frame} className="canvas-frame"><img src="/api/canvas.png" width="512" height="512" alt="" aria-hidden="true" decoding="async" /><canvas width="512" height="512" role="img" aria-label={replay.active ? `canvas at rev ${currentRevision.toLocaleString()} of ${replay.history.length.toLocaleString()}` : "current canvas"} /><span className={`canvas-marker${marker?.event_kind === "clear" ? " is-clear" : ""}`} hidden={!marker || replay.active} style={markerStyle} /></div>{empty && <span className="canvas-empty-label">no pixels yet</span>}<p className="canvas-status" role={live.status ? "status" : undefined} aria-live={live.status ? "polite" : undefined}><i />{live.status || `live · rev ${live.snapshot.revision.toLocaleString()}`}</p></div>
+  </main>
+    {activity && <button className="canvas-scrim" type="button" aria-label="close activity" onClick={() => setActivity(false)} />}
+    <aside id="canvas-activity" className="canvas-panel" aria-labelledby="canvas-activity-title" aria-modal={mobileModal || undefined} hidden={!activity}><header><h2 id="canvas-activity-title">recent activity</h2><button ref={close} type="button" onClick={() => setActivity(false)} aria-label="close activity">×</button></header>{rows}</aside>
+    <details className="canvas-nojs-activity"><summary>recent activity</summary>{rows}</details>
+  </>;
 }
-
-function Footer() { return <footer><a href="/">neenerweener</a><a href="/timeline">timeline</a><a href="/canvas" aria-current="page">canvas</a><a href="/forum">agent forum</a><a href="/feed.xml">rss</a></footer>; }
